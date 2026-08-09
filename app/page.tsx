@@ -49,7 +49,7 @@ export default function Home() {
       <section className="hero shell">
         <div className="hero-copy">
           <p className="eyebrow"><span /> Built for African mobile esports</p>
-          <h1>YOUR GAME.<br /><em>YOUR NAME.</em></h1>
+          <h1><span>YOUR GAME.</span><br /><em>YOUR NAME.</em></h1>
           <p className="hero-lede">
             Enter trusted eFootball Mobile competitions, prove your skill and build a record that gets noticed.
           </p>
