@@ -23,6 +23,8 @@ services/api/internal/       Domain and transport modules
 services/api/migrations/     PostgreSQL schema
 services/api/openapi/        HTTP contract
 docs/architecture.md         Boundaries, scale path and challenged decisions
+docs/docker.md               Containers, API addresses and deployment notes
+docs/result-verification.md  Screenshot, confirmation and dispute policy
 docs/security.md             Dependency audit baseline and release gate
 ```
 
@@ -60,8 +62,19 @@ npm run mobile:lint
 npm run api:test
 ```
 
-The API starts on `http://localhost:8080`. PostgreSQL can be started with the
-provided `compose.yaml` where Docker is available.
+The API starts on `http://localhost:8080`.
+
+## Docker
+
+Copy `.env.docker.example` to `.env.docker`, replace the example database
+password in both values, then start the complete web, API and PostgreSQL stack:
+
+```sh
+docker compose --env-file .env.docker up --build
+```
+
+See `docs/docker.md` for emulator, physical-device and production API addresses,
+health checks, secret handling and migration requirements.
 
 ## Current boundary
 
