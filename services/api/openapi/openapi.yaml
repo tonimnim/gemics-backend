@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Gamics API
-  version: 0.1.0
-  description: Competition infrastructure for African esports.
+  version: 0.2.0
+  description: Passwordless player onboarding and competition infrastructure for African esports.
 servers:
   - url: http://localhost:8080
 paths:
@@ -11,19 +11,14 @@ paths:
       operationId: getHealth
       tags: [Operations]
       responses:
-        "200":
-          description: Process is alive.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Health"
+        "200": { description: Process is alive. }
   /readyz:
     get:
       operationId: getReadiness
       tags: [Operations]
       responses:
-        "200":
-          description: Process can receive traffic.
+        "200": { description: Writer, reader and Redis are ready. }
+        "503": { description: A required dependency is unavailable. }
   /v1/games:
     get:
       operationId: listGames
@@ -37,19 +32,213 @@ paths:
                 type: object
                 required: [data]
                 properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Game"
+                  data: { type: array, items: { $ref: "#/components/schemas/Game" } }
+  /v1/auth/otp/request:
+    post:
+      operationId: requestEmailOTP
+      tags: [Authentication]
+      summary: Send a passwordless sign-in code by email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202":
+          description: The request was accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, expiresInSeconds]
+                properties:
+                  status: { type: string, const: accepted }
+                  expiresInSeconds: { type: integer }
+        "429": { $ref: "#/components/responses/Error" }
+  /v1/auth/otp/verify:
+    post:
+      operationId: verifyEmailOTP
+      tags: [Authentication]
+      summary: Verify an email code and create or sign in the player.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: "^[0-9]{6}$" }
+                deviceName: { type: string, maxLength: 120 }
+      responses:
+        "200":
+          description: Authenticated session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSession" }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/auth/refresh:
+    post:
+      operationId: refreshSession
+      tags: [Authentication]
+      summary: Rotate a refresh token and issue a new access token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "200":
+          description: Rotated authenticated session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSession" }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      tags: [Authentication]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Current refresh session revoked. }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/me:
+    get:
+      operationId: getCurrentPlayer
+      tags: [Players]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current player and onboarding progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Player" }
+        "401": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateCurrentPlayer
+      tags: [Players]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName: { type: string, minLength: 2, maxLength: 80 }
+                countryCode: { type: string, pattern: "^[A-Z]{2}$" }
+                birthDate: { type: string, format: date }
+                acceptTerms: { type: boolean, const: true }
+                acceptPrivacy: { type: boolean, const: true }
+      responses:
+        "200":
+          description: Updated player.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Player" }
+        "400": { $ref: "#/components/responses/Error" }
+  /v1/me/profile:
+    put:
+      operationId: putPlayerProfile
+      tags: [Players]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfileInput" }
+      responses:
+        "200":
+          description: Updated player and profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Player" }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/me/game-accounts:
+    get:
+      operationId: listMyGameAccounts
+      tags: [Game accounts]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Connected game accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/GameAccount" } }
+    post:
+      operationId: createGameAccount
+      tags: [Game accounts]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GameAccountInput" }
+      responses:
+        "201":
+          description: Connected game account.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GameAccount" }
+  /v1/me/game-accounts/{id}:
+    patch:
+      operationId: updateGameAccount
+      tags: [Game accounts]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                platform: { type: string, enum: [android, ios] }
+                inGameName: { type: string, minLength: 2, maxLength: 80 }
+                publisherPlayerId: { type: [string, "null"] }
+      responses:
+        "200":
+          description: Updated game account.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GameAccount" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Error:
+      description: Request failed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
   schemas:
-    Health:
+    Error:
       type: object
-      required: [status, service, version]
+      required: [error, message]
       properties:
-        status: { type: string, const: ok }
-        service: { type: string }
-        version: { type: string }
+        error: { type: string }
+        message: { type: string }
     Game:
       type: object
       required: [id, name, publisher, platforms, resultMode, officialIntegration]
@@ -57,10 +246,65 @@ components:
         id: { type: string }
         name: { type: string }
         publisher: { type: string }
-        platforms:
-          type: array
-          items: { type: string }
-        resultMode:
-          type: string
-          enum: [participant_confirmation, publisher_api, admin_only]
+        platforms: { type: array, items: { type: string } }
+        resultMode: { type: string, enum: [participant_confirmation, publisher_api, admin_only] }
         officialIntegration: { type: boolean }
+    AuthSession:
+      type: object
+      required: [accessToken, refreshToken, tokenType, expiresInSeconds, player]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        tokenType: { type: string, const: Bearer }
+        expiresInSeconds: { type: integer }
+        player: { $ref: "#/components/schemas/Player" }
+    Player:
+      type: object
+      required: [id, email, displayName, countryCode, status, onboarding]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        countryCode: { type: string }
+        birthDate: { type: [string, "null"], format: date }
+        status: { type: string }
+        profile: { oneOf: [{ $ref: "#/components/schemas/Profile" }, { type: "null" }] }
+        onboarding:
+          type: object
+          required: [personalDetails, profile, gameAccount, complete]
+          properties:
+            personalDetails: { type: boolean }
+            profile: { type: boolean }
+            gameAccount: { type: boolean }
+            complete: { type: boolean }
+    ProfileInput:
+      type: object
+      required: [handle, bio, discoverable, analyticsConsent, scoutingConsent]
+      properties:
+        handle: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9_.]{2,23}$" }
+        bio: { type: string, maxLength: 280 }
+        discoverable: { type: boolean }
+        analyticsConsent: { type: boolean }
+        scoutingConsent: { type: boolean }
+    Profile:
+      allOf:
+        - { $ref: "#/components/schemas/ProfileInput" }
+    GameAccountInput:
+      type: object
+      required: [gameId, platform, inGameName]
+      properties:
+        gameId: { type: string }
+        platform: { type: string, enum: [android, ios] }
+        inGameName: { type: string, minLength: 2, maxLength: 80 }
+        publisherPlayerId: { type: [string, "null"] }
+    GameAccount:
+      allOf:
+        - { $ref: "#/components/schemas/GameAccountInput" }
+        - type: object
+          required: [id, verificationStatus, createdAt, updatedAt]
+          properties:
+            id: { type: string, format: uuid }
+            verificationStatus: { type: string, enum: [unverified, pending, verified, rejected] }
+            verifiedAt: { type: [string, "null"], format: date-time }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }

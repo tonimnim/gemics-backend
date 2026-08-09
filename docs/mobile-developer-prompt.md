@@ -17,7 +17,7 @@ in a WebView.
 
 Build these player journeys:
 
-1. Phone/email OTP onboarding, profile creation, age/country eligibility and
+1. Email OTP onboarding, profile creation, age/country eligibility and
    consent choices.
 2. Add an eFootball Mobile game account and public player handle.
 3. Discover/search competitions; view format, schedule, rules, capacity,
@@ -37,10 +37,11 @@ components and keep all HTTP calls behind a typed API client.
 
 ## API access
 
-Read the backend contract in `services/api/openapi/openapi.yaml`. The currently
-implemented endpoints are `GET /healthz`, `GET /readyz` and `GET /v1/games`.
-Do not pretend unfinished endpoints already exist. Put fixtures behind repository
-interfaces until the OpenAPI contract and Go handlers are added.
+Read the backend contract in `services/api/openapi/openapi.yaml`. The implemented
+identity endpoints cover email OTP request/verification, token refresh, logout,
+current player, profile and game accounts. Do not invent any other endpoints; put
+unfinished competition and match resources behind repository interfaces until
+their OpenAPI contract and Go handlers are added.
 
 Use `EXPO_PUBLIC_API_URL`:
 

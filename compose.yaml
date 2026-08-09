@@ -4,6 +4,18 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - wal_keep_size=256MB
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
@@ -17,6 +29,65 @@ services:
       retries: 10
     volumes:
       - gamics_postgres:/var/lib/postgresql/data
+      - ./infra/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+
+  postgres-replication-init:
+    image: postgres:17-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:-development-replication-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./infra/postgres/init-replication.sh:/scripts/init-replication.sh:ro
+    entrypoint: ["/bin/sh", "/scripts/init-replication.sh"]
+
+  postgres-replica:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      POSTGRES_PRIMARY_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_REPLICATION_USER: gamics_replica
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:-development-replication-secret}
+      PGPASSFILE: /var/lib/postgresql/.pgpass
+    ports:
+      - "${POSTGRES_REPLICA_PORT:-5433}:5432"
+    depends_on:
+      postgres-replication-init:
+        condition: service_completed_successfully
+    volumes:
+      - gamics_postgres_replica:/var/lib/postgresql/data
+      - ./infra/postgres/replica-entrypoint.sh:/scripts/replica-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/scripts/replica-entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB && test \"$$(psql -U $$POSTGRES_USER -d $$POSTGRES_DB -tAc 'SELECT pg_is_in_recovery()')\" = t"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-development-redis-secret}
+    command: ["/bin/sh", "-c", "exec redis-server --appendonly yes --appendfsync everysec --requirepass \"$$REDIS_PASSWORD\""]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - gamics_redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   api:
     build:
@@ -26,9 +97,27 @@ services:
         VERSION: ${GAMICS_VERSION:-dev}
     restart: unless-stopped
     environment:
-      APP_ENV: production
+      APP_ENV: ${APP_ENV:-development}
       HTTP_ADDR: :8080
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      DATABASE_WRITE_URL: ${DATABASE_WRITE_URL:-postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable}
+      DATABASE_READ_URL: ${DATABASE_READ_URL:-postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-replica:5432/${POSTGRES_DB}?sslmode=disable}
+      DATABASE_WRITE_MAX_CONNS: ${DATABASE_WRITE_MAX_CONNS:-20}
+      DATABASE_READ_MAX_CONNS: ${DATABASE_READ_MAX_CONNS:-40}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-development-redis-secret}@redis:6379/0
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-development-only-auth-token-secret-change-me}
+      OTP_HASH_SECRET: ${OTP_HASH_SECRET:-development-only-otp-hash-secret-change-me}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      OTP_TTL: ${OTP_TTL:-10m}
+      OTP_MAX_ATTEMPTS: ${OTP_MAX_ATTEMPTS:-5}
+      OTP_REQUEST_WINDOW: ${OTP_REQUEST_WINDOW:-15m}
+      OTP_EMAIL_LIMIT: ${OTP_EMAIL_LIMIT:-5}
+      OTP_IP_LIMIT: ${OTP_IP_LIMIT:-20}
+      EMAIL_MODE: ${EMAIL_MODE:-log}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       SHUTDOWN_TIMEOUT: 10s
       REQUEST_TIMEOUT: 15s
@@ -36,6 +125,10 @@ services:
       - "${API_PORT:-8080}:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      postgres-replica:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
@@ -74,3 +167,5 @@ services:
 
 volumes:
   gamics_postgres:
+  gamics_postgres_replica:
+  gamics_redis:

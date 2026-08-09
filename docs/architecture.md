@@ -18,9 +18,13 @@ Organizer console (later) --+----> Go HTTP API
                             |            |
 Marketing website ----------+    +-------+-------------------+
                                  |           |               |
-                             PostgreSQL  Object storage  Outbox workers
-                                 |                           |
-                                 +------> Analytics warehouse (later)
+                         PostgreSQL writer  PostgreSQL readers  Redis
+                                 |                  |             |
+                                 +--------+---------+-------------+
+                                          |
+                                  Object storage / outbox
+                                          |
+                                  Analytics warehouse (later)
 ```
 
 ## Domain boundaries
@@ -153,3 +157,18 @@ A module becomes a service only after at least one trigger is demonstrated:
 - an external partner contract requires isolation.
 
 Until then, a module remains independently testable inside the Go deployment.
+
+## Data-plane availability
+
+The API accepts separate `DATABASE_WRITE_URL` and `DATABASE_READ_URL` values.
+Mutations and consistency-sensitive identity reads use the writer. Safe catalog
+and collection reads use the replica and fall back to the writer on connection
+failure. Replication lag is expected, so mutation responses contain the newly
+written resource instead of requiring an immediate replica read.
+
+The Docker topology is a local parity environment: one PostgreSQL primary, one
+asynchronous hot standby and Redis with AOF persistence. It demonstrates routing
+and replication but is not itself a production control plane. Production uses a
+stable managed writer endpoint with automated multi-zone failover, independently
+scalable read replicas, multiple API instances behind a load balancer, and a
+high-availability Redis endpoint. See `production-architecture.md`.
