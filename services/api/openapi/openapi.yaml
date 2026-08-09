@@ -1,0 +1,66 @@
+openapi: 3.1.0
+info:
+  title: Gamics API
+  version: 0.1.0
+  description: Competition infrastructure for African esports.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      tags: [Operations]
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /readyz:
+    get:
+      operationId: getReadiness
+      tags: [Operations]
+      responses:
+        "200":
+          description: Process can receive traffic.
+  /v1/games:
+    get:
+      operationId: listGames
+      tags: [Games]
+      responses:
+        "200":
+          description: Supported competitive games.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Game"
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, service, version]
+      properties:
+        status: { type: string, const: ok }
+        service: { type: string }
+        version: { type: string }
+    Game:
+      type: object
+      required: [id, name, publisher, platforms, resultMode, officialIntegration]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        publisher: { type: string }
+        platforms:
+          type: array
+          items: { type: string }
+        resultMode:
+          type: string
+          enum: [participant_confirmation, publisher_api, admin_only]
+        officialIntegration: { type: boolean }

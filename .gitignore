@@ -1,0 +1,14 @@
+node_modules/
+.next/
+dist/
+.wrangler/
+.vinext/
+.cache/
+.env
+.env.local
+coverage/
+*.log
+bin/
+.idea/
+.vscode/
+.DS_Store

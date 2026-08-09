@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: gamics
+      POSTGRES_USER: gamics
+      POSTGRES_PASSWORD: gamics
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gamics -d gamics"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - gamics_postgres:/var/lib/postgresql/data
+
+volumes:
+  gamics_postgres:
