@@ -10,9 +10,12 @@
     "build": "vinext build",
     "start": "vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "lint": "eslint . --ignore-pattern apps/mobile --ignore-pattern dist --ignore-pattern .next",
+    "mobile:start": "npm --prefix apps/mobile run start",
+    "mobile:typecheck": "npm --prefix apps/mobile run typecheck",
+    "mobile:lint": "npm --prefix apps/mobile run lint",
     "api:dev": "go run ./services/api/cmd/api",
-    "api:test": "go test ./services/api/..."
+    "api:test": "go -C services/api test ./..."
   },
   "dependencies": {
     "react": "19.2.6",

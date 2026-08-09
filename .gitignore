@@ -4,6 +4,8 @@ dist/
 .wrangler/
 .vinext/
 .cache/
+.expo/
+.expo-export/
 .env
 .env.local
 coverage/

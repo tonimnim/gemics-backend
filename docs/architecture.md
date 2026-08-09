@@ -2,25 +2,25 @@
 
 ## Decision summary
 
-Gamics starts as a modular monolith: a portable web application, one Go API,
-PostgreSQL as the transactional source of truth, and S3-compatible object
-storage for match evidence. Background delivery uses a transactional outbox.
+Gamics starts with an Expo React Native player app, a separate marketing website,
+one modular Go API, PostgreSQL as the transactional source of truth, and
+S3-compatible object storage for match evidence. Background delivery uses a
+transactional outbox.
 
 The first game adapter is `efootball-mobile`. The core model never uses an
 eFootball-specific player or bracket table, so another solo or team title can
 be added without rewriting registrations and matches.
 
 ```text
-Player / Organizer browser
-          |
-          v
-Next-compatible web UI  ----->  Go HTTP API
-                                      |
-                      +---------------+----------------+
-                      |               |                |
-                  PostgreSQL     Object storage    Outbox workers
-                      |                                |
-                      +------------> Analytics warehouse (later)
+React Native player app ----+
+                            |
+Organizer console (later) --+----> Go HTTP API
+                            |            |
+Marketing website ----------+    +-------+-------------------+
+                                 |           |               |
+                             PostgreSQL  Object storage  Outbox workers
+                                 |                           |
+                                 +------> Analytics warehouse (later)
 ```
 
 ## Domain boundaries
@@ -111,8 +111,8 @@ without making every read a projection problem.
 ### Why not make the frontend the backend?
 
 Competition rules, authorization and result decisions must behave identically
-for web, future mobile clients, workers and partner integrations. They belong in
-Go. The web layer owns presentation and browser concerns only.
+for mobile, future organizer clients, workers and partner integrations. They
+belong in Go. Each client owns presentation and device-specific concerns only.
 
 ### Why not Redis as the queue and source of live state?
 
@@ -133,12 +133,14 @@ The initial schema distinguishes an administrative fee from organizer- or
 sponsor-funded prizes. It intentionally has no player-funded prize-pool option.
 That supports the sports-competition model and keeps the first release focused on free events.
 
-### Why not ship a native app first?
+### Why ship the player experience in React Native now?
 
-Players already need eFootball on the same phone. A fast responsive web app can
-handle registration, check-in, evidence capture and brackets without app-store
-friction. Native clients become worthwhile when push delivery, media capture or
-retention data proves the need.
+The player loop depends on check-in reminders, camera or gallery evidence,
+deep links and eventually push notifications. Those are core to trustworthy
+match operations, not optional polish. Expo React Native provides one iOS and
+Android codebase while the lightweight website stays focused on discovery and
+marketing. The trade-off is app-store release work and a second JavaScript
+toolchain, which is contained under `apps/mobile` and kept behind the same Go API.
 
 ## Extraction triggers
 
