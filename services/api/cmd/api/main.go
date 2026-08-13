@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +15,8 @@ import (
 	"github.com/gamics-io/gamics/services/api/internal/database"
 	"github.com/gamics-io/gamics/services/api/internal/httpapi"
 	gamicsmail "github.com/gamics-io/gamics/services/api/internal/mail"
+	"github.com/gamics-io/gamics/services/api/internal/mpesa"
+	"github.com/gamics-io/gamics/services/api/internal/storage"
 )
 
 var version = "dev"
@@ -44,28 +48,81 @@ func main() {
 		logger.Error("database writer unavailable", "error", err)
 		os.Exit(1)
 	}
-	if err := database.Migrate(startupCtx, db.Writer); err != nil {
-		logger.Error("apply database migrations", "error", err)
-		os.Exit(1)
+	if cfg.RunMigrations {
+		if err := database.Migrate(startupCtx, db.Writer); err != nil {
+			logger.Error("apply database migrations", "error", err)
+			os.Exit(1)
+		}
 	}
 	if err := db.PingReader(startupCtx); err != nil {
 		logger.Warn("database reader unavailable; reads will fall back to writer", "error", err)
 	}
 
-	redisClient, err := cache.Open(startupCtx, cfg.RedisURL)
-	if err != nil {
-		logger.Warn("redis unavailable; database rate-limit fallback enabled", "error", err)
-		redisClient = nil
-	} else {
-		defer redisClient.Close()
+	securityRedis, redisErr := cache.Open(startupCtx, cfg.RedisSecurityURL)
+	if securityRedis == nil {
+		logger.Error("invalid security Redis configuration", "error", redisErr)
+		os.Exit(1)
+	}
+	defer securityRedis.Close()
+	if redisErr != nil {
+		logger.Warn("security Redis unavailable at startup; database fallback enabled", "error", redisErr)
+	}
+	cacheRedis := securityRedis
+	if cfg.RedisCacheURL != cfg.RedisSecurityURL {
+		cacheRedis, redisErr = cache.Open(startupCtx, cfg.RedisCacheURL)
+		if cacheRedis == nil {
+			logger.Error("invalid cache Redis configuration", "error", redisErr)
+			os.Exit(1)
+		}
+		defer cacheRedis.Close()
+		if redisErr != nil {
+			logger.Warn("cache Redis unavailable at startup; database fallback enabled", "error", redisErr)
+		}
 	}
 
 	var sender gamicsmail.Sender = gamicsmail.LogSender{Logger: logger}
 	if cfg.EmailMode == "smtp" {
-		sender = gamicsmail.SMTPSender{Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, From: cfg.SMTPFrom}
+		sender = gamicsmail.SMTPSender{Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword, From: cfg.SMTPFrom, Timeout: cfg.SMTPTimeout, RequireTLS: cfg.SMTPRequireTLS}
 	}
 
-	server := httpapi.New(cfg, logger, version, httpapi.Dependencies{Database: db, Redis: redisClient, Mailer: sender})
+	var mpesaProvider mpesa.Provider
+	if cfg.MPesaEnabled() {
+		callbackURL, joinErr := url.JoinPath(cfg.MPesaCallbackBaseURL, "v1", "payments", "mpesa", "callback", cfg.MPesaCallbackToken)
+		if joinErr != nil {
+			logger.Error("build M-Pesa callback URL", "error", joinErr)
+			os.Exit(1)
+		}
+		mpesaProvider, err = mpesa.New(mpesa.Config{
+			Environment: cfg.MPesaEnvironment, ConsumerKey: cfg.MPesaConsumerKey,
+			ConsumerSecret: cfg.MPesaConsumerSecret, ShortCode: cfg.MPesaShortCode,
+			Passkey: cfg.MPesaPasskey, CallbackURL: callbackURL,
+			TransactionType: cfg.MPesaTransactionType, Timeout: cfg.MPesaTimeout,
+		})
+		if err != nil {
+			logger.Error("configure M-Pesa", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	var evidenceStore storage.Provider
+	if cfg.StorageEnabled() {
+		evidenceStore, err = storage.NewS3(storage.S3Config{
+			Endpoint: cfg.StorageS3Endpoint, Region: cfg.StorageS3Region, Bucket: cfg.StorageS3Bucket,
+			AccessKey: cfg.StorageS3AccessKey, SecretKey: cfg.StorageS3SecretKey,
+			SessionToken: cfg.StorageS3SessionToken, ForcePathStyle: cfg.StorageS3PathStyle,
+			HTTPClient: &http.Client{Timeout: cfg.StorageHTTPTimeout},
+		})
+		if err != nil {
+			logger.Error("configure evidence storage", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	server := httpapi.New(cfg, logger, version, httpapi.Dependencies{
+		Database: db, Redis: securityRedis, CacheRedis: cacheRedis, Mailer: sender, MPesa: mpesaProvider,
+		EvidenceStore: evidenceStore,
+	})
 	if err := server.Run(ctx); err != nil {
 		logger.Error("api stopped unexpectedly", "error", err)
 		os.Exit(1)

@@ -1,0 +1,225 @@
+# OpenAPI 3.1 fragment. Merge `paths` and `components.schemas` into openapi.yaml.
+paths:
+  /v1/rankings:
+    get:
+      operationId: listRankings
+      tags: [Players]
+      parameters:
+        - { name: gameId, in: query, schema: { type: string, default: efootball-mobile } }
+        - { name: scope, in: query, schema: { type: string, enum: [country, global], default: country } }
+        - { name: country, in: query, description: Required for country scope; defaults to KE., schema: { type: string, pattern: "^[A-Z]{2}$" } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+      responses:
+        "200":
+          description: One immutable leaderboard-snapshot page. An empty system can return snapshotAt null.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RankingPage" }
+        "400": { description: Invalid filters or a cursor used with different filters. }
+        "410": { description: Cursor expired or its retained snapshot no longer exists. }
+        "503": { description: Public read dependencies are unavailable. }
+  /v1/players:
+    get:
+      operationId: searchPlayers
+      tags: [Players]
+      parameters:
+        - { name: q, in: query, description: Empty or 2-80 character handle/display/in-game-name substring., schema: { type: string, maxLength: 80 } }
+        - { name: gameId, in: query, schema: { type: string, default: efootball-mobile } }
+        - { name: country, in: query, schema: { type: string, pattern: "^[A-Z]{2}$" } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+      responses:
+        "200":
+          description: Discoverable active players using a signed keyset cursor.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlayerSearchPage" }
+        "400": { description: Invalid filters or cursor. }
+        "410": { description: Cursor expired. }
+        "503": { description: Public read dependencies are unavailable. }
+  /v1/players/{id}:
+    get:
+      operationId: getPublicPlayer
+      tags: [Players]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Consent-safe public profile. Email, phone, birth date and publisher IDs are never returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicPlayerProfile" }
+        "404": { description: Player is absent, private, suspended or deleted. }
+        "503": { description: Public read dependencies are unavailable. }
+  /v1/players/{id}/matches:
+    get:
+      operationId: listPublicPlayerMatches
+      tags: [Players]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+      responses:
+        "200":
+          description: Confirmed public match history, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicMatchPage" }
+        "404": { description: Player is absent, private, suspended or deleted. }
+        "410": { description: Cursor expired. }
+        "503": { description: Public read dependencies are unavailable. }
+  /v1/players/{id}/competitions:
+    get:
+      operationId: listPublicPlayerCompetitions
+      tags: [Players]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+      responses:
+        "200":
+          description: Non-draft competition history, newest first. Placement remains null until progression finalizes it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicCompetitionPage" }
+        "404": { description: Player is absent, private, suspended or deleted. }
+        "410": { description: Cursor expired. }
+        "503": { description: Public read dependencies are unavailable. }
+components:
+  schemas:
+    CursorPage:
+      type: object
+      required: [nextCursor, hasMore]
+      properties:
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+    CompactPublicPlayer:
+      type: object
+      required: [rank, playerId, handle, displayName, avatarUrl, countryCode, rating, matchesPlayed, rankMovement]
+      properties:
+        rank: { type: [integer, "null"], minimum: 1 }
+        playerId: { type: string, format: uuid }
+        handle: { type: string }
+        displayName: { type: string }
+        avatarUrl: { type: [string, "null"], format: uri }
+        countryCode: { type: string, pattern: "^[A-Z]{2}$" }
+        rating: { type: [integer, "null"] }
+        matchesPlayed: { type: integer, minimum: 0 }
+        rankMovement: { type: [integer, "null"] }
+    RankingPage:
+      type: object
+      required: [data, page, snapshotAt]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/CompactPublicPlayer" } }
+        page: { $ref: "#/components/schemas/CursorPage" }
+        snapshotAt: { type: [string, "null"], format: date-time }
+    PlayerSearchPage:
+      type: object
+      required: [data, page, snapshotAt]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/CompactPublicPlayer" } }
+        page: { $ref: "#/components/schemas/CursorPage" }
+        snapshotAt: { type: string, format: date-time }
+    PublicRecord:
+      type: object
+      required: [matchesPlayed, wins, draws, losses]
+      properties:
+        matchesPlayed: { type: integer, minimum: 0 }
+        wins: { type: integer, minimum: 0 }
+        draws: { type: integer, minimum: 0 }
+        losses: { type: integer, minimum: 0 }
+    PublicGameRating:
+      type: object
+      required: [gameId, rating, matchesPlayed, wins, draws, losses, globalRank, countryRank, rankMovement, lastMatchAt]
+      properties:
+        gameId: { type: string }
+        rating: { type: integer }
+        matchesPlayed: { type: integer, minimum: 0 }
+        wins: { type: integer, minimum: 0 }
+        draws: { type: integer, minimum: 0 }
+        losses: { type: integer, minimum: 0 }
+        globalRank: { type: [integer, "null"], minimum: 1 }
+        countryRank: { type: [integer, "null"], minimum: 1 }
+        rankMovement: { type: [integer, "null"] }
+        lastMatchAt: { type: [string, "null"], format: date-time }
+    PublicGameAccount:
+      type: object
+      required: [gameId, platform, inGameName, verificationStatus]
+      properties:
+        gameId: { type: string }
+        platform: { type: string }
+        inGameName: { type: string }
+        verificationStatus: { type: string, enum: [unverified, pending, verified, rejected] }
+    PublicPlayerProfile:
+      type: object
+      required: [playerId, handle, displayName, bio, avatarUrl, countryCode, joinedAt, record, ratings, gameAccounts]
+      properties:
+        playerId: { type: string, format: uuid }
+        handle: { type: string }
+        displayName: { type: string }
+        bio: { type: string }
+        avatarUrl: { type: [string, "null"], format: uri }
+        countryCode: { type: string }
+        joinedAt: { type: string, format: date-time }
+        record: { $ref: "#/components/schemas/PublicRecord" }
+        ratings: { type: array, items: { $ref: "#/components/schemas/PublicGameRating" } }
+        gameAccounts: { type: array, items: { $ref: "#/components/schemas/PublicGameAccount" } }
+    PublicMatch:
+      type: object
+      required: [matchId, playedAt, opponent, score, outcome, competition, stage, roundNumber, verificationState]
+      properties:
+        matchId: { type: string, format: uuid }
+        playedAt: { type: string, format: date-time }
+        opponent:
+          type: [object, "null"]
+          properties:
+            playerId: { type: string, format: uuid }
+            handle: { type: string }
+            displayName: { type: string }
+            avatarUrl: { type: [string, "null"], format: uri }
+        score:
+          type: object
+          required: [player, opponent, home, away]
+          properties:
+            player: { type: integer, minimum: 0 }
+            opponent: { type: integer, minimum: 0 }
+            home: { type: integer, minimum: 0 }
+            away: { type: integer, minimum: 0 }
+        outcome: { type: string, enum: [win, draw, loss] }
+        competition:
+          type: object
+          required: [competitionId, name]
+          properties:
+            competitionId: { type: string, format: uuid }
+            name: { type: string }
+        stage: { type: string }
+        roundNumber: { type: integer, minimum: 1 }
+        verificationState: { type: string, const: confirmed }
+    PublicMatchPage:
+      type: object
+      required: [data, page, snapshotAt]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/PublicMatch" } }
+        page: { $ref: "#/components/schemas/CursorPage" }
+        snapshotAt: { type: string, format: date-time }
+    PublicCompetition:
+      type: object
+      required: [competitionId, name, format, status, startedAt, placement, entrants, maxEntries, record]
+      properties:
+        competitionId: { type: string, format: uuid }
+        name: { type: string }
+        format: { type: string, enum: [single_elimination, double_elimination, round_robin] }
+        status: { type: string }
+        startedAt: { type: string, format: date-time }
+        placement: { type: [integer, "null"], minimum: 1 }
+        entrants: { type: integer, minimum: 0 }
+        maxEntries: { type: integer, minimum: 2 }
+        record: { $ref: "#/components/schemas/PublicRecord" }
+    PublicCompetitionPage:
+      type: object
+      required: [data, page, snapshotAt]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/PublicCompetition" } }
+        page: { $ref: "#/components/schemas/CursorPage" }
+        snapshotAt: { type: string, format: date-time }

@@ -80,10 +80,11 @@ func (c Competition) ValidateSchedule() error {
 type ResultStatus string
 
 const (
-	ResultPending   ResultStatus = "pending_confirmation"
-	ResultConfirmed ResultStatus = "confirmed"
-	ResultDisputed  ResultStatus = "disputed"
-	ResultResolved  ResultStatus = "resolved"
+	ResultPending    ResultStatus = "pending_confirmation"
+	ResultConfirmed  ResultStatus = "confirmed"
+	ResultDisputed   ResultStatus = "disputed"
+	ResultRejected   ResultStatus = "rejected"
+	ResultSuperseded ResultStatus = "superseded"
 )
 
 // ResultSubmission is append-only. Corrections create a new submission and an

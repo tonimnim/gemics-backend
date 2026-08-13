@@ -23,6 +23,9 @@ Build these player journeys:
 3. Discover/search competitions; view format, schedule, rules, capacity,
    organizer, entry type and prize source.
 4. Register or withdraw, complete any eligibility step and see registration status.
+   For a paid event, choose the connected game account and M-Pesa number, generate a
+   new Idempotency-Key once, start STK Push, then poll the returned payment ID until
+   it is `succeeded`, `failed` or `review`. Reuse the same key after network retries.
 5. Receive match reminders, check in, view opponent and Friend Match instructions.
 6. Submit a result: winner/score, final-result screenshot upload and declaration.
 7. Review an opponent submission and choose Confirm or Dispute with a reason and evidence.
@@ -39,9 +42,16 @@ components and keep all HTTP calls behind a typed API client.
 
 Read the backend contract in `services/api/openapi/openapi.yaml`. The implemented
 identity endpoints cover email OTP request/verification, token refresh, logout,
-current player, profile and game accounts. Do not invent any other endpoints; put
+current player, profile, game accounts and M-Pesa registration payments. Do not
+call the provider callback route from the app. Do not invent any other endpoints; put
 unfinished competition and match resources behind repository interfaces until
 their OpenAPI contract and Go handlers are added.
+
+Use `docs/mobile-api-requirements.md` as the exact planned contract for scalable
+ranking/player search, public profiles and history, match rooms, evidence uploads and
+result confirmation/dispute. Preserve its explicit `demo`/`unavailable` capability
+states; a local UI action must never pretend that an unimplemented backend accepted
+money, evidence or a match result.
 
 Use `EXPO_PUBLIC_API_URL`:
 

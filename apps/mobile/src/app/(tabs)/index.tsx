@@ -1,46 +1,100 @@
+import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { BrandMark, CompetitionCard, Eyebrow, Stat } from '@/components/product';
-import { featuredCompetitions } from '@/features/competitions/demo';
+import { CompetitionCard, Eyebrow, Stat } from '@/components/product';
 import { colors, fonts, radius, spacing } from '@/design/tokens';
+import { featuredCompetitions } from '@/features/competitions/demo';
+import { PlayerAvatar } from '@/features/players/components';
+
+const player = {
+  name: 'Brian',
+  avatarUrl: 'https://i.pravatar.cc/160?img=12',
+};
 
 export default function ArenaScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.topbar}>
-          <BrandMark />
-          <View style={styles.greeting}><Text style={styles.kicker}>GOOD EVENING</Text><Text style={styles.name}>Brian.</Text></View>
-          <Pressable accessibilityLabel="Notifications" style={styles.notification}><Text style={styles.notificationText}>●</Text></Pressable>
+          <Link href="/(tabs)/profile" asChild>
+            <Pressable accessibilityLabel="Open my profile" hitSlop={8}>
+              <PlayerAvatar accessible name={player.name} size={48} uri={player.avatarUrl} />
+            </Pressable>
+          </Link>
+          <View style={styles.greeting}>
+            <Text style={styles.welcome}>Welcome back</Text>
+            <Text style={styles.playerName}>{player.name}</Text>
+          </View>
         </View>
 
-        <View style={styles.heroCard}>
-          <View style={styles.heroStripe} />
-          <View style={styles.heroHeader}><Eyebrow label="NEXT MATCH" /><Text style={styles.timer}>01:42:18</Text></View>
-          <Text style={styles.heroTitle}>ROUND 2</Text>
-          <View style={styles.versusRow}>
-            <View style={styles.competitor}><View style={styles.avatar}><Text style={styles.avatarText}>BM</Text></View><Text style={styles.handle}>YOU</Text></View>
-            <View style={styles.versus}><Text style={styles.versusText}>VS</Text><Text style={styles.matchCode}>M-024</Text></View>
-            <View style={styles.competitor}><View style={[styles.avatar, styles.awayAvatar]}><Text style={styles.avatarText}>SK</Text></View><Text style={styles.handle}>SLICK.KEN</Text></View>
+        <View style={styles.nextMatch}>
+          <View style={styles.matchTopline}>
+            <Eyebrow label="NEXT MATCH" />
+            <View style={styles.livePill}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>CHECK-IN OPEN</Text>
+            </View>
           </View>
-          <Pressable style={styles.checkInButton}><Text style={styles.checkInText}>CHECK IN NOW</Text><Text style={styles.checkInArrow}>↗</Text></Pressable>
+          <View style={styles.roundRow}>
+            <Text style={styles.round}>Round 2</Text>
+            <Text style={styles.timer}>01:42:18</Text>
+          </View>
+          <View style={styles.versusRow}>
+            <View style={styles.competitor}>
+              <PlayerAvatar name="Brian Maina" size={36} uri={player.avatarUrl} />
+              <View style={styles.competitorCopy}>
+                <Text style={styles.sideLabel}>YOU</Text>
+                <Text numberOfLines={1} style={styles.handle}>brian.mainaa</Text>
+              </View>
+            </View>
+            <Text style={styles.versus}>VS</Text>
+            <View style={[styles.competitor, styles.competitorAway]}>
+              <View style={styles.competitorCopy}>
+                <Text style={[styles.sideLabel, styles.alignRight]}>OPPONENT</Text>
+                <Text numberOfLines={1} style={[styles.handle, styles.alignRight]}>slick.ken</Text>
+              </View>
+              <View style={[styles.matchAvatar, styles.awayAvatar]}>
+                <Text style={styles.awayInitials}>SK</Text>
+              </View>
+            </View>
+          </View>
+          <Link href="/match/match-024" asChild>
+            <Pressable accessibilityRole="button" style={styles.primaryButton}>
+              <Text style={styles.primaryButtonText}>Open match room</Text>
+              <Ionicons color={colors.ink} name="arrow-forward" size={20} />
+            </Pressable>
+          </Link>
         </View>
 
         <View style={styles.sectionHeader}>
-          <View><Eyebrow label="OPEN NOW" /><Text style={styles.sectionTitle}>STEP INTO{`\n`}THE BRACKET.</Text></View>
-          <Link href="/(tabs)/competitions" style={styles.viewAll}>VIEW ALL →</Link>
+          <Text style={styles.sectionTitle}>Open competitions</Text>
+          <Link href="/(tabs)/competitions" style={styles.viewAll}>See all</Link>
+        </View>
+        <View style={styles.competitionList}>
+          {featuredCompetitions.slice(0, 2).map((competition) => (
+            <CompetitionCard competition={competition} key={competition.id} />
+          ))}
         </View>
 
-        <View style={styles.cards}>
-          {featuredCompetitions.slice(0, 2).map((competition) => <CompetitionCard competition={competition} key={competition.id} />)}
-        </View>
-
-        <View style={styles.recordCard}>
-          <View style={styles.recordTitleRow}><View><Text style={styles.recordLabel}>YOUR SEASON</Text><Text style={styles.recordTitle}>FORM CHECK</Text></View><Text style={styles.rank}>#024 KE</Text></View>
-          <View style={styles.stats}><Stat label="WIN RATE" value="78%" /><Stat label="MATCHES" value="41" /><Stat label="RATING" value="1,842" /></View>
-          <View style={styles.formRow}>{['W', 'W', 'L', 'W', 'W'].map((form, index) => <View key={`${form}-${index}`} style={[styles.form, form === 'L' && styles.loss]}><Text style={styles.formText}>{form}</Text></View>)}</View>
+        <View style={styles.seasonSummary}>
+          <View style={styles.summaryHeading}>
+            <Text style={styles.summaryTitle}>Your form</Text>
+            <Text style={styles.rank}>#24 Kenya</Text>
+          </View>
+          <View style={styles.stats}>
+            <Stat label="WIN RATE" value="78%" />
+            <Stat label="MATCHES" value="41" />
+            <Stat label="RATING" value="1,842" />
+          </View>
+          <View style={styles.formRow}>
+            {['W', 'W', 'L', 'W', 'W'].map((form, index) => (
+              <View key={`${form}-${index}`} style={[styles.form, form === 'L' && styles.loss]}>
+                <Text style={styles.formText}>{form}</Text>
+              </View>
+            ))}
+          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -49,22 +103,62 @@ export default function ArenaScreen() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.ink },
-  content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.xl },
-  topbar: { minHeight: 74, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  greeting: { flex: 1 }, kicker: { color: colors.muted, fontFamily: fonts.mono, fontSize: 9, letterSpacing: 1.2 }, name: { color: colors.paper, fontSize: 18, fontWeight: '800' },
-  notification: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.line },
-  notificationText: { color: colors.orange, fontSize: 11 },
-  heroCard: { overflow: 'hidden', backgroundColor: colors.paper, padding: spacing.lg, borderRadius: radius.lg }, heroStripe: { position: 'absolute', top: 0, right: 0, width: 80, height: 12, backgroundColor: colors.acid },
-  heroHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, timer: { color: colors.ink, fontFamily: fonts.mono, fontSize: 10, fontWeight: '800' },
-  heroTitle: { color: colors.ink, marginTop: spacing.sm, fontSize: 42, lineHeight: 44, fontWeight: '900', letterSpacing: -2 },
-  versusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: spacing.lg }, competitor: { width: 96, alignItems: 'center', gap: spacing.sm },
-  avatar: { width: 68, height: 68, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.blue, borderWidth: 2, borderColor: colors.ink, transform: [{ rotate: '-3deg' }] }, awayAvatar: { backgroundColor: colors.orange, transform: [{ rotate: '3deg' }] },
-  avatarText: { color: colors.paper, fontSize: 23, fontWeight: '900' }, handle: { color: colors.ink, fontFamily: fonts.mono, fontSize: 9, fontWeight: '800' }, versus: { alignItems: 'center', gap: 3 }, versusText: { color: colors.ink, fontSize: 24, fontWeight: '900' }, matchCode: { color: colors.subtleInk, fontFamily: fonts.mono, fontSize: 8 },
-  checkInButton: { minHeight: 52, paddingHorizontal: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.acid, borderWidth: 2, borderColor: colors.ink },
-  checkInText: { color: colors.ink, fontFamily: fonts.mono, fontWeight: '900', fontSize: 11 }, checkInArrow: { color: colors.ink, fontSize: 17, fontWeight: '900' },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' }, sectionTitle: { color: colors.paper, fontSize: 31, lineHeight: 29, letterSpacing: -1.5, fontWeight: '900' }, viewAll: { color: colors.acid, fontFamily: fonts.mono, fontSize: 9, fontWeight: '800', paddingBottom: 3 },
-  cards: { gap: spacing.md },
-  recordCard: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, borderRadius: radius.lg, padding: spacing.lg }, recordTitleRow: { flexDirection: 'row', justifyContent: 'space-between' }, recordLabel: { color: colors.muted, fontFamily: fonts.mono, fontSize: 8, letterSpacing: 1 }, recordTitle: { color: colors.paper, fontSize: 24, fontWeight: '900' }, rank: { color: colors.acid, fontFamily: fonts.mono, fontSize: 10, fontWeight: '800' },
-  stats: { marginTop: spacing.lg, paddingVertical: spacing.md, flexDirection: 'row', borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line },
-  formRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }, form: { width: 27, height: 27, backgroundColor: colors.acid, alignItems: 'center', justifyContent: 'center' }, loss: { backgroundColor: colors.orange }, formText: { color: colors.ink, fontFamily: fonts.mono, fontSize: 10, fontWeight: '900' },
+  content: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xxl,
+    gap: spacing.xl,
+  },
+  topbar: { minHeight: 58, flexDirection: 'row', alignItems: 'center' },
+  greeting: { flex: 1, marginLeft: spacing.md },
+  welcome: { color: colors.muted, fontSize: 12 },
+  playerName: { color: colors.paper, marginTop: 1, fontSize: 19, fontWeight: '800' },
+  nextMatch: { backgroundColor: colors.paper, padding: spacing.lg, borderRadius: radius.lg },
+  matchTopline: { minHeight: 23, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  livePill: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.green },
+  liveText: { color: colors.subtleInk, fontFamily: fonts.mono, fontSize: 7, fontWeight: '800' },
+  roundRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xs },
+  round: { color: colors.ink, fontSize: 28, fontWeight: '900', letterSpacing: -1 },
+  timer: { color: colors.subtleInk, fontFamily: fonts.mono, fontSize: 10, fontWeight: '800' },
+  versusRow: { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg },
+  competitor: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  competitorAway: { justifyContent: 'flex-end' },
+  competitorCopy: { flex: 1, minWidth: 0 },
+  matchAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.blue },
+  awayAvatar: { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.orange },
+  awayInitials: { color: colors.paper, fontSize: 14, fontWeight: '900' },
+  sideLabel: { color: colors.subtleInk, fontFamily: fonts.mono, fontSize: 7, fontWeight: '800' },
+  handle: { color: colors.ink, marginTop: 2, fontSize: 11, fontWeight: '800' },
+  alignRight: { textAlign: 'right' },
+  versus: { color: colors.subtleInk, marginHorizontal: 4, fontFamily: fonts.mono, fontSize: 10, fontWeight: '900' },
+  primaryButton: {
+    minHeight: 50,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.acid,
+    borderRadius: radius.md,
+  },
+  primaryButtonText: { color: colors.ink, fontSize: 14, fontWeight: '900' },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionTitle: { color: colors.paper, fontSize: 20, fontWeight: '800' },
+  viewAll: { color: colors.acid, fontSize: 12, fontWeight: '800' },
+  competitionList: { gap: spacing.md },
+  seasonSummary: {
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  summaryHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  summaryTitle: { color: colors.paper, fontSize: 19, fontWeight: '800' },
+  rank: { color: colors.acid, fontFamily: fonts.mono, fontSize: 10, fontWeight: '800' },
+  stats: { flexDirection: 'row', marginTop: spacing.lg, paddingTop: spacing.md, borderTopWidth: 1, borderColor: colors.line },
+  formRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  form: { width: 30, height: 30, borderRadius: 8, backgroundColor: colors.acid, alignItems: 'center', justifyContent: 'center' },
+  loss: { backgroundColor: colors.orange },
+  formText: { color: colors.ink, fontFamily: fonts.mono, fontSize: 10, fontWeight: '900' },
 });

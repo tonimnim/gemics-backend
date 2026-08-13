@@ -1,5 +1,8 @@
 # eFootball result verification
 
+> Design status: the schema supports this workflow, but the result submission,
+> confirmation, dispute/referee and bracket-progression APIs are not implemented yet.
+
 Konami does not currently provide Gamics with a trusted public match-result API,
 so a result is a participant claim until it is confirmed or reviewed.
 

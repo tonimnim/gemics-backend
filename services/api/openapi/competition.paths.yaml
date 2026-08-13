@@ -1,0 +1,164 @@
+paths:
+  /v1/competitions:
+    get:
+      operationId: listCompetitions
+      tags: [Competitions]
+      summary: Discover public competitions with bounded keyset pagination.
+      parameters:
+        - { name: gameId, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [published, registration_open, check_in, running, completed] } }
+        - { name: entryType, in: query, schema: { type: string, enum: [free, paid] } }
+        - { name: q, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+      responses:
+        "200":
+          description: Public competition page.
+          content: { application/json: { schema: { $ref: "#/components/schemas/CompetitionPage" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/competitions/{id}:
+    get:
+      operationId: getCompetition
+      tags: [Competitions]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Public competition detail and immutable rules snapshot.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/CompetitionDetail" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/competitions/{id}/bracket:
+    get:
+      operationId: getCompetitionBracket
+      tags: [Competitions]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Generated stages and matches. This endpoint never generates a bracket.
+          content: { application/json: { schema: { $ref: "#/components/schemas/BracketResponse" } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/competitions/{id}/registrations:
+    post:
+      operationId: createFreeRegistration
+      tags: [Registrations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [gameAccountId], properties: { gameAccountId: { type: string, format: uuid } } } } }
+      responses:
+        "201":
+          description: Free registration created atomically.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Registration" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/me/registrations:
+    get:
+      operationId: listMyRegistrations
+      tags: [Registrations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+      responses:
+        "200":
+          description: Signed-in player's registrations.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RegistrationPage" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/competitions/{id}/registrations/me:
+    delete:
+      operationId: withdrawRegistration
+      tags: [Registrations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Free registration withdrawn. }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+components:
+  schemas:
+    Competition:
+      type: object
+      required: [id, slug, name, gameId, gameName, organizerId, organizerName, format, status, maxEntries, entryCount, availableSlots, entryType, entryFeeMinor, currency, startsAt]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string }
+        gameId: { type: string }
+        gameName: { type: string }
+        organizerId: { type: string, format: uuid }
+        organizerName: { type: string }
+        organizerSlug: { type: string }
+        format: { type: string, enum: [single_elimination, double_elimination, round_robin] }
+        status: { type: string, enum: [published, registration_open, check_in, running, completed] }
+        maxEntries: { type: integer, minimum: 2 }
+        entryCount: { type: integer, minimum: 0 }
+        availableSlots: { type: integer, minimum: 0 }
+        entryType: { type: string, enum: [free, paid] }
+        entryFeeMinor: { type: integer, format: int64, minimum: 0 }
+        feePurpose: { type: string, enum: [none, administration] }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        prizeAmountMinor: { type: integer, format: int64, minimum: 0 }
+        prizeFunding: { type: string, enum: [none, organizer, sponsor] }
+        registrationOpensAt: { type: string, format: date-time }
+        registrationClosesAt: { type: string, format: date-time }
+        checkInOpensAt: { type: [string, "null"], format: date-time }
+        startsAt: { type: string, format: date-time }
+        rulesVersion: { type: integer, minimum: 1 }
+    CompetitionDetail:
+      allOf:
+        - { $ref: "#/components/schemas/Competition" }
+        - { type: object, required: [rules], properties: { rules: { type: object, additionalProperties: true } } }
+    CompetitionPage:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Competition" } }
+        page: { $ref: "#/components/schemas/CursorPage" }
+    Registration:
+      type: object
+      required: [id, competitionId, competitionName, gameId, gameName, displayName, gameAccountId, status, entryFeeMinor, currency, startsAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        competitionId: { type: string, format: uuid }
+        competitionName: { type: string }
+        competitionSlug: { type: string }
+        gameId: { type: string }
+        gameName: { type: string }
+        displayName: { type: string }
+        gameAccountId: { type: string, format: uuid }
+        status: { type: string, enum: [registered, checked_in, accepted, withdrawn, disqualified] }
+        entryFeeMinor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string }
+        startsAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    RegistrationPage:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Registration" } }
+        page: { $ref: "#/components/schemas/CursorPage" }
+    BracketResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [competitionId, stages]
+          properties:
+            competitionId: { type: string, format: uuid }
+            stages: { type: array, items: { type: object, additionalProperties: true } }

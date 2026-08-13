@@ -14,3 +14,17 @@ npm start
 Use a development build for product work. Expo Go is useful for early layout
 checks, but evidence capture, notifications and secure session storage will be
 validated in development builds before release.
+
+The current player build includes the native five-tab shell, compact searchable
+rankings, public player profiles, match history and a screenshot-backed result
+confirmation/dispute prototype. Match, ranking and evidence mutations are visibly
+marked demo-only and capability-gated; they do not claim a backend action succeeded.
+
+Backend handoff:
+
+- implemented routes: `../../services/api/openapi/openapi.yaml`;
+- planned mobile ranking/match/evidence contract: `../../docs/mobile-api-requirements.md`;
+- full separate-mobile-developer prompt: `../../docs/mobile-developer-prompt.md`.
+
+Before an Android/iOS release, replace demo repositories only after the matching Go
+handler and OpenAPI operation exist, then change that capability to `available`.

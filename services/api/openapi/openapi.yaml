@@ -1,42 +1,66 @@
 openapi: 3.1.0
 info:
   title: Gamics API
-  version: 0.2.0
-  description: Passwordless player onboarding and competition infrastructure for African esports.
+  version: 0.4.0
+  description: Gamics player onboarding, competition discovery, registrations, matches, evidence-backed result
+    verification, rankings, and M-Pesa payment API.
 servers:
   - url: http://localhost:8080
 paths:
   /healthz:
     get:
       operationId: getHealth
-      tags: [Operations]
+      tags:
+        - Operations
       responses:
-        "200": { description: Process is alive. }
+        "200":
+          description: Process is alive.
   /readyz:
     get:
       operationId: getReadiness
-      tags: [Operations]
+      tags:
+        - Operations
       responses:
-        "200": { description: Writer, reader and Redis are ready. }
-        "503": { description: A required dependency is unavailable. }
+        "200":
+          description: The writer is ready; reader or Redis degradation is reported in the body.
+        "503":
+          description: A required dependency is unavailable.
   /v1/games:
     get:
       operationId: listGames
-      tags: [Games]
+      tags:
+        - Games
       responses:
         "200":
           description: Supported competitive games.
+          headers:
+            ETag:
+              schema:
+                type: string
+            X-Cache:
+              schema:
+                type: string
+                enum:
+                  - HIT
+                  - MISS
+                  - STALE
+                  - BYPASS
           content:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required:
+                  - data
                 properties:
-                  data: { type: array, items: { $ref: "#/components/schemas/Game" } }
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Game"
   /v1/auth/otp/request:
     post:
       operationId: requestEmailOTP
-      tags: [Authentication]
+      tags:
+        - Authentication
       summary: Send a passwordless sign-in code by email.
       requestBody:
         required: true
@@ -44,9 +68,12 @@ paths:
           application/json:
             schema:
               type: object
-              required: [email]
+              required:
+                - email
               properties:
-                email: { type: string, format: email }
+                email:
+                  type: string
+                  format: email
       responses:
         "202":
           description: The request was accepted.
@@ -54,15 +81,22 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status, expiresInSeconds]
+                required:
+                  - status
+                  - expiresInSeconds
                 properties:
-                  status: { type: string, const: accepted }
-                  expiresInSeconds: { type: integer }
-        "429": { $ref: "#/components/responses/Error" }
+                  status:
+                    type: string
+                    const: accepted
+                  expiresInSeconds:
+                    type: integer
+        "429":
+          $ref: "#/components/responses/Error"
   /v1/auth/otp/verify:
     post:
       operationId: verifyEmailOTP
-      tags: [Authentication]
+      tags:
+        - Authentication
       summary: Verify an email code and create or sign in the player.
       requestBody:
         required: true
@@ -70,22 +104,33 @@ paths:
           application/json:
             schema:
               type: object
-              required: [email, code]
+              required:
+                - email
+                - code
               properties:
-                email: { type: string, format: email }
-                code: { type: string, pattern: "^[0-9]{6}$" }
-                deviceName: { type: string, maxLength: 120 }
+                email:
+                  type: string
+                  format: email
+                code:
+                  type: string
+                  pattern: ^[0-9]{6}$
+                deviceName:
+                  type: string
+                  maxLength: 120
       responses:
         "200":
           description: Authenticated session.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthSession" }
-        "401": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Error"
   /v1/auth/refresh:
     post:
       operationId: refreshSession
-      tags: [Authentication]
+      tags:
+        - Authentication
       summary: Rotate a refresh token and issue a new access token.
       requestBody:
         required: true
@@ -93,40 +138,54 @@ paths:
           application/json:
             schema:
               type: object
-              required: [refreshToken]
+              required:
+                - refreshToken
               properties:
-                refreshToken: { type: string }
+                refreshToken:
+                  type: string
       responses:
         "200":
           description: Rotated authenticated session.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthSession" }
-        "401": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Error"
   /v1/auth/logout:
     post:
       operationId: logout
-      tags: [Authentication]
-      security: [{ bearerAuth: [] }]
+      tags:
+        - Authentication
+      security:
+        - bearerAuth: []
       responses:
-        "204": { description: Current refresh session revoked. }
-        "401": { $ref: "#/components/responses/Error" }
+        "204":
+          description: Current refresh session revoked.
+        "401":
+          $ref: "#/components/responses/Error"
   /v1/me:
     get:
       operationId: getCurrentPlayer
-      tags: [Players]
-      security: [{ bearerAuth: [] }]
+      tags:
+        - Players
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: Current player and onboarding progress.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Player" }
-        "401": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: "#/components/schemas/Player"
+        "401":
+          $ref: "#/components/responses/Error"
     patch:
       operationId: updateCurrentPlayer
-      tags: [Players]
-      security: [{ bearerAuth: [] }]
+      tags:
+        - Players
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -134,40 +193,60 @@ paths:
             schema:
               type: object
               properties:
-                displayName: { type: string, minLength: 2, maxLength: 80 }
-                countryCode: { type: string, pattern: "^[A-Z]{2}$" }
-                birthDate: { type: string, format: date }
-                acceptTerms: { type: boolean, const: true }
-                acceptPrivacy: { type: boolean, const: true }
+                displayName:
+                  type: string
+                  minLength: 2
+                  maxLength: 80
+                countryCode:
+                  type: string
+                  pattern: ^[A-Z]{2}$
+                birthDate:
+                  type: string
+                  format: date
+                acceptTerms:
+                  type: boolean
+                  const: true
+                acceptPrivacy:
+                  type: boolean
+                  const: true
       responses:
         "200":
           description: Updated player.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Player" }
-        "400": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: "#/components/schemas/Player"
+        "400":
+          $ref: "#/components/responses/Error"
   /v1/me/profile:
     put:
       operationId: putPlayerProfile
-      tags: [Players]
-      security: [{ bearerAuth: [] }]
+      tags:
+        - Players
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ProfileInput" }
+            schema:
+              $ref: "#/components/schemas/ProfileInput"
       responses:
         "200":
           description: Updated player and profile.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Player" }
-        "409": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: "#/components/schemas/Player"
+        "409":
+          $ref: "#/components/responses/Error"
   /v1/me/game-accounts:
     get:
       operationId: listMyGameAccounts
-      tags: [Game accounts]
-      security: [{ bearerAuth: [] }]
+      tags:
+        - Game accounts
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: Connected game accounts.
@@ -175,34 +254,46 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required:
+                  - data
                 properties:
-                  data: { type: array, items: { $ref: "#/components/schemas/GameAccount" } }
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GameAccount"
     post:
       operationId: createGameAccount
-      tags: [Game accounts]
-      security: [{ bearerAuth: [] }]
+      tags:
+        - Game accounts
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/GameAccountInput" }
+            schema:
+              $ref: "#/components/schemas/GameAccountInput"
       responses:
         "201":
           description: Connected game account.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GameAccount" }
+              schema:
+                $ref: "#/components/schemas/GameAccount"
   /v1/me/game-accounts/{id}:
     patch:
       operationId: updateGameAccount
-      tags: [Game accounts]
-      security: [{ bearerAuth: [] }]
+      tags:
+        - Game accounts
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
           required: true
-          schema: { type: string, format: uuid }
+          schema:
+            type: string
+            format: uuid
       requestBody:
         required: true
         content:
@@ -210,16 +301,977 @@ paths:
             schema:
               type: object
               properties:
-                platform: { type: string, enum: [android, ios] }
-                inGameName: { type: string, minLength: 2, maxLength: 80 }
-                publisherPlayerId: { type: [string, "null"] }
+                platform:
+                  type: string
+                  enum:
+                    - android
+                    - ios
+                inGameName:
+                  type: string
+                  minLength: 2
+                  maxLength: 80
+                publisherPlayerId:
+                  type:
+                    - string
+                    - "null"
       responses:
         "200":
           description: Updated game account.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GameAccount" }
+              schema:
+                $ref: "#/components/schemas/GameAccount"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/payments/mpesa/stk-push:
+    post:
+      operationId: initiateMPesaRegistrationPayment
+      tags:
+        - Payments
+      summary: Reserve a competition place and send an M-Pesa STK prompt.
+      description: A confirmed provider payment creates the competition entry atomically. Reuse the same Idempotency-Key when
+        retrying the same request.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - competitionId
+                - gameAccountId
+                - phoneNumber
+              properties:
+                competitionId:
+                  type: string
+                  format: uuid
+                gameAccountId:
+                  type: string
+                  format: uuid
+                phoneNumber:
+                  type: string
+                  description: Kenyan Safaricom number; local or 254 format is accepted.
+      responses:
+        "200":
+          description: Idempotent replay of an existing request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentIntent"
+        "202":
+          description: STK prompt accepted by Daraja.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentIntent"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/payments/{id}:
+    get:
+      operationId: getPayment
+      tags:
+        - Payments
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Current payment and registration status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentIntent"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/payments/mpesa/callback/{token}:
+    post:
+      operationId: receiveMPesaCallback
+      tags:
+        - Provider callbacks
+      summary: Daraja-only callback endpoint; mobile clients must never call it.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 32
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Callback durably accepted and processed or queued for replay.
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          description: Invalid callback token.
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/me/matches:
+    get:
+      operationId: listMyMatches
+      tags:
+        - Matches
+      summary: List the signed-in player's active or historical match assignments.
+      description: Uses signed keyset cursors. The server derives lifecycle and allowedActions for the authenticated participant.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum:
+              - active
+              - history
+            default: active
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: A bounded page of participant-authorized matches.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/matches/{matchId}:
+    get:
+      operationId: getMatch
+      tags:
+        - Matches
+      summary: Load an assigned match room.
+      description: Missing and non-participant matches both return 404 to prevent assignment enumeration.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Authoritative match room, check-in state and server-derived allowed actions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchRoomResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/matches/{matchId}/check-ins:
+    post:
+      operationId: checkInMatch
+      tags:
+        - Matches
+      summary: Check the signed-in participant's side into a match.
+      description: Locks and version-checks the match. The second side atomically moves a ready match to in_progress. Reuse
+        the same Idempotency-Key after a network failure.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      responses:
+        "200":
+          description: The side is checked in, or was already checked in.
+          headers:
+            Idempotency-Replayed:
+              description: True when the original response for this key was replayed.
+              schema:
+                type: string
+                enum:
+                  - "true"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchRoomResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/evidence/{id}:
+    get:
+      operationId: getEvidenceAccess
+      tags: [Result evidence]
+      summary: Authorize a participant or tournament referee to view private result evidence.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Short-lived private download URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/EvidenceAccess" }
+        "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/evidence/uploads:
+    post:
+      operationId: createEvidenceUpload
+      tags:
+        - Result evidence
+      summary: Create a short-lived, checksum-bound screenshot upload.
+      description: Returns 503 when private S3-compatible storage is not configured. The client must send every required
+        header during the direct PUT.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - mediaType
+                - byteSize
+                - sha256
+              properties:
+                mediaType:
+                  type: string
+                  enum:
+                    - image/jpeg
+                    - image/png
+                    - image/heic
+                    - image/heif
+                byteSize:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                  maximum: 26214400
+                sha256:
+                  type: string
+                  pattern: ^[0-9A-Fa-f]{64}$
+      responses:
+        "201":
+          description: Upload intent created. This does not mean evidence was uploaded or verified.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EvidenceUploadIntent"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/evidence/uploads/{id}/complete:
+    post:
+      operationId: completeEvidenceUpload
+      tags:
+        - Result evidence
+      summary: Verify the uploaded object's provider checksum and size.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Evidence is verified and can be attached to one result or dispute.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Evidence"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/matches/{matchId}/result-submissions:
+    post:
+      operationId: submitMatchResult
+      tags:
+        - Match results
+      summary: Submit a participant result for opponent confirmation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - homeScore
+                - awayScore
+                - games
+                - evidenceIds
+                - declarationAccepted
+              properties:
+                homeScore:
+                  type: integer
+                  minimum: 0
+                  maximum: 99
+                awayScore:
+                  type: integer
+                  minimum: 0
+                  maximum: 99
+                tiebreak:
+                  $ref: "#/components/schemas/TiebreakScore"
+                games:
+                  type: array
+                  minItems: 1
+                  maxItems: 99
+                  items:
+                    $ref: "#/components/schemas/GameScore"
+                evidenceIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 5
+                  uniqueItems: true
+                  items:
+                    type: string
+                    format: uuid
+                declarationAccepted:
+                  type: boolean
+                  const: true
+      responses:
+        "201":
+          description: Submission is pending opponent confirmation. Idempotent replays return the same body and status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ResultSubmission"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/result-submissions/{id}/confirmations:
+    post:
+      operationId: decideResultSubmission
+      tags:
+        - Match results
+      summary: Confirm an opponent result or dispute it into the referee queue.
+      description: Only a participant on the opposing entry can decide. A dispute freezes match progression atomically.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - decision
+                  properties:
+                    decision:
+                      type: string
+                      const: confirm
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - decision
+                    - reasonCode
+                    - note
+                    - evidenceIds
+                  properties:
+                    decision:
+                      type: string
+                      const: dispute
+                    reasonCode:
+                      type: string
+                      enum:
+                        - score_mismatch
+                        - invalid_evidence
+                        - match_not_played
+                        - other
+                    note:
+                      type: string
+                      minLength: 10
+                      maxLength: 1000
+                    evidenceIds:
+                      type: array
+                      maxItems: 5
+                      uniqueItems: true
+                      items:
+                        type: string
+                        format: uuid
+      responses:
+        "200":
+          description: Atomic resulting match and submission states from the writer transaction.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ResultDecision"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/rankings:
+    get:
+      operationId: listRankings
+      tags:
+        - Players
+      parameters:
+        - name: gameId
+          in: query
+          schema:
+            type: string
+            default: efootball-mobile
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum:
+              - country
+              - global
+            default: country
+        - name: country
+          in: query
+          description: Required for country scope; defaults to KE.
+          schema:
+            type: string
+            pattern: ^[A-Z]{2}$
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 2048
+      responses:
+        "200":
+          description: One immutable leaderboard-snapshot page. An empty system can return snapshotAt null.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RankingPage"
+        "400":
+          description: Invalid filters or a cursor used with different filters.
+        "410":
+          description: Cursor expired or its retained snapshot no longer exists.
+        "503":
+          description: Public read dependencies are unavailable.
+  /v1/players:
+    get:
+      operationId: searchPlayers
+      tags:
+        - Players
+      parameters:
+        - name: q
+          in: query
+          description: Empty or 2-80 character handle/display/in-game-name substring.
+          schema:
+            type: string
+            maxLength: 80
+        - name: gameId
+          in: query
+          schema:
+            type: string
+            default: efootball-mobile
+        - name: country
+          in: query
+          schema:
+            type: string
+            pattern: ^[A-Z]{2}$
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 2048
+      responses:
+        "200":
+          description: Discoverable active players using a signed keyset cursor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlayerSearchPage"
+        "400":
+          description: Invalid filters or cursor.
+        "410":
+          description: Cursor expired.
+        "503":
+          description: Public read dependencies are unavailable.
+  /v1/players/{id}:
+    get:
+      operationId: getPublicPlayer
+      tags:
+        - Players
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Consent-safe public profile. Email, phone, birth date and publisher IDs are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicPlayerProfile"
+        "404":
+          description: Player is absent
+          private: null
+          suspended or deleted.: null
+        "503":
+          description: Public read dependencies are unavailable.
+  /v1/players/{id}/matches:
+    get:
+      operationId: listPublicPlayerMatches
+      tags:
+        - Players
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 2048
+      responses:
+        "200":
+          description: Confirmed public match history, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicMatchPage"
+        "404":
+          description: Player is absent
+          private: null
+          suspended or deleted.: null
+        "410":
+          description: Cursor expired.
+        "503":
+          description: Public read dependencies are unavailable.
+  /v1/players/{id}/competitions:
+    get:
+      operationId: listPublicPlayerCompetitions
+      tags:
+        - Players
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 2048
+      responses:
+        "200":
+          description: Non-draft competition history, newest first. Placement remains null until progression finalizes it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicCompetitionPage"
+        "404":
+          description: Player is absent
+          private: null
+          suspended or deleted.: null
+        "410":
+          description: Cursor expired.
+        "503":
+          description: Public read dependencies are unavailable.
+  /v1/competitions:
+    get:
+      operationId: listCompetitions
+      tags:
+        - Competitions
+      summary: Discover public competitions with bounded keyset pagination.
+      parameters:
+        - name: gameId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum:
+              - published
+              - registration_open
+              - check_in
+              - running
+              - completed
+        - name: entryType
+          in: query
+          schema:
+            type: string
+            enum:
+              - free
+              - paid
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 2048
+      responses:
+        "200":
+          description: Public competition page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompetitionPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/competitions/{id}:
+    get:
+      operationId: getCompetition
+      tags:
+        - Competitions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Public competition detail and immutable rules snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CompetitionDetail"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/competitions/{id}/bracket:
+    get:
+      operationId: getCompetitionBracket
+      tags:
+        - Competitions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Generated stages and matches. This endpoint never generates a bracket.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BracketResponse"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/competitions/{id}/registrations:
+    post:
+      operationId: createFreeRegistration
+      tags:
+        - Registrations
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - gameAccountId
+              properties:
+                gameAccountId:
+                  type: string
+                  format: uuid
+      responses:
+        "201":
+          description: Free registration created atomically.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Registration"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/me/registrations:
+    get:
+      operationId: listMyRegistrations
+      tags:
+        - Registrations
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 2048
+      responses:
+        "200":
+          description: Signed-in player's registrations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistrationPage"
+        "401":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/competitions/{id}/registrations/me:
+    delete:
+      operationId: withdrawRegistration
+      tags:
+        - Registrations
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Free registration withdrawn.
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -231,80 +1283,1287 @@ components:
       description: Request failed.
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     Error:
       type: object
-      required: [error, message]
+      required:
+        - error
+        - message
       properties:
-        error: { type: string }
-        message: { type: string }
+        error:
+          type: string
+        message:
+          type: string
     Game:
       type: object
-      required: [id, name, publisher, platforms, resultMode, officialIntegration]
+      required:
+        - id
+        - name
+        - publisher
+        - platforms
+        - resultMode
+        - officialIntegration
       properties:
-        id: { type: string }
-        name: { type: string }
-        publisher: { type: string }
-        platforms: { type: array, items: { type: string } }
-        resultMode: { type: string, enum: [participant_confirmation, publisher_api, admin_only] }
-        officialIntegration: { type: boolean }
+        id:
+          type: string
+        name:
+          type: string
+        publisher:
+          type: string
+        platforms:
+          type: array
+          items:
+            type: string
+        resultMode:
+          type: string
+          enum:
+            - participant_confirmation
+            - publisher_api
+            - admin_only
+        officialIntegration:
+          type: boolean
     AuthSession:
       type: object
-      required: [accessToken, refreshToken, tokenType, expiresInSeconds, player]
+      required:
+        - accessToken
+        - refreshToken
+        - tokenType
+        - expiresInSeconds
+        - player
       properties:
-        accessToken: { type: string }
-        refreshToken: { type: string }
-        tokenType: { type: string, const: Bearer }
-        expiresInSeconds: { type: integer }
-        player: { $ref: "#/components/schemas/Player" }
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          const: Bearer
+        expiresInSeconds:
+          type: integer
+        player:
+          $ref: "#/components/schemas/Player"
     Player:
       type: object
-      required: [id, email, displayName, countryCode, status, onboarding]
+      required:
+        - id
+        - email
+        - displayName
+        - countryCode
+        - status
+        - onboarding
       properties:
-        id: { type: string, format: uuid }
-        email: { type: string, format: email }
-        displayName: { type: string }
-        countryCode: { type: string }
-        birthDate: { type: [string, "null"], format: date }
-        status: { type: string }
-        profile: { oneOf: [{ $ref: "#/components/schemas/Profile" }, { type: "null" }] }
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+        countryCode:
+          type: string
+        birthDate:
+          type:
+            - string
+            - "null"
+          format: date
+        status:
+          type: string
+        profile:
+          oneOf:
+            - $ref: "#/components/schemas/Profile"
+            - type: "null"
         onboarding:
           type: object
-          required: [personalDetails, profile, gameAccount, complete]
+          required:
+            - personalDetails
+            - profile
+            - gameAccount
+            - complete
           properties:
-            personalDetails: { type: boolean }
-            profile: { type: boolean }
-            gameAccount: { type: boolean }
-            complete: { type: boolean }
+            personalDetails:
+              type: boolean
+            profile:
+              type: boolean
+            gameAccount:
+              type: boolean
+            complete:
+              type: boolean
     ProfileInput:
       type: object
-      required: [handle, bio, discoverable, analyticsConsent, scoutingConsent]
+      required:
+        - handle
+        - bio
+        - discoverable
+        - analyticsConsent
+        - scoutingConsent
       properties:
-        handle: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9_.]{2,23}$" }
-        bio: { type: string, maxLength: 280 }
-        discoverable: { type: boolean }
-        analyticsConsent: { type: boolean }
-        scoutingConsent: { type: boolean }
+        handle:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.]{2,23}$
+        bio:
+          type: string
+          maxLength: 280
+        discoverable:
+          type: boolean
+        analyticsConsent:
+          type: boolean
+        scoutingConsent:
+          type: boolean
     Profile:
       allOf:
-        - { $ref: "#/components/schemas/ProfileInput" }
+        - $ref: "#/components/schemas/ProfileInput"
     GameAccountInput:
       type: object
-      required: [gameId, platform, inGameName]
+      required:
+        - gameId
+        - platform
+        - inGameName
       properties:
-        gameId: { type: string }
-        platform: { type: string, enum: [android, ios] }
-        inGameName: { type: string, minLength: 2, maxLength: 80 }
-        publisherPlayerId: { type: [string, "null"] }
+        gameId:
+          type: string
+        platform:
+          type: string
+          enum:
+            - android
+            - ios
+        inGameName:
+          type: string
+          minLength: 2
+          maxLength: 80
+        publisherPlayerId:
+          type:
+            - string
+            - "null"
     GameAccount:
       allOf:
-        - { $ref: "#/components/schemas/GameAccountInput" }
+        - $ref: "#/components/schemas/GameAccountInput"
         - type: object
-          required: [id, verificationStatus, createdAt, updatedAt]
+          required:
+            - id
+            - verificationStatus
+            - createdAt
+            - updatedAt
           properties:
-            id: { type: string, format: uuid }
-            verificationStatus: { type: string, enum: [unverified, pending, verified, rejected] }
-            verifiedAt: { type: [string, "null"], format: date-time }
-            createdAt: { type: string, format: date-time }
-            updatedAt: { type: string, format: date-time }
+            id:
+              type: string
+              format: uuid
+            verificationStatus:
+              type: string
+              enum:
+                - unverified
+                - pending
+                - verified
+                - rejected
+            verifiedAt:
+              type:
+                - string
+                - "null"
+              format: date-time
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+    PaymentIntent:
+      type: object
+      required:
+        - id
+        - competitionId
+        - amountMinor
+        - currency
+        - phoneNumber
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        competitionId:
+          type: string
+          format: uuid
+        entryId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        amountMinor:
+          type: integer
+          format: int64
+          minimum: 1
+        currency:
+          type: string
+          const: KES
+        phoneNumber:
+          type: string
+          description: Masked phone number.
+        status:
+          type: string
+          enum:
+            - initiating
+            - pending
+            - callback_received
+            - succeeded
+            - failed
+            - review
+        merchantRequestId:
+          type:
+            - string
+            - "null"
+        checkoutRequestId:
+          type:
+            - string
+            - "null"
+        providerReceipt:
+          type:
+            - string
+            - "null"
+        providerResultCode:
+          type:
+            - string
+            - "null"
+        providerResultDescription:
+          type:
+            - string
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+    MatchParticipant:
+      type: object
+      required:
+        - playerId
+        - handle
+        - displayName
+        - initials
+        - side
+      properties:
+        playerId:
+          type: string
+          format: uuid
+        handle:
+          type: string
+        displayName:
+          type: string
+        initials:
+          type: string
+          minLength: 1
+          maxLength: 2
+        avatarUrl:
+          type: string
+          format: uri
+        side:
+          type: string
+          enum:
+            - home
+            - away
+        checkedInAt:
+          type: string
+          format: date-time
+    FriendMatchInstruction:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+        - detail
+      properties:
+        title:
+          type: string
+          maxLength: 80
+        detail:
+          type: string
+          maxLength: 300
+    MatchState:
+      type: string
+      enum:
+        - pending
+        - ready
+        - in_progress
+        - awaiting_confirmation
+        - disputed
+        - completed
+        - forfeit
+        - cancelled
+    MatchLifecycle:
+      type: string
+      enum:
+        - assigned
+        - ready_for_check_in
+        - checked_in
+        - opponent_action_required
+        - awaiting_opponent
+        - under_review
+        - completed
+        - forfeited
+    MatchAllowedAction:
+      type: string
+      enum:
+        - check_in
+        - submit_result
+        - confirm_result
+        - dispute_result
+    MatchSummary:
+      type: object
+      required:
+        - id
+        - code
+        - competitionId
+        - competitionName
+        - gameId
+        - gameName
+        - roundName
+        - scheduledAt
+        - checkInClosesAt
+        - state
+        - lifecycle
+        - version
+        - currentPlayerSide
+        - home
+        - away
+        - allowedActions
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        competitionId:
+          type: string
+          format: uuid
+        competitionName:
+          type: string
+        gameId:
+          type: string
+        gameName:
+          type: string
+        roundName:
+          type: string
+        scheduledAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        checkInClosesAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        state:
+          $ref: "#/components/schemas/MatchState"
+        lifecycle:
+          $ref: "#/components/schemas/MatchLifecycle"
+        version:
+          type: integer
+          minimum: 1
+        currentPlayerSide:
+          type: string
+          enum:
+            - home
+            - away
+        home:
+          oneOf:
+            - $ref: "#/components/schemas/MatchParticipant"
+            - type: "null"
+        away:
+          oneOf:
+            - $ref: "#/components/schemas/MatchParticipant"
+            - type: "null"
+        allowedActions:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/MatchAllowedAction"
+    MatchRoom:
+      allOf:
+        - $ref: "#/components/schemas/MatchSummary"
+        - type: object
+          required:
+            - stageId
+            - stageName
+            - roundNumber
+            - matchNumber
+            - bracket
+            - bestOf
+            - drawAllowed
+            - checkInOpensAt
+            - resultDueAt
+            - state
+            - completedAt
+            - currentPlayerId
+            - friendMatchInstructions
+          properties:
+            stageId:
+              type: string
+              format: uuid
+            stageName:
+              type: string
+            roundNumber:
+              type: integer
+              minimum: 1
+            matchNumber:
+              type: integer
+              minimum: 1
+            bracket:
+              type: string
+            bestOf:
+              type: integer
+              minimum: 1
+            drawAllowed:
+              type: boolean
+            checkInOpensAt:
+              type:
+                - string
+                - "null"
+              format: date-time
+            resultDueAt:
+              type:
+                - string
+                - "null"
+              format: date-time
+            completedAt:
+              type:
+                - string
+                - "null"
+              format: date-time
+            currentPlayerId:
+              type: string
+              format: uuid
+            pendingResult:
+              $ref: "#/components/schemas/PendingMatchResult"
+            friendMatchInstructions:
+              type: array
+              items:
+                $ref: "#/components/schemas/FriendMatchInstruction"
+    MatchRoomResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/MatchRoom"
+    PendingMatchResult:
+      type: object
+      required: [id, submittedBy, homeScore, awayScore, evidenceIds, status, submittedAt]
+      properties:
+        id: { type: string, format: uuid }
+        submittedBy: { type: string, format: uuid }
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        tiebreak: { $ref: "#/components/schemas/TiebreakScore" }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+        status: { type: string, enum: [pending_confirmation, confirmed, disputed, rejected] }
+        submittedAt: { type: string, format: date-time }
+    CursorPage:
+      type: object
+      required:
+        - nextCursor
+        - hasMore
+      properties:
+        nextCursor:
+          type:
+            - string
+            - "null"
+        hasMore:
+          type: boolean
+    MatchPage:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - page
+      properties:
+        data:
+          type: array
+          maxItems: 50
+          items:
+            $ref: "#/components/schemas/MatchSummary"
+        page:
+          $ref: "#/components/schemas/CursorPage"
+    EvidenceUploadIntent:
+      type: object
+      required:
+        - id
+        - uploadUrl
+        - requiredHeaders
+        - expiresAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        uploadUrl:
+          type: string
+          format: uri
+          description: Short-lived provider URL. Never persist it in analytics or logs.
+        requiredHeaders:
+          type: object
+          additionalProperties:
+            type: string
+        expiresAt:
+          type: string
+          format: date-time
+    EvidenceAccess:
+      type: object
+      required: [id, mediaType, byteSize, downloadUrl, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        mediaType: { type: string, enum: [image/jpeg, image/png, image/heic, image/heif] }
+        byteSize: { type: integer, format: int64, minimum: 1 }
+        downloadUrl: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+    Evidence:
+      type: object
+      required:
+        - id
+        - status
+        - mediaType
+        - byteSize
+        - completedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: completed
+        mediaType:
+          type: string
+          enum:
+            - image/jpeg
+            - image/png
+            - image/heic
+            - image/heif
+        byteSize:
+          type: integer
+          format: int64
+          minimum: 1
+        completedAt:
+          type: string
+          format: date-time
+    GameScore:
+      type: object
+      additionalProperties: false
+      required:
+        - homeScore
+        - awayScore
+      properties:
+        homeScore:
+          type: integer
+          minimum: 0
+          maximum: 99
+        awayScore:
+          type: integer
+          minimum: 0
+          maximum: 99
+    TiebreakScore:
+      type: object
+      additionalProperties: false
+      required: [type, homeScore, awayScore]
+      properties:
+        type: { type: string, const: penalties }
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+    ResultSubmission:
+      type: object
+      required:
+        - id
+        - matchId
+        - submittedBy
+        - homeScore
+        - awayScore
+        - games
+        - evidenceIds
+        - status
+        - submittedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        matchId:
+          type: string
+          format: uuid
+        submittedBy:
+          type: string
+          format: uuid
+        homeScore:
+          type: integer
+          minimum: 0
+          maximum: 99
+        awayScore:
+          type: integer
+          minimum: 0
+          maximum: 99
+        tiebreak:
+          $ref: "#/components/schemas/TiebreakScore"
+        games:
+          type: array
+          items:
+            $ref: "#/components/schemas/GameScore"
+        evidenceIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        status:
+          type: string
+          enum:
+            - pending_confirmation
+            - confirmed
+            - disputed
+        submittedAt:
+          type: string
+          format: date-time
+        decidedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        decidedBy:
+          type:
+            - string
+            - "null"
+          format: uuid
+    ResultMatchState:
+      type: object
+      required:
+        - id
+        - state
+        - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+            - awaiting_confirmation
+            - disputed
+            - completed
+        version:
+          type: integer
+          minimum: 1
+        winnerEntryId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        completedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+    ResultDecision:
+      type: object
+      required:
+        - match
+        - submission
+      properties:
+        match:
+          $ref: "#/components/schemas/MatchRoom"
+        submission:
+          $ref: "#/components/schemas/ResultSubmission"
+        ratingChanges:
+          type: array
+          items:
+            $ref: "#/components/schemas/RatingChange"
+    RatingChange:
+      type: object
+      required: [playerId, gameId, before, after, delta]
+      properties:
+        playerId: { type: string, format: uuid }
+        gameId: { type: string }
+        before: { type: integer, minimum: 0, maximum: 10000 }
+        after: { type: integer, minimum: 0, maximum: 10000 }
+        delta: { type: integer }
+    CompactPublicPlayer:
+      type: object
+      required:
+        - rank
+        - playerId
+        - handle
+        - displayName
+        - avatarUrl
+        - countryCode
+        - rating
+        - matchesPlayed
+        - rankMovement
+      properties:
+        rank:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+        playerId:
+          type: string
+          format: uuid
+        handle:
+          type: string
+        displayName:
+          type: string
+        avatarUrl:
+          type:
+            - string
+            - "null"
+          format: uri
+        countryCode:
+          type: string
+          pattern: ^[A-Z]{2}$
+        rating:
+          type:
+            - integer
+            - "null"
+        matchesPlayed:
+          type: integer
+          minimum: 0
+        rankMovement:
+          type:
+            - integer
+            - "null"
+    RankingPage:
+      type: object
+      required:
+        - data
+        - page
+        - snapshotAt
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CompactPublicPlayer"
+        page:
+          $ref: "#/components/schemas/CursorPage"
+        snapshotAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+    PlayerSearchPage:
+      type: object
+      required:
+        - data
+        - page
+        - snapshotAt
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CompactPublicPlayer"
+        page:
+          $ref: "#/components/schemas/CursorPage"
+        snapshotAt:
+          type: string
+          format: date-time
+    PublicRecord:
+      type: object
+      required:
+        - matchesPlayed
+        - wins
+        - draws
+        - losses
+      properties:
+        matchesPlayed:
+          type: integer
+          minimum: 0
+        wins:
+          type: integer
+          minimum: 0
+        draws:
+          type: integer
+          minimum: 0
+        losses:
+          type: integer
+          minimum: 0
+    PublicGameRating:
+      type: object
+      required:
+        - gameId
+        - rating
+        - matchesPlayed
+        - wins
+        - draws
+        - losses
+        - globalRank
+        - countryRank
+        - rankMovement
+        - lastMatchAt
+      properties:
+        gameId:
+          type: string
+        rating:
+          type: integer
+        matchesPlayed:
+          type: integer
+          minimum: 0
+        wins:
+          type: integer
+          minimum: 0
+        draws:
+          type: integer
+          minimum: 0
+        losses:
+          type: integer
+          minimum: 0
+        globalRank:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+        countryRank:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+        rankMovement:
+          type:
+            - integer
+            - "null"
+        lastMatchAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+    PublicGameAccount:
+      type: object
+      required:
+        - gameId
+        - platform
+        - inGameName
+        - verificationStatus
+      properties:
+        gameId:
+          type: string
+        platform:
+          type: string
+        inGameName:
+          type: string
+        verificationStatus:
+          type: string
+          enum:
+            - unverified
+            - pending
+            - verified
+            - rejected
+    PublicPlayerProfile:
+      type: object
+      required:
+        - playerId
+        - handle
+        - displayName
+        - bio
+        - avatarUrl
+        - countryCode
+        - joinedAt
+        - record
+        - ratings
+        - gameAccounts
+      properties:
+        playerId:
+          type: string
+          format: uuid
+        handle:
+          type: string
+        displayName:
+          type: string
+        bio:
+          type: string
+        avatarUrl:
+          type:
+            - string
+            - "null"
+          format: uri
+        countryCode:
+          type: string
+        joinedAt:
+          type: string
+          format: date-time
+        record:
+          $ref: "#/components/schemas/PublicRecord"
+        ratings:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublicGameRating"
+        gameAccounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublicGameAccount"
+    PublicMatch:
+      type: object
+      required:
+        - matchId
+        - playedAt
+        - opponent
+        - score
+        - outcome
+        - competition
+        - stage
+        - roundNumber
+        - verificationState
+      properties:
+        matchId:
+          type: string
+          format: uuid
+        playedAt:
+          type: string
+          format: date-time
+        opponent:
+          type:
+            - object
+            - "null"
+          properties:
+            playerId:
+              type: string
+              format: uuid
+            handle:
+              type: string
+            displayName:
+              type: string
+            avatarUrl:
+              type:
+                - string
+                - "null"
+              format: uri
+        score:
+          type: object
+          required:
+            - player
+            - opponent
+            - home
+            - away
+          properties:
+            player:
+              type: integer
+              minimum: 0
+            opponent:
+              type: integer
+              minimum: 0
+            home:
+              type: integer
+              minimum: 0
+            away:
+              type: integer
+              minimum: 0
+        outcome:
+          type: string
+          enum:
+            - win
+            - draw
+            - loss
+        competition:
+          type: object
+          required:
+            - competitionId
+            - name
+          properties:
+            competitionId:
+              type: string
+              format: uuid
+            name:
+              type: string
+        stage:
+          type: string
+        roundNumber:
+          type: integer
+          minimum: 1
+        verificationState:
+          type: string
+          const: confirmed
+    PublicMatchPage:
+      type: object
+      required:
+        - data
+        - page
+        - snapshotAt
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublicMatch"
+        page:
+          $ref: "#/components/schemas/CursorPage"
+        snapshotAt:
+          type: string
+          format: date-time
+    PublicCompetition:
+      type: object
+      required:
+        - competitionId
+        - name
+        - format
+        - status
+        - startedAt
+        - placement
+        - entrants
+        - maxEntries
+        - record
+      properties:
+        competitionId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        format:
+          type: string
+          enum:
+            - single_elimination
+            - double_elimination
+            - round_robin
+        status:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        placement:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+        entrants:
+          type: integer
+          minimum: 0
+        maxEntries:
+          type: integer
+          minimum: 2
+        record:
+          $ref: "#/components/schemas/PublicRecord"
+    PublicCompetitionPage:
+      type: object
+      required:
+        - data
+        - page
+        - snapshotAt
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublicCompetition"
+        page:
+          $ref: "#/components/schemas/CursorPage"
+        snapshotAt:
+          type: string
+          format: date-time
+    Competition:
+      type: object
+      required:
+        - id
+        - slug
+        - name
+        - gameId
+        - gameName
+        - organizerId
+        - organizerName
+        - format
+        - status
+        - maxEntries
+        - entryCount
+        - availableSlots
+        - entryType
+        - entryFeeMinor
+        - currency
+        - startsAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        gameId:
+          type: string
+        gameName:
+          type: string
+        organizerId:
+          type: string
+          format: uuid
+        organizerName:
+          type: string
+        organizerSlug:
+          type: string
+        format:
+          type: string
+          enum:
+            - single_elimination
+            - double_elimination
+            - round_robin
+        status:
+          type: string
+          enum:
+            - published
+            - registration_open
+            - check_in
+            - running
+            - completed
+        maxEntries:
+          type: integer
+          minimum: 2
+        entryCount:
+          type: integer
+          minimum: 0
+        availableSlots:
+          type: integer
+          minimum: 0
+        entryType:
+          type: string
+          enum:
+            - free
+            - paid
+        entryFeeMinor:
+          type: integer
+          format: int64
+          minimum: 0
+        feePurpose:
+          type: string
+          enum:
+            - none
+            - administration
+        currency:
+          type: string
+          pattern: ^[A-Z]{3}$
+        prizeAmountMinor:
+          type: integer
+          format: int64
+          minimum: 0
+        prizeFunding:
+          type: string
+          enum:
+            - none
+            - organizer
+            - sponsor
+        registrationOpensAt:
+          type: string
+          format: date-time
+        registrationClosesAt:
+          type: string
+          format: date-time
+        checkInOpensAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        startsAt:
+          type: string
+          format: date-time
+        rulesVersion:
+          type: integer
+          minimum: 1
+    CompetitionDetail:
+      allOf:
+        - $ref: "#/components/schemas/Competition"
+        - type: object
+          required:
+            - rules
+          properties:
+            rules:
+              type: object
+              additionalProperties: true
+    CompetitionPage:
+      type: object
+      required:
+        - data
+        - page
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Competition"
+        page:
+          $ref: "#/components/schemas/CursorPage"
+    Registration:
+      type: object
+      required:
+        - id
+        - competitionId
+        - competitionName
+        - gameId
+        - gameName
+        - displayName
+        - gameAccountId
+        - status
+        - entryFeeMinor
+        - currency
+        - startsAt
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        competitionId:
+          type: string
+          format: uuid
+        competitionName:
+          type: string
+        competitionSlug:
+          type: string
+        gameId:
+          type: string
+        gameName:
+          type: string
+        displayName:
+          type: string
+        gameAccountId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - registered
+            - checked_in
+            - accepted
+            - withdrawn
+            - disqualified
+        entryFeeMinor:
+          type: integer
+          format: int64
+          minimum: 0
+        currency:
+          type: string
+        startsAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    RegistrationPage:
+      type: object
+      required:
+        - data
+        - page
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Registration"
+        page:
+          $ref: "#/components/schemas/CursorPage"
+    BracketResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          required:
+            - competitionId
+            - stages
+          properties:
+            competitionId:
+              type: string
+              format: uuid
+            stages:
+              type: array
+              items:
+                type: object
+                additionalProperties: true

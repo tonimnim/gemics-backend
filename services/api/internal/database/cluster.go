@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -17,6 +18,11 @@ type Cluster struct {
 	Reader *pgxpool.Pool
 }
 
+var trustedLegacyMigrationChecksums = map[string]string{
+	"000001_core.up.sql":     "ca8d784e27c79300115d56c1bc5400861cb2ec0e18761c28e696e0f34d956c63",
+	"000002_identity.up.sql": "9c8f79206ab13f041673335d2c5040377cd0863f27e41d48705e3d52e604cb26",
+}
+
 func Open(ctx context.Context, writeURL, readURL string, writeMax, readMax int32) (*Cluster, error) {
 	if writeURL == "" {
 		return nil, fmt.Errorf("database writer URL is required")
@@ -27,6 +33,9 @@ func Open(ctx context.Context, writeURL, readURL string, writeMax, readMax int32
 	writer, err := openPool(ctx, writeURL, writeMax)
 	if err != nil {
 		return nil, fmt.Errorf("open writer: %w", err)
+	}
+	if readURL == writeURL {
+		return &Cluster{Writer: writer, Reader: writer}, nil
 	}
 	reader, err := openPool(ctx, readURL, readMax)
 	if err != nil {
@@ -44,10 +53,14 @@ func openPool(ctx context.Context, url string, maxConns int32) (*pgxpool.Pool, e
 	if maxConns > 0 {
 		cfg.MaxConns = maxConns
 	}
-	cfg.MinConns = 1
+	cfg.MinConns = 0
+	cfg.MinIdleConns = 0
 	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.MaxConnLifetimeJitter = 5 * time.Minute
 	cfg.MaxConnIdleTime = 5 * time.Minute
 	cfg.HealthCheckPeriod = 30 * time.Second
+	cfg.PingTimeout = 5 * time.Second
+	cfg.ConnConfig.ConnectTimeout = 5 * time.Second
 	return pgxpool.NewWithConfig(ctx, cfg)
 }
 
@@ -66,17 +79,43 @@ func (c *Cluster) Close() {
 func (c *Cluster) PingWriter(ctx context.Context) error { return c.Writer.Ping(ctx) }
 func (c *Cluster) PingReader(ctx context.Context) error { return c.Reader.Ping(ctx) }
 
+func (c *Cluster) ReaderLag(ctx context.Context) (time.Duration, error) {
+	var seconds float64
+	err := c.Reader.QueryRow(ctx, `SELECT CASE WHEN pg_is_in_recovery()
+		THEN COALESCE(EXTRACT(EPOCH FROM now()-pg_last_xact_replay_timestamp()),0)
+		ELSE 0 END`).Scan(&seconds)
+	return time.Duration(seconds * float64(time.Second)), err
+}
+
 func Migrate(ctx context.Context, writer *pgxpool.Pool) error {
 	const lockID int64 = 7146249729104039
-	if _, err := writer.Exec(ctx, "SELECT pg_advisory_lock($1)", lockID); err != nil {
+	conn, err := writer.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", lockID); err != nil {
+		conn.Release()
 		return fmt.Errorf("migration lock: %w", err)
 	}
-	defer writer.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", lockID) //nolint:errcheck
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var unlocked bool
+		unlockErr := conn.QueryRow(unlockCtx, "SELECT pg_advisory_unlock($1)", lockID).Scan(&unlocked)
+		if unlockErr != nil || !unlocked {
+			raw := conn.Hijack()
+			_ = raw.Close(context.Background())
+			return
+		}
+		conn.Release()
+	}()
 
-	if _, err := writer.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
         version text PRIMARY KEY,
+		checksum text,
         applied_at timestamptz NOT NULL DEFAULT now()
-    )`); err != nil {
+	);
+	ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text`); err != nil {
 		return fmt.Errorf("create migration ledger: %w", err)
 	}
 
@@ -93,25 +132,40 @@ func Migrate(ctx context.Context, writer *pgxpool.Pool) error {
 	sort.Strings(names)
 	for _, name := range names {
 		var applied bool
-		if err := writer.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version=$1)", name).Scan(&applied); err != nil {
-			return err
-		}
-		if applied {
-			continue
-		}
 		raw, err := migrations.FS.ReadFile(name)
 		if err != nil {
 			return err
 		}
+		checksum := fmt.Sprintf("%x", sha256.Sum256(raw))
+		var storedChecksum *string
+		if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version=$1),
+			(SELECT checksum FROM schema_migrations WHERE version=$1)`, name).Scan(&applied, &storedChecksum); err != nil {
+			return err
+		}
+		if applied {
+			if storedChecksum != nil && *storedChecksum != checksum {
+				return fmt.Errorf("migration %s checksum changed after application", name)
+			}
+			if storedChecksum == nil {
+				trusted, ok := trustedLegacyMigrationChecksums[name]
+				if !ok || trusted != checksum {
+					return fmt.Errorf("migration %s has no trusted legacy checksum", name)
+				}
+				if _, err := conn.Exec(ctx, "UPDATE schema_migrations SET checksum=$2 WHERE version=$1", name, checksum); err != nil {
+					return fmt.Errorf("record checksum for %s: %w", name, err)
+				}
+			}
+			continue
+		}
 		sql := strings.TrimSpace(string(raw))
 		sql = strings.TrimSpace(strings.TrimPrefix(sql, "BEGIN;"))
 		sql = strings.TrimSpace(strings.TrimSuffix(sql, "COMMIT;"))
-		tx, err := writer.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, sql); err == nil {
-			_, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES ($1)", name)
+			_, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version,checksum) VALUES ($1,$2)", name, checksum)
 		}
 		if err != nil {
 			tx.Rollback(ctx) //nolint:errcheck

@@ -6,6 +6,9 @@ dist/
 .cache/
 .expo/
 .expo-export/
+.tmp-*/
+**/.tmp-*/
+.gocache/
 .env
 .env.local
 .env.docker

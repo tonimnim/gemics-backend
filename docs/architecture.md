@@ -37,7 +37,9 @@ The Go process is divided internally before it is divided operationally:
 - **Competitions:** lifecycle, formats, registration, check-in and seeding.
 - **Matches:** scheduling, result confirmation, evidence, forfeits and disputes.
 - **Ranking:** immutable rating inputs derived from confirmed matches.
-- **Payments (later):** provider webhooks, refunds, payouts and a double-entry ledger.
+- **Payments:** Daraja payment intents, capacity reservations, callback/query
+  verification and atomic paid registration. Refund automation, payouts and a
+  double-entry ledger remain later work.
 - **Insights (later):** consented, de-identified events outside the operational database.
 
 Packages communicate through explicit application interfaces and domain events.
@@ -121,8 +123,8 @@ belong in Go. Each client owns presentation and device-specific concerns only.
 ### Why not Redis as the queue and source of live state?
 
 Losing a bracket transition or result event is unacceptable. PostgreSQL commits
-business state and its outbox atomically. Redis can later accelerate rate limits,
-ephemeral presence and caches, but is not authoritative.
+business state and its outbox atomically. Redis accelerates rate limits, short-lived
+session state and public response caches, but is not authoritative.
 
 ### Why not model eFootball directly?
 
@@ -170,5 +172,6 @@ The Docker topology is a local parity environment: one PostgreSQL primary, one
 asynchronous hot standby and Redis with AOF persistence. It demonstrates routing
 and replication but is not itself a production control plane. Production uses a
 stable managed writer endpoint with automated multi-zone failover, independently
-scalable read replicas, multiple API instances behind a load balancer, and a
-high-availability Redis endpoint. See `production-architecture.md`.
+scalable read replicas, multiple API instances behind a load balancer, and separate
+high-availability security/cache Redis endpoints. See `production-architecture.md`
+and `platform-readiness.md` for the implemented-versus-designed boundary.

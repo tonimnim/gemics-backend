@@ -32,6 +32,14 @@
         {
           "backgroundColor": "#11120F"
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Gamics to select match result screenshots.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
       ]
     ],
     "experiments": {

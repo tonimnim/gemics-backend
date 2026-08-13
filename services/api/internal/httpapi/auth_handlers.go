@@ -3,9 +3,9 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"net"
 	"net/http"
 	stdmail "net/mail"
 	"strings"
@@ -37,6 +37,8 @@ type refreshRequest struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+const refreshTokenRetryGrace = 5 * time.Minute
+
 func (s *Server) requestOTP(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
 		return
@@ -54,11 +56,11 @@ func (s *Server) requestOTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_email", "Enter a valid email address.")
 		return
 	}
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	allowedEmail := s.allowOTPRate(r.Context(), "email", email, s.config.OTPEmailLimit)
 	allowedIP := s.allowOTPRate(r.Context(), "ip", ip, s.config.OTPIPLimit)
 	if !allowedEmail || !allowedIP {
-		w.Header().Set("Retry-After", "900")
+		w.Header().Set("Retry-After", retryAfterSeconds(s.config.OTPRequestWindow))
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "Too many codes requested. Try again later.")
 		return
 	}
@@ -74,6 +76,10 @@ func (s *Server) requestOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context()) //nolint:errcheck
+	if _, err = tx.Exec(r.Context(), "SELECT pg_advisory_xact_lock(hashtextextended(lower($1),0))", email); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to request a code.")
+		return
+	}
 	if _, err = tx.Exec(r.Context(), `UPDATE email_otp_challenges SET consumed_at=now()
         WHERE lower(email)=lower($1) AND consumed_at IS NULL`, email); err == nil {
 		_, err = tx.Exec(r.Context(), `INSERT INTO email_otp_challenges(email, code_hash, request_ip, expires_at)
@@ -158,7 +164,7 @@ func (s *Server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	sessionID := gamicsauth.RandomID()
 	_, err = tx.Exec(r.Context(), `INSERT INTO refresh_sessions
         (id,user_id,token_hash,device_name,user_agent,created_ip,last_used_ip)
-        VALUES ($1,$2,$3,$4,$5,$6,$6)`, sessionID, userID, refreshHash, strings.TrimSpace(input.DeviceName), r.UserAgent(), clientIP(r))
+		VALUES ($1,$2,$3,$4,$5,$6,$6)`, sessionID, userID, refreshHash, strings.TrimSpace(input.DeviceName), r.UserAgent(), s.clientIP(r))
 	if err != nil || tx.Commit(r.Context()) != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to create a session.")
 		return
@@ -184,10 +190,16 @@ func (s *Server) refreshSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context()) //nolint:errcheck
+	presentedHash := gamicsauth.HashRefreshToken(input.RefreshToken)
 	var sessionID, userID string
-	err = tx.QueryRow(r.Context(), `SELECT s.id,s.user_id FROM refresh_sessions s
+	var currentHash, previousHash []byte
+	var previousValidUntil *time.Time
+	err = tx.QueryRow(r.Context(), `SELECT s.id,s.user_id,s.token_hash,s.previous_token_hash,s.previous_token_valid_until
+		FROM refresh_sessions s
 		JOIN users u ON u.id=s.user_id
-		WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND u.status='active' FOR UPDATE`, gamicsauth.HashRefreshToken(input.RefreshToken)).Scan(&sessionID, &userID)
+		WHERE (s.token_hash=$1 OR (s.previous_token_hash=$1 AND s.previous_token_valid_until>now()))
+		AND s.revoked_at IS NULL AND u.status='active' FOR UPDATE`, presentedHash).
+		Scan(&sessionID, &userID, &currentHash, &previousHash, &previousValidUntil)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_session", "The session is no longer valid.")
 		return
@@ -197,8 +209,18 @@ func (s *Server) refreshSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Unable to refresh the session.")
 		return
 	}
-	_, err = tx.Exec(r.Context(), `UPDATE refresh_sessions SET token_hash=$1,last_used_at=now(),last_used_ip=$2
-        WHERE id=$3`, newHash, clientIP(r), sessionID)
+	nextPreviousHash := currentHash
+	nextPreviousValidUntil := time.Now().UTC().Add(refreshTokenRetryGrace)
+	if len(previousHash) > 0 && previousValidUntil != nil && subtle.ConstantTimeCompare(presentedHash, previousHash) == 1 {
+		// Preserve the originally presented token during the bounded retry window.
+		// If the previous refresh response was lost, the client can safely retry and
+		// receive another rotated token instead of being forced through OTP login.
+		nextPreviousHash = previousHash
+		nextPreviousValidUntil = *previousValidUntil
+	}
+	_, err = tx.Exec(r.Context(), `UPDATE refresh_sessions SET token_hash=$1,previous_token_hash=$2,
+		previous_token_valid_until=$3,last_used_at=now(),last_used_ip=$4 WHERE id=$5`,
+		newHash, nextPreviousHash, nextPreviousValidUntil, s.clientIP(r), sessionID)
 	if err != nil || tx.Commit(r.Context()) != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to refresh the session.")
 		return
@@ -219,7 +241,14 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if s.redis != nil {
 		ttl := time.Until(current.ExpiresAt)
 		if ttl > 0 {
-			_ = s.redis.Set(r.Context(), "auth:revoked:"+current.SessionID, "1", ttl).Err()
+			pipe := s.redis.Pipeline()
+			pipe.Set(r.Context(), s.securityKey("auth:session:"+current.SessionID), "revoked", ttl)
+			pipe.Set(r.Context(), "auth:revoked:"+current.SessionID, "1", ttl)
+			if _, err := pipe.Exec(r.Context()); err != nil {
+				s.logger.Warn("cache session revocation", "session_id", current.SessionID, "error", err)
+				writeError(w, http.StatusServiceUnavailable, "logout_propagation_failed", "The session was revoked, but logout propagation is still completing. Please retry.")
+				return
+			}
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -230,6 +259,12 @@ func (s *Server) writeSessionResponse(w http.ResponseWriter, r *http.Request, us
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Unable to issue an access token.")
 		return
+	}
+	if s.redis != nil {
+		ttl := minDuration(s.config.AuthSessionCacheTTL, maxPositiveSessionCacheTTL, time.Until(expiresAt))
+		if ttl > 0 {
+			_ = s.redis.Set(r.Context(), s.securityKey("auth:session:"+sessionID), "active", ttl).Err()
+		}
 	}
 	player, err := s.loadMe(r.Context(), s.db.Writer, userID)
 	if err != nil {
@@ -254,12 +289,14 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "invalid_access_token", "The access token is invalid or expired.")
 			return
 		}
-		if s.redis != nil {
-			revoked, cacheErr := s.redis.Exists(r.Context(), "auth:revoked:"+claims.SessionID).Result()
-			if cacheErr == nil && revoked > 0 {
-				writeError(w, http.StatusUnauthorized, "invalid_session", "The session has been logged out.")
-				return
-			}
+		active, sessionErr := s.sessionActive(r.Context(), claims.UserID, claims.SessionID, time.Unix(claims.ExpiresAt, 0))
+		if sessionErr != nil {
+			writeError(w, http.StatusServiceUnavailable, "session_check_unavailable", "Unable to validate the session.")
+			return
+		}
+		if !active {
+			writeError(w, http.StatusUnauthorized, "invalid_session", "The session has been logged out.")
+			return
 		}
 		current := identity{UserID: claims.UserID, SessionID: claims.SessionID, ExpiresAt: time.Unix(claims.ExpiresAt, 0)}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityContextKey{}, current)))
@@ -280,14 +317,6 @@ func normalizeEmail(raw string) (string, bool) {
 	return raw, true
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
-
 func provisionalDisplayName(email string) string {
 	value := strings.TrimSpace(strings.SplitN(email, "@", 2)[0])
 	if value == "" {
@@ -302,13 +331,9 @@ func provisionalDisplayName(email string) string {
 func (s *Server) allowOTPRate(ctx context.Context, kind, value string, limit int) bool {
 	digest := sha256.Sum256([]byte(strings.ToLower(value)))
 	if s.redis != nil {
-		key := "rate:otp:" + kind + ":" + hex.EncodeToString(digest[:])
-		count, err := s.redis.Incr(ctx, key).Result()
-		if err == nil {
-			if count == 1 {
-				_ = s.redis.Expire(ctx, key, s.config.OTPRequestWindow).Err()
-			}
-			return count <= int64(limit)
+		key := s.securityKey("rate:otp:" + kind + ":" + hex.EncodeToString(digest[:]))
+		if allowed, err := redisFixedWindow(ctx, s.redis, key, limit, s.config.OTPRequestWindow); err == nil {
+			return allowed
 		}
 	}
 	column := "request_ip"

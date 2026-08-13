@@ -8,6 +8,7 @@ import (
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	decoder.DisallowUnknownFields()
+	decoder.UseNumber()
 	if err := decoder.Decode(destination); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return false
