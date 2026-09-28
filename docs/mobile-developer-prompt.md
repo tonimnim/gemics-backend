@@ -27,8 +27,11 @@ Build these player journeys:
    new Idempotency-Key once, start STK Push, then poll the returned payment ID until
    it is `succeeded`, `failed` or `review`. Reuse the same key after network retries.
 5. Receive match reminders, check in, view opponent and Friend Match instructions.
-6. Submit a result: winner/score, final-result screenshot upload and declaration.
-7. Review an opponent submission and choose Confirm or Dispute with a reason and evidence.
+6. Report the score blind (score and declaration only, no screenshot) without ever
+   seeing what the opponent reported.
+7. When the reports don't match, submit one final score with one to three
+   screenshots before the response deadline, then follow the match through Gamics
+   review if the scores still differ.
 8. Follow bracket progress, match history, notifications, ranking and public player card.
 9. Handle loading, empty, offline, retry, expired-session and API-error states.
 
@@ -40,18 +43,18 @@ components and keep all HTTP calls behind a typed API client.
 
 ## API access
 
-Read the backend contract in `services/api/openapi/openapi.yaml`. The implemented
-identity endpoints cover email OTP request/verification, token refresh, logout,
-current player, profile, game accounts and M-Pesa registration payments. Do not
-call the provider callback route from the app. Do not invent any other endpoints; put
-unfinished competition and match resources behind repository interfaces until
-their OpenAPI contract and Go handlers are added.
+Read the authoritative OpenAPI 0.7.0 contract in
+`services/api/openapi/openapi.yaml` and the integration sequence in
+`docs/mobile-api-requirements.md`. The backend now covers email OTP and rotating
+sessions; onboarding/legal/profile/avatar; game accounts and verification; discovery,
+eligibility, registration and M-Pesa; matches, blind score reports and evidence; rankings,
+histories, notifications and account lifecycle. Generate types from OpenAPI and keep
+runtime Zod validation. Do not call the provider callback route from the app and do
+not invent fields or endpoints.
 
-Use `docs/mobile-api-requirements.md` as the exact planned contract for scalable
-ranking/player search, public profiles and history, match rooms, evidence uploads and
-result confirmation/dispute. Preserve its explicit `demo`/`unavailable` capability
-states; a local UI action must never pretend that an unimplemented backend accepted
-money, evidence or a match result.
+Set a capability to unavailable only when its required deployment service is not
+configured (for example Daraja, Expo or object storage). A local UI action must never
+pretend that a fixture accepted money, evidence or a match result.
 
 Use `EXPO_PUBLIC_API_URL`:
 
@@ -65,22 +68,37 @@ the app. Production API calls require HTTPS. Send the access token as a Bearer
 token, rotate it using a refresh token stored in SecureStore, attach
 `X-Request-ID`, and send `Idempotency-Key` on retryable mutations.
 
-Prepare typed repositories for these required backend resources without
-inventing response fields: auth/session, current profile, game accounts,
-competitions, registrations, match check-in, my matches, result submissions,
-result confirmation/dispute, signed evidence uploads, push tokens and rankings.
+Implement typed repositories for auth/session, current profile/legal/avatar, game
+accounts, competitions/eligibility/registrations/brackets, payments/refunds, match
+check-in, blind score reports and final score reports, signed evidence, push/inbox,
+rankings/search and public player histories.
 
 ## Result workflow
 
-The winner submits the score plus a final-result screenshot. The opponent then
-confirms or disputes. A matching confirmation finalizes the result. A dispute
-requires both players' evidence and enters a referee queue. A screenshot-backed
-submission may auto-confirm after the published response deadline; a text-only
-claim must not win by opponent silence. High-stakes matches require evidence
-from both players and can require a short screen recording or referee monitoring.
+Each entry reports its score blind: score only, no screenshot, and the app never
+shows or asks about the opponent's claim. Equal reports confirm the result at once.
+If the opponent has not reported, their report window (10 minutes by default) is
+running; the room shows only that the opponent has or has not reported. Different
+reports open a response window in which each side may send one final score with one
+to three ready screenshots; if the scores still differ, Gamics staff review the match.
+Silence has a cost: a player who does not report, or does not respond after a
+mismatch, before the deadline is removed from the tournament, and if nobody reports
+before the result deadline both entries are removed. Make every deadline visible and
+drive actions only from `lifecycle` and `allowedActions`; `awaiting_resolution`
+means a deadline has passed and the server is settling the match.
 
-Upload directly to private object storage through a short-lived signed URL, then
-send only the object key, checksum, media type and size to the API. Compress
+Cloudflare R2 is the selected private object store; the client uses only API-issued
+URLs and never needs Cloudflare credentials or a hard-coded bucket URL.
+Declare checksum, media type and size to the API, upload directly to private object
+storage through the returned short-lived signed URL, complete the upload, then poll
+`GET /v1/evidence/uploads/{id}` with backoff until `ready=true`. Completion queues
+asynchronous verification. Evidence is JPEG or PNG screenshots only; video is not
+accepted. Convert HEIC/HEIF to JPEG before hashing; send the exact signed length,
+type, SHA256 and `If-None-Match: *` headers. Attach only the opaque ready evidence IDs
+to the final score report. Start uploading as soon as the mismatch opens so the
+screenshots are ready before the response deadline.
+Never send or persist an object
+key in the mobile client. Compress
 images responsibly, strip unnecessary metadata, show upload progress and allow
 retry. Never place raw evidence in analytics or public player profiles.
 
@@ -88,7 +106,7 @@ retry. Never place raw evidence in analytics or public player profiles.
 
 Create an environment example, README and automated checks. Add unit tests for
 score validation and state transitions, integration tests for the typed client,
-and end-to-end coverage for register -> check-in -> submit -> confirm/dispute.
+and end-to-end coverage for register -> check-in -> report -> (mismatch -> final score).
 Run TypeScript, lint, Expo Doctor and Android/iOS build validation. Return a list
-of screens, architecture decisions, API assumptions, test results and anything
-still blocked by an unimplemented backend endpoint.
+of screens, architecture decisions, API assumptions, test results and any deployment
+service that must be configured before fixtures can be disabled.

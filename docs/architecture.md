@@ -32,10 +32,12 @@ Marketing website ----------+    +-------+-------------------+
 The Go process is divided internally before it is divided operationally:
 
 - **Identity:** users, sessions, age and country eligibility.
-- **Organizations:** organizers, referees and role-based access.
+- **Organizations:** organizers and role-based access (owner, admin, analyst). No
+  organization role decides match results.
 - **Game catalog:** game-specific rules and optional publisher adapters.
 - **Competitions:** lifecycle, formats, registration, check-in and seeding.
-- **Matches:** scheduling, result confirmation, evidence, forfeits and disputes.
+- **Matches:** scheduling, check-in, blind score reports, screenshot evidence,
+  forfeits, removal from the tournament and the Gamics result review queue.
 - **Ranking:** immutable rating inputs derived from confirmed matches.
 - **Payments:** Daraja payment intents, capacity reservations, callback/query
   verification and atomic paid registration. Refund automation, payouts and a
@@ -51,11 +53,21 @@ No public official Konami match-results API is assumed.
 
 1. Gamics reveals both players and match instructions after check-in.
 2. Players create an eFootball Friend Match and play 1v1.
-3. One player submits the score and evidence object references.
-4. The opponent confirms or disputes before a deadline.
-5. Matching confirmation finalizes the result transactionally and advances the bracket.
-6. Silence applies the published timeout rule; conflict creates a referee queue item.
-7. Every decision appends an audit event. A correction supersedes, never overwrites, a submission.
+3. Each entry reports its score blind, without a screenshot and without seeing
+   the other entry's claim. The first report starts the other entry's report
+   window.
+4. Equal reports finalize the result transactionally and advance the bracket.
+5. Different reports open a response window in which each entry may send one
+   final score with one to three screenshots. Claims that still differ after
+   both responses go to the Gamics review queue, which only platform staff
+   decide.
+6. Silence past a window removes the silent entry from the tournament; nobody
+   reporting by the result deadline removes both. Removals never change ratings.
+7. Every decision appends an audit event. The confirmed score is written once,
+   as the canonical result, and is never overwritten.
+
+[Result verification](result-verification.md) describes the windows, the
+review queue, strikes and who can see what.
 
 The `GameResultProvider` boundary can later accept a signed Konami integration.
 Scraping screens, automating player accounts or pretending unofficial data is
@@ -65,11 +77,13 @@ authoritative is deliberately excluded.
 
 - Mutating HTTP requests require an `Idempotency-Key` when retries could create duplicates.
 - Bracket changes lock the competition or match row and check its version.
-- Confirming a result, selecting a winner, advancing the next match and writing
-  the outbox event occur in one database transaction.
+- Confirming a result, selecting a winner, removing silent entries, advancing
+  the next match and writing the outbox event occur in one database
+  transaction, after the competition's progression lock.
 - Workers deliver outbox events at least once. Consumers deduplicate on event ID.
 - Money is always stored as integer minor units plus ISO currency; floats are prohibited.
-- Uploaded evidence uses object keys and checksums. The database never stores video blobs.
+- Uploaded evidence uses object keys and checksums. Match evidence is JPEG or PNG
+  screenshots only; the database never stores media blobs.
 - Public identifiers are opaque UUIDs. Sequential audit IDs are never exposed as resource IDs.
 
 ## Scaling path

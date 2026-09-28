@@ -1,154 +1,196 @@
-# Mobile API requirements
+# Mobile API handoff
 
-This is the handoff contract for the mobile implementation model. Routes marked
-**implemented** are in `services/api/openapi/openapi.yaml`; routes marked **planned**
-must stay behind typed repository interfaces and demo adapters until their Go handler
-and OpenAPI operation exist. The app must not silently call invented endpoints.
+The authoritative contract is `services/api/openapi/openapi.yaml` (OpenAPI 0.7.0).
+Generate types from that file and validate runtime responses. Do not invent routes or
+infer authorization from UI labels. All authenticated requests use the access token;
+refresh tokens are rotated by the API and stored only in secure device storage.
 
-## Available now
-
-- `POST /v1/auth/otp/request`
-- `POST /v1/auth/otp/verify`
-- `POST /v1/auth/refresh`
-- `POST /v1/auth/logout`
-- `GET/PATCH /v1/me`
-- `PUT /v1/me/profile`
-- `GET/POST/PATCH /v1/me/game-accounts`
-- `GET /v1/games`
-- `POST /v1/payments/mpesa/stk-push`
-- `GET /v1/payments/{id}`
-
-The Daraja callback route is provider-only and must never be present in mobile code.
-
-## Player discovery and rankings — planned
-
-### `GET /v1/rankings`
-
-Query:
+## Base configuration
 
 ```text
-gameId=efootball-mobile
-scope=country|global
-country=KE
-limit=20                         # maximum 50
-cursor=<opaque-server-cursor>
+EXPO_PUBLIC_API_URL=http://10.0.2.2:8080  # Android emulator
+EXPO_PUBLIC_USE_FIXTURES=false
 ```
 
-Response rows are deliberately compact:
+Use the computer's LAN address instead of `10.0.2.2` on a physical phone. Production
+must use HTTPS. API-relative media references, including `avatarUrl`, are resolved
+against `EXPO_PUBLIC_API_URL`. The public avatar route responds with a short-lived
+`307` redirect; the client may let its image component follow that redirect.
 
-```json
-{
-  "data": [{
-    "rank": 24,
-    "playerId": "uuid",
-    "handle": "brian.mainaa",
-    "displayName": "Brian Maina",
-    "avatarUrl": "https://short-lived-or-public-cdn-url",
-    "countryCode": "KE",
-    "rating": 1842,
-    "matchesPlayed": 41,
-    "rankMovement": 3
-  }],
-  "page": { "nextCursor": "opaque-or-null", "hasMore": true },
-  "snapshotAt": "2026-08-09T12:00:00Z"
-}
-```
+## Player journey
 
-Use keyset/opaque cursor pagination over a versioned leaderboard snapshot; never use
-unbounded offset pagination. Repeated pages must stay on the same snapshot so rating
-updates do not duplicate/skip players. Cache top pages briefly and serve immutable
-snapshot rows. A background ranking projection computes global/country position and
-movement rather than running a full-table window sort for every phone request.
+### 1. Email sign-in and durable sessions
 
-### `GET /v1/players`
+- `POST /v1/auth/otp/request` with an email address.
+- `POST /v1/auth/otp/verify` creates or signs in the player and returns access and
+  refresh tokens.
+- `POST /v1/auth/refresh` rotates the refresh token. Serialize refresh attempts and
+  replace the stored token atomically.
+- `POST /v1/auth/logout` revokes the current session.
+- `GET /v1/me/sessions` and `DELETE /v1/me/sessions/{id}` manage other devices.
 
-Search discoverable players with `q`, `gameId`, `country`, `limit` and `cursor`.
-Search matches normalized handle, display name and connected in-game name. PostgreSQL
-trigram indexes are sufficient at launch; move the public projection to a search
-index only after measured pressure. The response uses the same compact player row as
-rankings and never includes email, phone, birth date or payment identifiers.
+Phone OTP is intentionally not part of onboarding. A phone number is requested only
+when a player chooses M-Pesa.
 
-### Public profile/history
+### 2. Onboarding, legal consent, profile, and avatar
 
-- `GET /v1/players/{playerId}` returns avatar, handle/name, bio, country, ratings,
-  global/country rank, win/draw/loss totals and consent-safe public game accounts.
-- `GET /v1/players/{playerId}/matches?limit=20&cursor=...` returns confirmed public
-  match history, opponent summary, score, outcome and competition.
-- `GET /v1/players/{playerId}/competitions?limit=20&cursor=...` returns tournament
-  history, placement, format and status.
+- `GET /v1/me` returns the player and onboarding status.
+- `GET /v1/legal/documents/current` returns the exact current terms/privacy versions.
+- `POST /v1/me/legal-acceptances` records those exact versions; `GET` lists accepted
+  versions.
+- `PATCH /v1/me` updates personal details. It does not accept legal-consent booleans.
+- `PUT /v1/me/profile` creates or updates handle, bio, discoverability, and profile
+  preferences.
+- `POST /v1/me/avatar/uploads`, direct object upload, then
+  `POST /v1/me/avatar/uploads/{id}/complete` uploads an avatar.
+- `PATCH /v1/me/avatar` selects the completed avatar; `GET /v1/me/avatar` returns
+  signed private access for the owner.
+- `GET/PATCH /v1/me/notification-preferences` persists competition, match, and
+  marketing preferences.
 
-All three honor `discoverable`; private/suspended/deleted profiles return `404` to
-avoid account enumeration. Avatar URLs are CDN URLs, never object-store credentials.
+### 3. Device notifications and account security
 
-## Match room and result submission — planned
+- `POST /v1/me/push-tokens` registers or rotates an Expo device token.
+- `DELETE /v1/me/push-tokens/{id}` revokes it.
+- `GET /v1/me/notifications` is cursor paginated.
+- `GET /v1/me/notifications/unread-count` returns the badge count.
+- `POST /v1/me/notifications/{id}/read` and
+  `POST /v1/me/notifications/read-all` update the inbox.
+- `GET/POST/DELETE /v1/me/account-deletion` requests, inspects, or cancels deletion;
+  `POST /v1/me/account-deletion/execute` executes an eligible request after the
+  cooling-off period.
 
-### Assignment and check-in
+### 4. Game accounts and verification
 
-- `GET /v1/me/matches?state=active|history&limit=20&cursor=...`
-- `GET /v1/matches/{matchId}`
-- `POST /v1/matches/{matchId}/check-ins` with `Idempotency-Key`
+- `GET/POST /v1/me/game-accounts` lists or adds an eFootball Mobile account.
+- `PATCH /v1/me/game-accounts/{id}` edits it.
+- `POST /v1/me/game-accounts/{id}/verification-requests` starts evidence review.
+- `GET /v1/me/game-accounts/{id}/verification` returns status.
+- `DELETE /v1/me/game-accounts/{id}/verification-requests/{requestId}` withdraws a request.
 
-Match detail includes the player's side, opponent public summary, stage/round,
-best-of, deadline, check-in state, eFootball Friend Match instructions and allowed
-actions. The server derives allowed actions; the app must not infer authorization
-from labels.
+`publisherVerified` is true only for a publisher API verification. A Gamics manual
+evidence review has `verificationMethod=manual_evidence` and must not be presented as
+Konami verification.
 
-### Evidence upload
+### 5. Discovery, rankings, and public player profiles
 
-1. `POST /v1/evidence/uploads` with media type, byte size and SHA-256 checksum.
-2. API returns a short-lived upload URL, required headers, opaque object key and
-   expiry.
-3. App uploads the selected screenshot directly, showing progress.
-4. `POST /v1/evidence/uploads/{id}/complete` lets the API verify object size/checksum.
+- `GET /v1/games`
+- `GET /v1/rankings` with game, country/global scope, bounded limit, and opaque cursor.
+- `GET /v1/players` with search text, game, country, and opaque cursor.
+- `GET /v1/players/{playerId}`
+- `GET /v1/players/{playerId}/avatar`
+- `GET /v1/players/{playerId}/matches`
+- `GET /v1/players/{playerId}/competitions`
 
-Only completed opaque evidence IDs are accepted in a result. Provider URLs and object
-keys are not analytics data and are never public.
+All collections use bounded keyset cursors. A hidden, suspended, or deleted player is
+returned as `404`; the app must not try to distinguish those states.
 
-### Submit result
+### 6. Competition entry
 
-`POST /v1/matches/{matchId}/result-submissions` with `Idempotency-Key`:
+- `GET /v1/competitions` and `GET /v1/competitions/{id}` discover competitions.
+- `GET /v1/competitions/{id}/eligibility` is the preflight source of truth for age,
+  country, ranking, game account, capacity, existing registration, payment action, and
+  the conduct-strike ban (`conduct_suspended`).
+- `GET /v1/competitions/{id}/bracket` returns typed stages, rounds, slots, matches,
+  standings, and progression.
+- `POST /v1/competitions/{id}/registrations` enters a free competition.
+- `DELETE /v1/competitions/{id}/registrations/me` withdraws a free entry.
+- `GET /v1/me/registrations` lists the player's entries.
 
-```json
-{
-  "homeScore": 3,
-  "awayScore": 1,
-  "games": [{ "homeScore": 3, "awayScore": 1 }],
-  "evidenceIds": ["uuid"],
-  "declarationAccepted": true
-}
-```
+For paid entry, call `POST /v1/payments/mpesa/stk-push` with an `Idempotency-Key`, then
+poll `GET /v1/payments/{id}` until a terminal state. Never call the provider callback
+from the app. Payment and registration success must come from the backend, not from an
+STK screen or client timer.
 
-The server checks participant identity, match version/state, score policy, evidence
-ownership/completion and deadline. It returns a submission in
-`pending_confirmation`; the submitter then sees an awaiting-opponent state.
+- `GET /v1/me/payments` lists durable payment/receipt history.
+- `GET /v1/me/refunds` lists refund state.
+- `POST /v1/competitions/{id}/registrations/me/withdrawal-requests` requests a paid
+  withdrawal/refund.
 
-### Opponent decision
+### 7. Match room, evidence, and result verification
 
-- `POST /v1/result-submissions/{id}/confirmations` body
-  `{ "decision": "confirm" }`, with `Idempotency-Key`.
-- The same route accepts `{ "decision": "dispute", "reasonCode": "score_mismatch",
-  "note": "...", "evidenceIds": ["uuid"] }`.
+- `GET /v1/me/matches?state=active|history`
+- `GET /v1/matches/{matchId}` returns `lifecycle`, `allowedActions`,
+  `verificationPolicy` (report window, reminder lead, response window, screenshot
+  rules), `resultVerification`, `result`, `completionReason`, and both check-in
+  states.
+- `POST /v1/matches/{matchId}/check-ins` uses an `Idempotency-Key`.
 
-A confirmation transaction locks the submission/match, finalizes the result, updates
-ratings/progression and writes audit/outbox events once. A dispute opens the referee
-queue and freezes advancement. The response always returns the resulting match and
-submission states so the app can update without a replica read.
+Drive the screen from `lifecycle` and `allowedActions`; never infer an action from
+the state or a local timer.
 
-## Typed mobile capability boundary
+| `lifecycle` | Meaning | Action |
+|---|---|---|
+| `report_required` | Your entry has not reported yet | `report_score` |
+| `awaiting_opponent_report` | You reported; the opponent's report window is running | none |
+| `mismatch_response_required` | The reports differ and your entry has not responded | `submit_final_score` |
+| `awaiting_opponent_response` | You responded; the response window is still running | none |
+| `awaiting_resolution` | A deadline passed and the server is settling the match | none |
+| `under_review` | Gamics is reviewing the match | none |
+| `forfeited` / `completed` | The match is over | none |
 
-The mobile API layer exposes capability flags such as:
+The room is blind. `resultVerification` holds only your entry's own reports
+(`myReport`, `myFinalReport`), whether the opponent reported or responded, the
+deadline of the current phase, the resolution, and `entryRemoved` when your entry
+was removed from the tournament. It never contains the opponent's score. The
+confirmed score appears in `result` once the match is completed.
 
-```ts
-type BackendCapabilities = {
-  playerDiscovery: 'demo' | 'available';
-  rankings: 'demo' | 'available';
-  matchOperations: 'demo' | 'available';
-  evidenceUploads: 'unavailable' | 'available';
-  resultDecisions: 'demo' | 'available';
-};
-```
+Evidence flow (screenshots are needed only for a final score after a mismatch):
 
-Production builds must fail or visibly disable a feature whose capability is not
-`available`; they must never report a demo submission as accepted by Gamics. Every
-collection uses bounded cursor pagination, cancellation, retry classification and
-loading/empty/offline/error states.
+1. `POST /v1/evidence/uploads` declares a JPEG or PNG screenshot's size, media type
+   and SHA-256. Video is not accepted.
+2. Upload directly to the returned signed URL with the exact required headers.
+3. `POST /v1/evidence/uploads/{id}/complete` durably queues verification and returns
+   `processing`, `ready=false`.
+4. Poll `GET /v1/evidence/uploads/{id}` with 2-10 second exponential backoff and
+   jitter until `ready=true`. Stop on rejected/failed/expired; respect Retry-After
+   for 429/503. Persist the evidence ID so polling can resume after an app restart.
+5. `GET /v1/evidence/{id}` gives short-lived access to the uploader, and to Gamics
+   reviewers and admins. Opponents and organizers never see another player's
+   screenshots.
+
+Screenshots must be JPEG or PNG, at most 10 MiB by default, 16 megapixels and
+8192 pixels per dimension. Convert HEIC/HEIF on the device, then compute size and
+SHA256 from the final uploaded bytes. PUT raw binary with the returned headers,
+including `If-None-Match: *`. Content-Length is signed: a web Blob supplies it
+automatically; native uploads must send a fixed-length body. A 412 on a retried
+PUT can mean the first attempt succeeded: call completion and let verification
+decide. Keep signed URLs and credentials out of logs/analytics. Cap uploads at
+two per device. See [screenshot pipeline](screenshot-pipeline.md).
+
+Report the score with `POST /v1/matches/{matchId}/score-reports` and an
+`Idempotency-Key`: home and away score, a penalty tiebreak where a knockout match is
+tied, optional game rows, and `declarationAccepted=true`. No screenshot is sent. When
+the reports differ, send the one final score with
+`POST /v1/matches/{matchId}/score-reports/final`: the same fields plus one to three
+`evidenceIds` of ready screenshots. Both responses contain the updated blind `match`
+room and the `report` just stored, so the app does not need an unsafe replica read.
+
+Tell players plainly what silence costs: if they do not report within the report
+window after the opponent's report, or do not send a final score within the response
+window after a mismatch, their entry is removed from the tournament. If nobody reports
+before `resultDueAt`, both entries are removed. The full policy is in
+[result verification](result-verification.md). There is no dependency on a public
+Konami results API.
+
+## Organizer and staff clients
+
+The same OpenAPI contract includes organization membership and permissions,
+competition creation/transitions, typed draw generation and entries for organizers,
+and, for Gamics platform staff only, the result review queue, conduct strikes,
+game-account verification review, refund decisions, and payment review. Organizers
+never decide match results. These routes are permission protected and must not be
+exposed merely because a tab is visible.
+
+## Client rules
+
+- Generate request/response types from OpenAPI 0.7.0 and keep Zod validation at the
+  network boundary.
+- Use a fresh UUID `Idempotency-Key` for each user intent and reuse it only for retries
+  of that exact payload.
+- Treat `401` as one serialized refresh attempt; never retry mutations blindly.
+- Honor `429` and `Retry-After`, show offline/empty/error states, and cancel abandoned
+  list requests.
+- Keep cursor values opaque and never build object-storage URLs from keys.
+- Disable a capability visibly when its required production service is unavailable;
+  never report fixture data as accepted by Gamics.

@@ -10,11 +10,20 @@ eFootball Mobile in Kenya.
 - A Go API with graceful shutdown, timeouts, structured logs, CORS and request IDs.
 - Email OTP onboarding, rotating refresh sessions, player/game-account APIs and a
   replica-aware Redis-cached game catalog.
+- A role-based organizer API: an explicit permission matrix, per-route
+  authorization over organization membership, and competition create/edit/publish
+  with status-aware edit rules, guarded lifecycle transitions and audit history.
 - A production-disabled Daraja foundation with STK Push/Query, durable callbacks,
   payment idempotency and atomic paid-entry creation.
-- Competition lifecycle and result-submission domain models with tests.
-- A PostgreSQL schema for organizers, solo/team entries, brackets, evidence,
-  disputes, idempotency, audit history and transactional outbox delivery.
+- Deterministic draws and progression for single elimination, double elimination
+  and round robin, with standings and placements.
+- Blind result verification: each entry reports its score without seeing the
+  other's, silent entries are removed from the tournament, and scores that still
+  differ after a screenshot-backed response go to a Gamics staff review queue.
+  Organizers never decide results.
+- A PostgreSQL schema for organizers, solo/team entries, brackets, score reports,
+  screenshot evidence, result reviews, conduct strikes, idempotency, audit history
+  and transactional outbox delivery.
 - An OpenAPI contract and an architecture rationale.
 
 ## Repository map
@@ -28,7 +37,7 @@ services/api/migrations/     PostgreSQL schema
 services/api/openapi/        HTTP contract
 docs/architecture.md         Boundaries, scale path and challenged decisions
 docs/docker.md               Containers, API addresses and deployment notes
-docs/result-verification.md  Screenshot, confirmation and dispute policy
+docs/result-verification.md  Blind score reports, removal and Gamics review policy
 docs/mobile-api-requirements.md  Implemented/planned mobile API boundary
 docs/platform-readiness.md   Honest implementation and release-gap inventory
 docs/production-architecture.md  Database, cache and network scale design
@@ -85,9 +94,13 @@ health checks, secret handling and migration requirements.
 
 ## Current boundary
 
-Identity, player accounts, the cache foundation and disabled M-Pesa collection
-plumbing are implemented. Tournament draw/progression algorithms, organizer and
-admin/referee dashboards, production evidence storage, continuous payment
-reconciliation/refunds and the planned ranking/match handlers are not implemented.
-See `docs/platform-readiness.md` before treating schema or demo UI as finished
-behavior.
+Identity, player accounts, the cache foundation, the organizer authorization and
+competition-management API, draws and progression, blind result verification with
+the Gamics review queue, and disabled M-Pesa collection plumbing are implemented.
+The organizer and Gamics staff web UI, production evidence storage and continuous
+payment reconciliation/refunds are not.
+
+A competition reaches `running` only after its draw is generated; otherwise the
+transition is refused with `bracket_not_generated` rather than starting an event
+with no matches. See `docs/platform-readiness.md` before treating schema or demo
+UI as finished behavior.

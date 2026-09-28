@@ -94,7 +94,8 @@ Initial policies:
 | Safe public negative lookup | 5-10 seconds | none | after endpoint exists |
 
 Never shared-cache authentication tokens, authorization/eligibility decisions,
-payments, private player data, result submissions, confirmations or disputes.
+payments, private player data, match rooms, score reports, evidence or result
+reviews.
 Mutation transactions write outbox events; an idempotent worker invalidates or bumps
 the version of affected public projections only after commit. Cache fills after a
 write must use the writer or replica-LSN awareness so a lagging replica cannot

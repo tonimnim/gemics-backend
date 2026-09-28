@@ -1,90 +1,76 @@
 # Platform implementation readiness
 
-This file prevents architecture diagrams and database tables from being mistaken for
-finished product behavior. It reflects the codebase at this revision.
+Last audited: 2026-09-28. The machine-readable source of truth is
+`services/api/openapi/openapi.yaml`; see `backend-api-status.md` for deployment
+dependencies and `mobile-api-requirements.md` for the player journey.
 
-| Area | State | What exists | What is still required |
-|---|---|---|---|
-| Email authentication | Implemented | OTP request/verify, retry-safe rotating refresh sessions, propagated logout and onboarding | durable email queue/provider observability |
-| Player/game accounts | Implemented | profile and eFootball account APIs | publisher-backed verification when available |
-| Game catalog cache | Implemented | Redis SWR, ETag, stampede controls, replica lag circuit | metrics and production split Redis services |
-| M-Pesa foundation | Implemented but disabled | STK Push/Query, callbacks, idempotency, rate limits, capacity reservation, atomic entry creation | real private credentials, sandbox certification, reconciliation worker and refund/admin operations |
-| Competition formats | Schema only | enum values for single elimination, double elimination and round robin | draw generators, dependency graph, standings/tiebreakers and tests |
-| Match progression | Schema only | match/result/dispute tables | result APIs, locking/version checks, advancement transaction and workers |
-| Organizer dashboard | Not implemented | organization/RBAC tables | authorization middleware, organizer APIs and web UI |
-| Admin/referee dashboard | Not implemented | roles, disputes and audit tables | queues, assignment/resolution APIs, payment review/refund tools and UI |
-| Mobile player app | Prototype/demo | Native Expo shell, searchable virtualized rankings, public player profiles, match/result evidence and confirm/dispute demo flows | connect capability-gated ranking/match/evidence APIs after their Go handlers exist |
-| Marketing site | Implemented | responsive public landing page | deployment analytics/SEO verification |
+| Area | State | Production boundary |
+|---|---|---|
+| Email authentication and sessions | Implemented | Configure SMTP; add provider observability and bounce/complaint handling |
+| Player identity, legal consent, avatar and account deletion | Implemented | Use private production object storage and a secure staff bootstrap |
+| Game accounts and evidence verification | Implemented | Manual review is not publisher verification; add a publisher integration only if Konami offers one |
+| Discovery, search, rankings and histories | Implemented | Load-test snapshot projection, trigram search and cache hit/miss behavior |
+| Competition eligibility and registration | Implemented | Final policy and capacity checks remain writer-transaction authoritative |
+| M-Pesa paid entry | Implemented but provider-disabled by default | Configure approved Daraja credentials/HTTPS callback and independent lost-receipt reconciliation |
+| Payment/refund/player history and admin review | Implemented | Connect a B2C/refund worker; a durable request is not reported as paid until a provider receipt exists |
+| Blind dual score reports, mismatch responses and screenshot evidence | Implemented | Run the DB-gated result verification tests against PostgreSQL; screenshots are JPEG/PNG only |
+| Result deadlines and removal from the tournament | Implemented | The verification worker settles report, response and result deadlines; watch removals and evidence error rates after launch |
+| Gamics result review queue, strikes and registration ban | Implemented | Build the staff review console against OpenAPI; bootstrap reviewer accounts securely |
+| Single/double elimination and round robin | Implemented | Add historical correction/unwind and richer head-to-head tie-break policies if required |
+| Draw persistence and progression | Implemented | Run concurrency/load tests against live PostgreSQL before public paid events |
+| No-show handling | Implemented for ready matches | In-progress matches with no report by the result deadline remove both entries; no result is ever guessed |
+| Organization authorization and competition operations | Implemented | Build the organizer UI; keep every action permission-scoped server-side |
+| Notifications and Expo push receipts | Implemented | Configure Expo, monitor delivery jobs, and add transactional notification email if enabled |
+| PostgreSQL writer/reader and Redis cache/security split | Implemented in service configuration | Use managed failover/replicas and separate production Redis policies; Compose is not HA |
+| Local private media storage | Implemented with MinIO | Use HTTPS, scoped credentials and managed S3-compatible storage in production |
+| Mobile player app | API-ready; client integration remains in its own repository | Generate types from OpenAPI 0.7.0 and disable fixtures only when the local stack is reachable |
+| Organizer and Gamics staff UI | Not implemented in this backend repository | Build dedicated authenticated clients; do not turn the marketing page into an operations console |
+| Marketing site | Implemented | Deploy separately from the mobile app and verify analytics/SEO |
 
-## Tournament engine findings
+## Tournament engine guarantees
 
-The strings `single_elimination`, `double_elimination` and `round_robin` currently
-exist in Go constants and SQL constraints. They are not algorithms. There is no draw
-generation, bye allocation, winner/loser routing, round-robin scheduler, standings,
-tiebreak calculation or automatic advancement. The present `matches` table records a
-round and match number but has no explicit dependency edges telling a match where its
-home/away entrants come from.
+- Draw generation is deterministic for the same frozen rules, eligible-entry vector,
+  seeding policy and algorithm version; draw provenance is persisted.
+- Match slots store direct-entry, winner-of and loser-of dependencies. Progression
+  follows the persisted graph instead of inferring edges from round numbers.
+- Result confirmation, removal of silent entries, review decisions, rating changes,
+  dependent slots, round-robin standings, placements, audit and outbox events share
+  one transaction behind the competition's progression lock.
+- Removed entries never advance, never drop into a losers bracket and receive no
+  placement; their remaining round-robin fixtures are settled as walkovers.
+- A source match/version/outcome ledger makes progression idempotent and rejects a
+  conflicting replay.
+- Single elimination supports seeded placement, byes and bronze configuration.
+  Double elimination supports winner/loser routing and conditional grand-final reset.
+  Round robin uses a persisted schedule, points/goal-difference/goals ordering and
+  sequential-round release.
+- Ready-match deadlines are polled with indexed, leased `SKIP LOCKED` work. One
+  checked-in side wins by forfeit; zero check-ins cancel the match; two check-ins are
+  never auto-decided.
 
-A CueScore-like organizer experience needs these backend capabilities before its UI:
+## Authorization and operational boundary
 
-1. A deterministic, pure draw generator versioned by algorithm and seed. Given the
-   same accepted entries, seeds and config it must produce the same graph.
-2. Explicit match-slot sources such as direct entry, winner-of-match or loser-of-match.
-   Progression follows stored graph edges; it must never infer the next match from
-   round numbers.
-3. One transaction that locks the decided match, checks its version, finalizes the
-   accepted result, fills dependent slots, resolves byes, updates standings and writes
-   audit/outbox events.
-4. Idempotent commands and uniqueness constraints so two confirmations or referee
-   actions cannot advance the same player twice.
-5. Immutable draw/rules snapshots. Corrections supersede results and append audit
-   events rather than rewriting history silently.
+Organization role checks use the PostgreSQL writer to avoid granting revoked access
+during replica lag. Tenant IDs are also constrained in handler SQL, and non-members
+receive `404` to avoid enumeration. Platform payment, refund, game-verification and
+result-review permissions are separate from organization roles, and no organization
+role decides a match result.
 
-Format requirements:
+Production migrations run once through an external migration job. API replicas set
+`RUN_MIGRATIONS=false` and roll behind a load balancer only after the migration job
+succeeds. Migration `000016` installs the notification outbox trigger and performs a
+gap-free historical backfill; schedule that migration during a controlled window
+because it briefly blocks outbox writers in proportion to existing outbox size.
 
-- **Single elimination:** power-of-two bracket sizing, deterministic seeded placement,
-  random/unseeded draw policy, byes, bronze-match option and best-of configuration.
-- **Double elimination:** winner and loser brackets, defined loser-drop mapping,
-  grand final and configurable bracket-reset rule. This must be generated from a
-  tested template/graph, not ad-hoc arithmetic in HTTP handlers.
-- **Round robin:** circle-method schedule for even/odd entrants, one bye per round for
-  odd counts, home/away balancing, points policy and ordered tiebreak chain. Head-to-
-  head mini-tables must specify how multi-way ties are handled.
+## Before public paid competitions
 
-Property tests should cover entrant counts from 2 through the supported maximum,
-every entrant's expected match opportunities, no duplicate pairing within a round,
-valid dependency edges, bye termination, and exactly one champion for terminal
-knockout graphs. Concurrency integration tests must submit/confirm the same result in
-parallel and prove one advancement.
-
-## Dashboard boundary
-
-Organization membership rows already support owner, admin, referee and analyst roles,
-but no request authorization middleware uses them. A dashboard built directly against
-the database would bypass tenant isolation and is not acceptable.
-
-Build APIs and permission tests first:
-
-- organizer competition CRUD/publish/registration/check-in/draw operations;
-- entry lists, seeding, match operations and audit history;
-- referee dispute queue, evidence review and superseding resolution;
-- platform admin user/organization moderation and immutable audit views;
-- payment-review, reconciliation and refund operations with separation of duties.
-
-Then build a responsive Next.js organizer/admin application using those contracts.
-The React Native app remains the player surface; the marketing landing page should not
-become an authenticated operations console.
-
-## Recommended delivery order
-
-1. Finish organizer authorization and competition CRUD/registration contracts.
-2. Add explicit match dependency schema and the single-elimination generator with
-   property/concurrency tests.
-3. Implement result submission, opponent confirmation/dispute and referee resolution;
-   connect confirmed results to progression.
-4. Add round-robin scheduling/standings, then double elimination.
-5. Build organizer/referee UI against those stable APIs.
-6. Add the M-Pesa reconciliation worker and payment-review/refund admin UI before
-   enabling production collections.
-7. Load-test cache hit/miss/failure modes, database failover, callback replay and a
-   full tournament from registration through champion.
+1. Execute all migrations against a PostgreSQL staging copy and test rollback policy.
+2. Run a full tournament for each format, including byes, no-shows, mismatched
+   reports, removals, Gamics review decisions, late callbacks, refunds and duplicate
+   requests.
+3. Load-test ranking/search/competition caches, Redis failure, replica lag and writer
+   fallback limits.
+4. Verify Daraja sandbox callbacks, STK Query, independent transaction recovery and
+   the real refund provider workflow.
+5. Exercise backup restore, database failover, rolling API deployment, push receipts,
+   private-media access revocation and staff audit trails.

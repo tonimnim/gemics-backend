@@ -7,15 +7,30 @@ details.
 Run locally from the repository root:
 
 ```sh
-go run ./services/api/cmd/api
+npm run api:dev
 ```
 
-Implemented routes include email OTP authentication, rotating refresh sessions,
-current-player onboarding, player profiles, game accounts, health/readiness and
-the supported game catalog. The M-Pesa routes reserve a paid competition place,
-initiate Daraja STK Push, persist callbacks, confirm them with STK Query and create
-the competition entry in the same transaction as payment completion. The complete
-contract is in `openapi/openapi.yaml`.
+The API is a nested Go module, so direct Go commands from the repository root
+must use `go -C services/api ...`. Local startup also requires PostgreSQL and
+Redis; the supported full-stack path is `npm run stack:up` after copying
+`.env.docker.example` to the ignored `.env.docker` file and replacing its
+placeholder secrets.
+
+Cloudflare R2 is the selected managed evidence store. Set `STORAGE_MODE=r2` and
+follow [R2 setup](../../docs/cloudflare-r2.md), including the live acceptance test
+and `npm run stack:r2:up` overlay. Local MinIO remains available for development.
+
+The API covers email OTP and rotating sessions; player onboarding, legal consent,
+profiles, avatars and game-account verification; competition discovery, eligibility,
+registration, typed draws and progression; rankings and public histories; match
+check-in, blind score reports, private screenshot evidence, removal of silent
+entries, the Gamics result review queue and conduct strikes; notifications;
+organization RBAC; and protected payment/refund review. The M-Pesa routes reserve a
+paid competition place, initiate Daraja STK Push, persist callbacks, confirm them
+with STK Query and create the competition entry atomically with payment completion.
+The complete machine-readable contract is `openapi/openapi.yaml`; mobile integration
+order and deployment dependencies are documented in `../../docs/mobile-api-requirements.md`
+and `../../docs/backend-api-status.md`.
 
 Email OTPs are logged only when `EMAIL_MODE=log` for local development. Production
 configuration rejects that mode and requires SMTP. Access tokens are short-lived;
