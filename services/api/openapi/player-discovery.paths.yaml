@@ -50,7 +50,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicPlayerProfile" }
-        "404": { description: Player is absent, private, suspended or deleted. }
+        "404": { description: "Player is absent, private, suspended or deleted." }
         "503": { description: Public read dependencies are unavailable. }
   /v1/players/{id}/matches:
     get:
@@ -66,7 +66,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicMatchPage" }
-        "404": { description: Player is absent, private, suspended or deleted. }
+        "404": { description: "Player is absent, private, suspended or deleted." }
         "410": { description: Cursor expired. }
         "503": { description: Public read dependencies are unavailable. }
   /v1/players/{id}/competitions:
@@ -83,7 +83,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicCompetitionPage" }
-        "404": { description: Player is absent, private, suspended or deleted. }
+        "404": { description: "Player is absent, private, suspended or deleted." }
         "410": { description: Cursor expired. }
         "503": { description: Public read dependencies are unavailable. }
 components:
@@ -102,7 +102,10 @@ components:
         playerId: { type: string, format: uuid }
         handle: { type: string }
         displayName: { type: string }
-        avatarUrl: { type: [string, "null"], format: uri }
+        avatarUrl:
+          type: [string, "null"]
+          format: uri-reference
+          description: Stable API-relative avatar image reference; resolve it against the configured API origin.
         countryCode: { type: string, pattern: "^[A-Z]{2}$" }
         rating: { type: [integer, "null"] }
         matchesPlayed: { type: integer, minimum: 0 }
@@ -145,12 +148,16 @@ components:
         lastMatchAt: { type: [string, "null"], format: date-time }
     PublicGameAccount:
       type: object
-      required: [gameId, platform, inGameName, verificationStatus]
+      required: [gameId, platform, inGameName, verificationStatus, verificationMethod, publisherVerified]
       properties:
         gameId: { type: string }
         platform: { type: string }
         inGameName: { type: string }
         verificationStatus: { type: string, enum: [unverified, pending, verified, rejected] }
+        verificationMethod: { type: [string, "null"], enum: [manual_evidence, publisher_api, null] }
+        publisherVerified:
+          type: boolean
+          description: True only when verification came from an integrated publisher API; a Gamics evidence review remains false.
     PublicPlayerProfile:
       type: object
       required: [playerId, handle, displayName, bio, avatarUrl, countryCode, joinedAt, record, ratings, gameAccounts]
@@ -159,7 +166,10 @@ components:
         handle: { type: string }
         displayName: { type: string }
         bio: { type: string }
-        avatarUrl: { type: [string, "null"], format: uri }
+        avatarUrl:
+          type: [string, "null"]
+          format: uri-reference
+          description: Stable API-relative avatar image reference; resolve it against the configured API origin.
         countryCode: { type: string }
         joinedAt: { type: string, format: date-time }
         record: { $ref: "#/components/schemas/PublicRecord" }
@@ -177,7 +187,9 @@ components:
             playerId: { type: string, format: uuid }
             handle: { type: string }
             displayName: { type: string }
-            avatarUrl: { type: [string, "null"], format: uri }
+            avatarUrl:
+              type: [string, "null"]
+              format: uri-reference
         score:
           type: object
           required: [player, opponent, home, away]

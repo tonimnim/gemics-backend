@@ -81,7 +81,7 @@ func (s *Server) rankings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var result rankingsResponse
-	err = s.withPublicRead(r.Context(), "list_rankings", func(reader publicQueryer) error {
+	err = s.withPublicRead(r.Context(), "list_rankings", func(reader rowsQueryer) error {
 		loaded, queryErr := s.queryRankings(r.Context(), reader, options, now)
 		result = loaded
 		return queryErr
@@ -110,7 +110,7 @@ func (s *Server) players(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var result playersResponse
-	err = s.withPublicRead(r.Context(), "search_players", func(reader publicQueryer) error {
+	err = s.withPublicRead(r.Context(), "search_players", func(reader rowsQueryer) error {
 		loaded, queryErr := s.queryPlayers(r.Context(), reader, options, now)
 		result = loaded
 		return queryErr
@@ -134,7 +134,7 @@ func (s *Server) publicPlayer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var result publicPlayerProfile
-	err := s.withPublicRead(r.Context(), "get_public_player", func(reader publicQueryer) error {
+	err := s.withPublicRead(r.Context(), "get_public_player", func(reader rowsQueryer) error {
 		loaded, queryErr := s.queryPublicPlayer(r.Context(), reader, playerID)
 		result = loaded
 		return queryErr
@@ -168,7 +168,7 @@ func (s *Server) publicPlayerMatches(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var result publicMatchesResponse
-	err = s.withPublicRead(r.Context(), "list_public_player_matches", func(reader publicQueryer) error {
+	err = s.withPublicRead(r.Context(), "list_public_player_matches", func(reader rowsQueryer) error {
 		loaded, queryErr := s.queryPublicPlayerMatches(r.Context(), reader, playerID, options, now)
 		result = loaded
 		return queryErr
@@ -202,7 +202,7 @@ func (s *Server) publicPlayerCompetitions(w http.ResponseWriter, r *http.Request
 	}
 
 	var result publicCompetitionsResponse
-	err = s.withPublicRead(r.Context(), "list_public_player_competitions", func(reader publicQueryer) error {
+	err = s.withPublicRead(r.Context(), "list_public_player_competitions", func(reader rowsQueryer) error {
 		loaded, queryErr := s.queryPublicPlayerCompetitions(r.Context(), reader, playerID, options, now)
 		result = loaded
 		return queryErr

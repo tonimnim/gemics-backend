@@ -1,0 +1,450 @@
+# Player identity, device, notification, consent and account-lifecycle contract.
+# Merge this fragment into openapi.yaml when registerIdentityNotificationRoutes
+# is called from Server.New. All /v1/me routes require a live refresh session.
+paths:
+  /v1/legal/documents/current:
+    get:
+      operationId: getCurrentLegalDocuments
+      tags: [Legal]
+      summary: Return the current terms and privacy-policy versions for onboarding.
+      responses:
+        "200":
+          description: Current legal documents.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/LegalDocument" } }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/push-tokens:
+    post:
+      operationId: upsertPushToken
+      tags: [Devices]
+      summary: Register or rotate the current installation's Expo push token.
+      description: >-
+        deviceId is the stable app-installation identifier. Repeating this call is
+        idempotent for that player/device pair. A new token replaces the old one,
+        and a provider token previously assigned to another installation is revoked.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [deviceId, token, platform]
+              properties:
+                deviceId: { type: string, minLength: 1, maxLength: 160 }
+                token:
+                  type: string
+                  minLength: 20
+                  maxLength: 512
+                  pattern: "^(ExponentPushToken|ExpoPushToken)\\[[A-Za-z0-9_-]{20,480}\\]$"
+                platform: { type: string, enum: [android, ios] }
+                appVersion: { type: string, maxLength: 64, default: "" }
+      responses:
+        "200":
+          description: Installation registered or rotated. The provider token is never echoed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/PushDevice" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/push-tokens/{id}:
+    delete:
+      operationId: revokePushToken
+      tags: [Devices]
+      summary: Revoke one of the player's push-enabled installations.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Push token revoked. Repeating against the same owned record is safe. }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/notifications:
+    get:
+      operationId: listMyNotifications
+      tags: [Notifications]
+      summary: List the player's non-expired notifications with signed keyset pagination.
+      description: Cursors are opaque, expire after 24 hours and are bound to the player and unreadOnly filter.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: unreadOnly, in: query, schema: { type: boolean, default: false } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+      responses:
+        "200":
+          description: Notification page.
+          content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPage" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/notifications/unread-count:
+    get:
+      operationId: getUnreadNotificationCount
+      tags: [Notifications]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current unread count from the writer database.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [unreadCount]
+                properties: { unreadCount: { type: integer, format: int64, minimum: 0 } }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/notifications/{id}/read:
+    post:
+      operationId: markNotificationRead
+      tags: [Notifications]
+      summary: Mark one owned notification as read. This operation is idempotent.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Read timestamp (the original timestamp is preserved on retries).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, readAt]
+                properties:
+                  id: { type: string, format: uuid }
+                  readAt: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/notifications/read-all:
+    post:
+      operationId: markAllNotificationsRead
+      tags: [Notifications]
+      summary: Mark every current non-expired notification as read.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Number of rows changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updatedCount, unreadCount]
+                properties:
+                  updatedCount: { type: integer, format: int64, minimum: 0 }
+                  unreadCount: { type: integer, enum: [0] }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/notification-preferences:
+    get:
+      operationId: getNotificationPreferences
+      tags: [Notifications]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Persisted preferences, or privacy-safe defaults when they have never been changed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPreferences" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: patchNotificationPreferences
+      tags: [Notifications]
+      summary: Change one or more notification channel preferences.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                competitionPush: { type: boolean }
+                matchPush: { type: boolean }
+                resultPush: { type: boolean }
+                competitionEmail: { type: boolean }
+                matchEmail: { type: boolean }
+                marketingEmail: { type: boolean, description: Opt-in only; defaults to false. }
+      responses:
+        "200":
+          description: Updated preferences.
+          content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPreferences" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/legal-acceptances:
+    get:
+      operationId: listMyLegalAcceptances
+      tags: [Legal]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Player acceptance history.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/LegalAcceptance" } }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: acceptLegalDocuments
+      tags: [Legal]
+      summary: Accept one or both current legal-document versions.
+      description: Stale/non-current versions return 409 legal_version_outdated. Repeating an accepted version is idempotent.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [acceptances]
+              properties:
+                acceptances:
+                  type: array
+                  minItems: 1
+                  maxItems: 2
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [documentType, version]
+                    properties:
+                      documentType: { type: string, enum: [terms, privacy] }
+                      version: { type: string, minLength: 1, maxLength: 32 }
+      responses:
+        "200":
+          description: Complete player acceptance history after the write.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/LegalAcceptance" } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/sessions:
+    get:
+      operationId: listMySessions
+      tags: [Sessions]
+      summary: List up to 100 recent sessions, including the current session and revoked history.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Session/device history. Refresh-token material is never returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/PlayerSession" } }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/sessions/{id}:
+    delete:
+      operationId: revokeSession
+      tags: [Sessions]
+      summary: Revoke one owned session, including the current session.
+      description: Database revocation is propagated through Redis to invalidate outstanding access tokens.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Session revoked. }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/account-deletion:
+    get:
+      operationId: getAccountDeletionRequest
+      tags: [Account]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Latest request, or data null when none exists.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    oneOf:
+                      - { $ref: "#/components/schemas/AccountDeletionRequest" }
+                      - { type: "null" }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: requestAccountDeletion
+      tags: [Account]
+      summary: Create or return the pending account-deletion request.
+      description: Requests have a 24-hour cooling-off period. Retrying does not restart that period.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "202":
+          description: Pending deletion request.
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccountDeletionRequest" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: cancelAccountDeletion
+      tags: [Account]
+      summary: Cancel the pending request during or after its cooling-off period.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Pending deletion request cancelled. }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/account-deletion/execute:
+    post:
+      operationId: executeAccountDeletion
+      tags: [Account]
+      summary: Anonymize the account after the cooling-off period and revoke every session.
+      description: >-
+        The operation preserves integrity-required competition/payment/audit records
+        under a pseudonymous user row, but removes direct profile, contact, device
+        and notification data. It returns 409 if the player owns an organization
+        or still participates in an active competition.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requestId, confirmation]
+              properties:
+                requestId: { type: string, format: uuid }
+                confirmation: { type: string, const: DELETE }
+      responses:
+        "204": { description: Account anonymized and all refresh sessions revoked. }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+components:
+  schemas:
+    PushDevice:
+      type: object
+      additionalProperties: false
+      required: [id, deviceId, platform, appVersion, lastSeenAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        deviceId: { type: string }
+        platform: { type: string, enum: [android, ios] }
+        appVersion: { type: string }
+        lastSeenAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Notification:
+      type: object
+      additionalProperties: false
+      required: [id, category, title, body, data, actionUrl, readAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        category: { type: string, minLength: 1, maxLength: 64 }
+        title: { type: string, minLength: 1, maxLength: 160 }
+        body: { type: string, minLength: 1, maxLength: 2000 }
+        data: { type: object, additionalProperties: true }
+        actionUrl: { type: string, maxLength: 1000, nullable: true }
+        readAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    NotificationPage:
+      type: object
+      additionalProperties: false
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Notification" } }
+        page:
+          type: object
+          additionalProperties: false
+          required: [hasMore, nextCursor]
+          properties:
+            hasMore: { type: boolean }
+            nextCursor: { type: string, nullable: true }
+    NotificationPreferences:
+      type: object
+      additionalProperties: false
+      required: [competitionPush, matchPush, resultPush, competitionEmail, matchEmail, marketingEmail, updatedAt]
+      properties:
+        competitionPush: { type: boolean }
+        matchPush: { type: boolean }
+        resultPush: { type: boolean }
+        competitionEmail: { type: boolean }
+        matchEmail: { type: boolean }
+        marketingEmail: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+    LegalDocument:
+      type: object
+      additionalProperties: false
+      required: [documentType, version, contentUrl, effectiveAt]
+      properties:
+        documentType: { type: string, enum: [terms, privacy] }
+        version: { type: string }
+        contentUrl: { type: string }
+        effectiveAt: { type: string, format: date-time }
+    LegalAcceptance:
+      type: object
+      additionalProperties: false
+      required: [documentType, version, acceptedAt]
+      properties:
+        documentType: { type: string, enum: [terms, privacy] }
+        version: { type: string }
+        acceptedAt: { type: string, format: date-time }
+    PlayerSession:
+      type: object
+      additionalProperties: false
+      required: [id, deviceName, userAgent, createdIp, lastUsedIp, createdAt, lastUsedAt, revokedAt, current]
+      properties:
+        id: { type: string, format: uuid }
+        deviceName: { type: string }
+        userAgent: { type: string }
+        createdIp: { type: string }
+        lastUsedIp: { type: string }
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time, nullable: true }
+        current: { type: boolean }
+    AccountDeletionRequest:
+      type: object
+      additionalProperties: false
+      required: [id, status, requestedAt, executeAfter, cancelledAt, completedAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, cancelled, completed] }
+        requestedAt: { type: string, format: date-time }
+        executeAfter: { type: string, format: date-time }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }

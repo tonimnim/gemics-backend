@@ -69,7 +69,7 @@ type publicCompetitionsResponse struct {
 	SnapshotAt time.Time                      `json:"snapshotAt"`
 }
 
-func (s *Server) queryPublicPlayerMatches(ctx context.Context, reader publicQueryer, playerID string, options historyOptions, now time.Time) (publicMatchesResponse, error) {
+func (s *Server) queryPublicPlayerMatches(ctx context.Context, reader rowsQueryer, playerID string, options historyOptions, now time.Time) (publicMatchesResponse, error) {
 	result := publicMatchesResponse{Data: []publicMatchHistoryItem{}, Page: publicPage{}, SnapshotAt: options.SnapshotAt}
 	if err := requireDiscoverablePlayer(ctx, reader, playerID); err != nil {
 		return result, err
@@ -100,12 +100,13 @@ func (s *Server) queryPublicPlayerMatches(ctx context.Context, reader publicQuer
 	      SELECT history.id,history.played_at,history.home_score,history.away_score,
 	        history.tiebreak_type,history.home_tiebreak_score,history.away_tiebreak_score,history.player_is_home,
         competition.id,competition.name,stage.name,history.round_number,
-        opponent.id,opponent.handle,opponent.display_name
+	        opponent.id,opponent.handle,opponent.display_name,opponent.has_avatar
       FROM player_matches history
       JOIN competitions competition ON competition.id=history.competition_id
       JOIN competition_stages stage ON stage.id=history.stage_id
       LEFT JOIN LATERAL (
-        SELECT opponent_player.id,opponent_player.display_name,opponent_public.handle
+	        SELECT opponent_player.id,opponent_player.display_name,opponent_public.handle,
+	          (opponent_public.avatar_object_key IS NOT NULL) AS has_avatar
         FROM entry_members opponent_membership
         JOIN users opponent_player
           ON opponent_player.id=opponent_membership.user_id AND opponent_player.status='active'
@@ -132,10 +133,11 @@ func (s *Server) queryPublicPlayerMatches(ctx context.Context, reader publicQuer
 		var homeTiebreakScore, awayTiebreakScore *int
 		var playerIsHome bool
 		var opponentID, opponentHandle, opponentDisplayName *string
+		var opponentHasAvatar *bool
 		if err := rows.Scan(&item.MatchID, &item.PlayedAt, &homeScore, &awayScore,
 			&tiebreakType, &homeTiebreakScore, &awayTiebreakScore, &playerIsHome,
 			&item.Competition.CompetitionID, &item.Competition.Name, &item.Stage, &item.RoundNumber,
-			&opponentID, &opponentHandle, &opponentDisplayName); err != nil {
+			&opponentID, &opponentHandle, &opponentDisplayName, &opponentHasAvatar); err != nil {
 			return result, err
 		}
 		item.Score.Home = homeScore
@@ -162,7 +164,8 @@ func (s *Server) queryPublicPlayerMatches(ctx context.Context, reader publicQuer
 			item.Outcome = "draw"
 		}
 		if opponentID != nil && opponentHandle != nil && opponentDisplayName != nil {
-			item.Opponent = &publicOpponent{PlayerID: *opponentID, Handle: *opponentHandle, DisplayName: *opponentDisplayName}
+			item.Opponent = &publicOpponent{PlayerID: *opponentID, Handle: *opponentHandle, DisplayName: *opponentDisplayName,
+				AvatarURL: publicPlayerAvatarReference(*opponentID, opponentHasAvatar != nil && *opponentHasAvatar)}
 		}
 		item.VerificationState = "confirmed"
 		result.Data = append(result.Data, item)
@@ -191,7 +194,7 @@ func (s *Server) queryPublicPlayerMatches(ctx context.Context, reader publicQuer
 	return result, nil
 }
 
-func (s *Server) queryPublicPlayerCompetitions(ctx context.Context, reader publicQueryer, playerID string, options historyOptions, now time.Time) (publicCompetitionsResponse, error) {
+func (s *Server) queryPublicPlayerCompetitions(ctx context.Context, reader rowsQueryer, playerID string, options historyOptions, now time.Time) (publicCompetitionsResponse, error) {
 	result := publicCompetitionsResponse{Data: []publicCompetitionHistoryItem{}, Page: publicPage{}, SnapshotAt: options.SnapshotAt}
 	if err := requireDiscoverablePlayer(ctx, reader, playerID); err != nil {
 		return result, err
@@ -280,7 +283,7 @@ func (s *Server) queryPublicPlayerCompetitions(ctx context.Context, reader publi
 	return result, nil
 }
 
-func requireDiscoverablePlayer(ctx context.Context, reader publicQueryer, playerID string) error {
+func requireDiscoverablePlayer(ctx context.Context, reader rowsQueryer, playerID string) error {
 	var exists bool
 	err := reader.QueryRow(ctx, `SELECT EXISTS(
       SELECT 1 FROM users player

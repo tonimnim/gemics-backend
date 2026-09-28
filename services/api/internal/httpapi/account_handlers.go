@@ -51,6 +51,8 @@ type gameAccount struct {
 	InGameName         string     `json:"inGameName"`
 	PublisherPlayerID  *string    `json:"publisherPlayerId"`
 	VerificationStatus string     `json:"verificationStatus"`
+	VerificationMethod *string    `json:"verificationMethod"`
+	PublisherVerified  bool       `json:"publisherVerified"`
 	VerifiedAt         *time.Time `json:"verifiedAt"`
 	CreatedAt          time.Time  `json:"createdAt"`
 	UpdatedAt          time.Time  `json:"updatedAt"`
@@ -74,6 +76,11 @@ func (s *Server) patchMe(w http.ResponseWriter, r *http.Request) {
 	}
 	var input mePatch
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.AcceptTerms != nil || input.AcceptPrivacy != nil {
+		writeError(w, http.StatusBadRequest, "versioned_legal_acceptance_required",
+			"Accept the current terms and privacy versions through POST /v1/me/legal-acceptances.")
 		return
 	}
 	assignments := make([]string, 0, 6)
@@ -105,20 +112,6 @@ func (s *Server) patchMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		appendValue("birth_date", value)
-	}
-	if input.AcceptTerms != nil {
-		if !*input.AcceptTerms {
-			writeError(w, http.StatusBadRequest, "terms_required", "Terms must be accepted to complete onboarding.")
-			return
-		}
-		assignments = append(assignments, "terms_accepted_at=COALESCE(terms_accepted_at,now())")
-	}
-	if input.AcceptPrivacy != nil {
-		if !*input.AcceptPrivacy {
-			writeError(w, http.StatusBadRequest, "privacy_required", "Privacy terms must be accepted to complete onboarding.")
-			return
-		}
-		assignments = append(assignments, "privacy_accepted_at=COALESCE(privacy_accepted_at,now())")
 	}
 	if len(assignments) == 0 {
 		writeError(w, http.StatusBadRequest, "empty_update", "Provide at least one field to update.")
@@ -202,7 +195,8 @@ func (s *Server) createGameAccount(w http.ResponseWriter, r *http.Request) {
 	row := s.db.Writer.QueryRow(r.Context(), `INSERT INTO game_accounts
         (user_id,game_id,platform,in_game_name,publisher_player_id)
         VALUES ($1,$2,$3,$4,$5)
-        RETURNING id,game_id,platform,in_game_name,publisher_player_id,verification_status,verified_at,created_at,updated_at`,
+		RETURNING id,game_id,platform,in_game_name,publisher_player_id,verification_status,
+		verification_method,publisher_verified,verified_at,created_at,updated_at`,
 		identityFromContext(r.Context()).UserID, input.GameID, strings.ToLower(strings.TrimSpace(input.Platform)), strings.TrimSpace(input.InGameName), publisherID)
 	account, err := scanGameAccount(row)
 	if err != nil {
@@ -253,22 +247,36 @@ func (s *Server) patchGameAccount(w http.ResponseWriter, r *http.Request) {
 		} else {
 			appendValue("publisher_player_id", value)
 		}
-		assignments = append(assignments, "verification_status='unverified'", "verified_at=NULL")
 	}
 	if len(assignments) == 0 {
 		writeError(w, http.StatusBadRequest, "empty_update", "Provide at least one field to update.")
 		return
 	}
+	assignments = append(assignments, "verification_status='unverified'", "verification_method=NULL",
+		"publisher_verified=false", "verified_at=NULL")
 	query := `UPDATE game_accounts SET ` + strings.Join(assignments, ",") + `,updated_at=now()
         WHERE id=$1 AND user_id=$2
-        RETURNING id,game_id,platform,in_game_name,publisher_player_id,verification_status,verified_at,created_at,updated_at`
-	account, err := scanGameAccount(s.db.Writer.QueryRow(r.Context(), query, args...))
+		RETURNING id,game_id,platform,in_game_name,publisher_player_id,verification_status,
+		verification_method,publisher_verified,verified_at,created_at,updated_at`
+	tx, err := s.db.Writer.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "The game account could not be updated.")
+		return
+	}
+	defer tx.Rollback(r.Context()) //nolint:errcheck
+	account, err := scanGameAccount(tx.QueryRow(r.Context(), query, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "game_account_not_found", "Game account not found.")
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_game_account", "The game account could not be updated.")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `UPDATE game_account_verification_requests
+		SET status='withdrawn',updated_at=now() WHERE game_account_id=$1 AND user_id=$2
+		AND status IN ('requested','under_review','approved')`, account.ID, identityFromContext(r.Context()).UserID); err != nil || tx.Commit(r.Context()) != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "The game account could not be updated.")
 		return
 	}
 	writeJSON(w, http.StatusOK, account)
@@ -309,7 +317,8 @@ func (s *Server) loadMe(ctx context.Context, pool *pgxpool.Pool, userID string) 
 
 func (s *Server) queryGameAccounts(ctx context.Context, pool *pgxpool.Pool, userID string) ([]gameAccount, error) {
 	rows, err := pool.Query(ctx, `SELECT id,game_id,platform,in_game_name,publisher_player_id,
-        verification_status,verified_at,created_at,updated_at FROM game_accounts WHERE user_id=$1 ORDER BY created_at`, userID)
+		verification_status,verification_method,publisher_verified,verified_at,created_at,updated_at
+		FROM game_accounts WHERE user_id=$1 ORDER BY created_at`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +339,8 @@ type accountScanner interface{ Scan(...any) error }
 func scanGameAccount(row accountScanner) (gameAccount, error) {
 	var result gameAccount
 	err := row.Scan(&result.ID, &result.GameID, &result.Platform, &result.InGameName, &result.PublisherPlayerID,
-		&result.VerificationStatus, &result.VerifiedAt, &result.CreatedAt, &result.UpdatedAt)
+		&result.VerificationStatus, &result.VerificationMethod, &result.PublisherVerified,
+		&result.VerifiedAt, &result.CreatedAt, &result.UpdatedAt)
 	return result, err
 }
 

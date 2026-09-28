@@ -11,7 +11,9 @@ import (
 
 var errPublicCursorGone = errors.New("public cursor snapshot is unavailable")
 
-type publicQueryer interface {
+// rowsQueryer is satisfied by both pgxpool.Pool and pgx.Tx, so a read can run
+// on a pool or inside the transaction that just wrote the rows it returns.
+type rowsQueryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
@@ -37,10 +39,12 @@ type publicGameRating struct {
 }
 
 type publicGameAccount struct {
-	GameID             string `json:"gameId"`
-	Platform           string `json:"platform"`
-	InGameName         string `json:"inGameName"`
-	VerificationStatus string `json:"verificationStatus"`
+	GameID             string  `json:"gameId"`
+	Platform           string  `json:"platform"`
+	InGameName         string  `json:"inGameName"`
+	VerificationStatus string  `json:"verificationStatus"`
+	VerificationMethod *string `json:"verificationMethod"`
+	PublisherVerified  bool    `json:"publisherVerified"`
 }
 
 type publicPlayerProfile struct {
@@ -56,7 +60,7 @@ type publicPlayerProfile struct {
 	GameAccounts []publicGameAccount `json:"gameAccounts"`
 }
 
-func (s *Server) withPublicRead(ctx context.Context, operation string, query func(publicQueryer) error) error {
+func (s *Server) withPublicRead(ctx context.Context, operation string, query func(rowsQueryer) error) error {
 	reader := s.db.Reader
 	writer := s.db.Writer
 	if reader == nil {
@@ -80,7 +84,7 @@ func (s *Server) withPublicRead(ctx context.Context, operation string, query fun
 	return query(writer)
 }
 
-func (s *Server) queryRankings(ctx context.Context, reader publicQueryer, options rankingsOptions, now time.Time) (rankingsResponse, error) {
+func (s *Server) queryRankings(ctx context.Context, reader rowsQueryer, options rankingsOptions, now time.Time) (rankingsResponse, error) {
 	result := rankingsResponse{Data: []compactPublicPlayer{}, Page: publicPage{}}
 	var snapshotID string
 	var snapshotAt time.Time
@@ -119,7 +123,7 @@ func (s *Server) queryRankings(ctx context.Context, reader publicQueryer, option
 		lastRank = options.Cursor.Rank
 	}
 	rows, err := reader.Query(ctx, `SELECT row.rank,row.user_id,profile.handle,player.display_name,
-        player.country_code,row.rating,row.matches_played,row.rank_movement
+		(profile.avatar_object_key IS NOT NULL),player.country_code,row.rating,row.matches_played,row.rank_movement
         FROM leaderboard_snapshot_rows row
         JOIN users player ON player.id=row.user_id AND player.status='active'
         JOIN player_profiles profile ON profile.user_id=player.id AND profile.discoverable=true
@@ -133,10 +137,12 @@ func (s *Server) queryRankings(ctx context.Context, reader publicQueryer, option
 	for rows.Next() {
 		var item compactPublicPlayer
 		var rank, rating, movement int
+		var hasAvatar bool
 		if err := rows.Scan(&rank, &item.PlayerID, &item.Handle, &item.DisplayName,
-			&item.CountryCode, &rating, &item.MatchesPlayed, &movement); err != nil {
+			&hasAvatar, &item.CountryCode, &rating, &item.MatchesPlayed, &movement); err != nil {
 			return result, err
 		}
+		item.AvatarURL = publicPlayerAvatarReference(item.PlayerID, hasAvatar)
 		item.Rank = intPointer(rank)
 		item.Rating = intPointer(rating)
 		item.RankMovement = intPointer(movement)
@@ -167,7 +173,7 @@ func (s *Server) queryRankings(ctx context.Context, reader publicQueryer, option
 	return result, nil
 }
 
-func (s *Server) queryPlayers(ctx context.Context, reader publicQueryer, options playersOptions, now time.Time) (playersResponse, error) {
+func (s *Server) queryPlayers(ctx context.Context, reader rowsQueryer, options playersOptions, now time.Time) (playersResponse, error) {
 	result := playersResponse{Data: []compactPublicPlayer{}, Page: publicPage{}, SnapshotAt: options.SnapshotAt}
 	lastHandle := ""
 	var lastID any
@@ -180,7 +186,8 @@ func (s *Server) queryPlayers(ctx context.Context, reader publicQueryer, options
         WHERE game_id=$1 AND scope='global' AND country_code IS NULL AND status='ready'
         ORDER BY snapshot_at DESC,id DESC LIMIT 1
       )
-      SELECT ranking.rank,profile.user_id,profile.handle,player.display_name,player.country_code,
+	  SELECT ranking.rank,profile.user_id,profile.handle,player.display_name,
+	    (profile.avatar_object_key IS NOT NULL),player.country_code,
         coalesce(ranking.rating,rating.rating),
         coalesce(ranking.matches_played,rating.matches_played,0),ranking.rank_movement
       FROM player_profiles profile
@@ -215,10 +222,12 @@ func (s *Server) queryPlayers(ctx context.Context, reader publicQueryer, options
 	defer rows.Close()
 	for rows.Next() {
 		var item compactPublicPlayer
-		if err := rows.Scan(&item.Rank, &item.PlayerID, &item.Handle, &item.DisplayName, &item.CountryCode,
+		var hasAvatar bool
+		if err := rows.Scan(&item.Rank, &item.PlayerID, &item.Handle, &item.DisplayName, &hasAvatar, &item.CountryCode,
 			&item.Rating, &item.MatchesPlayed, &item.RankMovement); err != nil {
 			return result, err
 		}
+		item.AvatarURL = publicPlayerAvatarReference(item.PlayerID, hasAvatar)
 		result.Data = append(result.Data, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -246,17 +255,19 @@ func (s *Server) queryPlayers(ctx context.Context, reader publicQueryer, options
 	return result, nil
 }
 
-func (s *Server) queryPublicPlayer(ctx context.Context, reader publicQueryer, playerID string) (publicPlayerProfile, error) {
+func (s *Server) queryPublicPlayer(ctx context.Context, reader rowsQueryer, playerID string) (publicPlayerProfile, error) {
 	var result publicPlayerProfile
+	var hasAvatar bool
 	err := reader.QueryRow(ctx, `SELECT player.id,profile.handle,player.display_name,profile.bio,
-        player.country_code,player.created_at
+		(profile.avatar_object_key IS NOT NULL),player.country_code,player.created_at
       FROM users player
       JOIN player_profiles profile ON profile.user_id=player.id
       WHERE player.id=$1 AND player.status='active' AND profile.discoverable=true`, playerID).
-		Scan(&result.PlayerID, &result.Handle, &result.DisplayName, &result.Bio, &result.CountryCode, &result.JoinedAt)
+		Scan(&result.PlayerID, &result.Handle, &result.DisplayName, &result.Bio, &hasAvatar, &result.CountryCode, &result.JoinedAt)
 	if err != nil {
 		return publicPlayerProfile{}, err
 	}
+	result.AvatarURL = publicPlayerAvatarReference(result.PlayerID, hasAvatar)
 
 	result.Ratings = []publicGameRating{}
 	rows, err := reader.Query(ctx, `SELECT rating.game_id,rating.rating,rating.matches_played,
@@ -309,7 +320,8 @@ func (s *Server) queryPublicPlayer(ctx context.Context, reader publicQueryer, pl
 	rows.Close()
 
 	result.GameAccounts = []publicGameAccount{}
-	accountRows, err := reader.Query(ctx, `SELECT game_id,platform,in_game_name,verification_status
+	accountRows, err := reader.Query(ctx, `SELECT game_id,platform,in_game_name,verification_status,
+		verification_method,publisher_verified
       FROM game_accounts WHERE user_id=$1 ORDER BY game_id,created_at,id`, playerID)
 	if err != nil {
 		return publicPlayerProfile{}, err
@@ -317,7 +329,8 @@ func (s *Server) queryPublicPlayer(ctx context.Context, reader publicQueryer, pl
 	defer accountRows.Close()
 	for accountRows.Next() {
 		var account publicGameAccount
-		if err := accountRows.Scan(&account.GameID, &account.Platform, &account.InGameName, &account.VerificationStatus); err != nil {
+		if err := accountRows.Scan(&account.GameID, &account.Platform, &account.InGameName,
+			&account.VerificationStatus, &account.VerificationMethod, &account.PublisherVerified); err != nil {
 			return publicPlayerProfile{}, err
 		}
 		result.GameAccounts = append(result.GameAccounts, account)
@@ -329,3 +342,13 @@ func intPointer(value int) *int              { return &value }
 func stringPointer(value string) *string     { return &value }
 func timePointer(value time.Time) *time.Time { return &value }
 func lower(value string) string              { return strings.ToLower(value) }
+
+// Public collections return a stable API reference instead of a short-lived
+// object-store signature. The avatar endpoint rechecks discoverability on the
+// writer and redirects to a freshly signed object URL.
+func publicPlayerAvatarReference(playerID string, hasAvatar bool) *string {
+	if !hasAvatar {
+		return nil
+	}
+	return stringPointer("/v1/players/" + playerID + "/avatar")
+}
