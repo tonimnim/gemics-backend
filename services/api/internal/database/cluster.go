@@ -79,11 +79,25 @@ func (c *Cluster) Close() {
 func (c *Cluster) PingWriter(ctx context.Context) error { return c.Writer.Ping(ctx) }
 func (c *Cluster) PingReader(ctx context.Context) error { return c.Reader.Ping(ctx) }
 
+// ReaderLag reports how far the replica trails the writer.
+//
+// The timestamp of the last replayed transaction is only meaningful while writes
+// are flowing. On an idle cluster pg_last_xact_replay_timestamp stays fixed while
+// wall-clock advances, so a perfectly caught-up replica would report ever-growing
+// lag and every read would fall back to the writer during exactly the quiet
+// periods when the replica is most trustworthy.
+//
+// Comparing the received and replayed LSNs answers the real question: has this
+// replica applied everything it has been sent? If so the lag is zero whatever the
+// clock says, and the timestamp is consulted only when replay is genuinely behind.
 func (c *Cluster) ReaderLag(ctx context.Context) (time.Duration, error) {
 	var seconds float64
-	err := c.Reader.QueryRow(ctx, `SELECT CASE WHEN pg_is_in_recovery()
-		THEN COALESCE(EXTRACT(EPOCH FROM now()-pg_last_xact_replay_timestamp()),0)
-		ELSE 0 END`).Scan(&seconds)
+	err := c.Reader.QueryRow(ctx, `SELECT CASE
+		WHEN NOT pg_is_in_recovery() THEN 0
+		WHEN pg_last_wal_receive_lsn() IS NOT NULL
+			AND pg_last_wal_receive_lsn()=pg_last_wal_replay_lsn() THEN 0
+		ELSE COALESCE(EXTRACT(EPOCH FROM now()-pg_last_xact_replay_timestamp()),0)
+		END`).Scan(&seconds)
 	return time.Duration(seconds * float64(time.Second)), err
 }
 

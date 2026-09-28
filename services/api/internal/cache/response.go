@@ -124,6 +124,64 @@ func (cache *ResponseCache) GetOrLoad(ctx context.Context, logicalKey string, po
 	}
 }
 
+// Invalidate drops cached bodies so the next read reloads from PostgreSQL. It
+// is for writes that change what the public sees immediately - publishing or
+// cancelling a competition - where waiting out the freshness window would show
+// players a state the organizer has already left.
+//
+// Keys are deleted one at a time because bodyKey puts each logical key in its
+// own hash slot, so a multi-key delete would not be routable on a sharded
+// Redis. Failure is silent by design: a stale cache entry is a staleness
+// problem, never a reason to fail the write that already committed.
+func (cache *ResponseCache) Invalidate(parent context.Context, logicalKeys ...string) {
+	if cache == nil || cache.client == nil {
+		return
+	}
+	for _, logical := range logicalKeys {
+		ctx, cancel := context.WithTimeout(parent, cache.writeTimeout)
+		_ = cache.client.Del(ctx, cache.bodyKey(logical)).Err()
+		cancel()
+	}
+}
+
+// Generation returns the current version stamp for a family of cached
+// responses, or "0" when Redis is unavailable or the family has never been
+// bumped.
+//
+// Collection caches are keyed by a hash of their query string, so there is no
+// way to enumerate and delete them when the underlying data changes. Folding
+// this stamp into the key sidesteps that: bumping it makes every existing key in
+// the family unreachable at once, and the old entries fall out on their own TTL.
+func (cache *ResponseCache) Generation(parent context.Context, family string) string {
+	if cache == nil || cache.client == nil {
+		return "0"
+	}
+	ctx, cancel := context.WithTimeout(parent, cache.readTimeout)
+	defer cancel()
+	value, err := cache.client.Get(ctx, cache.generationKey(family)).Result()
+	if err != nil || value == "" || len(value) > 32 {
+		return "0"
+	}
+	return value
+}
+
+// BumpGeneration retires every cached response in a family. Call it after a
+// write that changes what a collection contains, never on a write that only
+// changes a counter inside one - bumping on every registration would throw away
+// the cache this design exists to provide.
+func (cache *ResponseCache) BumpGeneration(parent context.Context, family string) {
+	if cache == nil || cache.client == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, cache.writeTimeout)
+	defer cancel()
+	_ = cache.client.Incr(ctx, cache.generationKey(family)).Err()
+}
+
+func (cache *ResponseCache) generationKey(family string) string {
+	return cache.namespace + ":rc:gen:" + family
+}
+
 func (cache *ResponseCache) refreshInBackground(key string, policy Policy, loader Loader) {
 	cache.lifecycleMu.Lock()
 	if cache.closed || cache.refreshing[key] {

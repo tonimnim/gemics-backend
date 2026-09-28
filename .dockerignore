@@ -6,6 +6,8 @@ apps/mobile
 .vinext
 .wrangler
 .cache
+.gocache
+.loadtest
 dist
 coverage
 .env

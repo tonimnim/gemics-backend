@@ -12,6 +12,12 @@ dist/
 .env
 .env.local
 .env.docker
+.env.r2
+.env.loadtest
+.loadtest/
+.dev.vars
+.dev.vars.*
+tools/load/tokens*.json
 coverage/
 *.log
 bin/
