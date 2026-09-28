@@ -27,3 +27,17 @@ func (s *Server) requireDatabase(w http.ResponseWriter) bool {
 	}
 	return true
 }
+
+func validUniqueUUIDList(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !uuidPattern.MatchString(value) {
+			return false
+		}
+		if _, exists := seen[value]; exists {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
+}

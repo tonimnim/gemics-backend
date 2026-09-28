@@ -10,4 +10,5 @@ func (s *Server) registerPlayerDiscoveryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/players/{id}", s.publicPlayer)
 	mux.HandleFunc("GET /v1/players/{id}/matches", s.publicPlayerMatches)
 	mux.HandleFunc("GET /v1/players/{id}/competitions", s.publicPlayerCompetitions)
+	s.registerMediaRoutes(mux)
 }

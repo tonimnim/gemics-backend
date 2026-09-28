@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -108,10 +107,11 @@ func main() {
 	var evidenceStore storage.Provider
 	if cfg.StorageEnabled() {
 		evidenceStore, err = storage.NewS3(storage.S3Config{
-			Endpoint: cfg.StorageS3Endpoint, Region: cfg.StorageS3Region, Bucket: cfg.StorageS3Bucket,
+			Endpoint: cfg.StorageS3Endpoint, PublicEndpoint: cfg.StorageS3PublicEndpoint,
+			Region: cfg.StorageS3Region, Bucket: cfg.StorageS3Bucket,
 			AccessKey: cfg.StorageS3AccessKey, SecretKey: cfg.StorageS3SecretKey,
 			SessionToken: cfg.StorageS3SessionToken, ForcePathStyle: cfg.StorageS3PathStyle,
-			HTTPClient: &http.Client{Timeout: cfg.StorageHTTPTimeout},
+			HTTPClient: storage.NewHTTPClient(cfg.StorageHTTPTimeout),
 		})
 		if err != nil {
 			logger.Error("configure evidence storage", "error", err)

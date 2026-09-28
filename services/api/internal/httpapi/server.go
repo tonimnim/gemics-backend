@@ -102,9 +102,16 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	mux.Handle("POST /v1/evidence/uploads", s.requireAuth(http.HandlerFunc(s.createEvidenceUpload)))
 	mux.Handle("POST /v1/evidence/uploads/{id}/complete", s.requireAuth(http.HandlerFunc(s.completeEvidenceUpload)))
 	mux.Handle("GET /v1/evidence/{id}", s.requireAuth(http.HandlerFunc(s.getEvidenceAccess)))
-	mux.Handle("POST /v1/matches/{matchId}/result-submissions", s.requireAuth(http.HandlerFunc(s.submitMatchResult)))
-	mux.Handle("POST /v1/result-submissions/{id}/confirmations", s.requireAuth(http.HandlerFunc(s.decideResultSubmission)))
 	s.registerPlayerDiscoveryRoutes(mux)
+	s.registerMatchResultRoutes(mux)
+	s.registerOrganizerRoutes(mux)
+	s.registerOrganizerDrawRoutes(mux)
+	s.registerIdentityNotificationRoutes(mux)
+	s.registerPaymentLifecycleRoutes(mux)
+	s.registerPaymentReviewRoutes(mux)
+	s.registerResultReviewRoutes(mux)
+	s.registerGameAccountVerificationRoutes(mux)
+	s.registerCompetitionPolicyRoutes(mux)
 
 	s.http = &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -120,6 +127,17 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 
 func (s *Server) Run(ctx context.Context) error {
 	defer s.responses.Close()
+	workerCtx, stopWorkers := context.WithCancel(ctx)
+	defer stopWorkers()
+	if s.db != nil && s.mpesa != nil {
+		go s.runPaymentReconciler(workerCtx)
+	}
+	if s.db != nil {
+		go s.runMatchNoShowWorker(workerCtx)
+		go s.runMatchResultVerificationWorker(workerCtx)
+		go s.runLeaderboardProjector(workerCtx)
+		go s.runNotificationPipeline(workerCtx)
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		s.logger.Info("api listening", "address", s.http.Addr, "environment", s.config.Environment, "version", s.version)
@@ -263,7 +281,8 @@ func (w *responseMetricsWriter) Write(body []byte) (int, error) {
 func sensitivePath(path string) bool {
 	return strings.HasPrefix(path, "/v1/auth/") || strings.HasPrefix(path, "/v1/me") ||
 		strings.HasPrefix(path, "/v1/payments/") || strings.HasPrefix(path, "/v1/evidence/") ||
-		strings.HasPrefix(path, "/v1/matches/") || strings.HasPrefix(path, "/v1/result-submissions/")
+		strings.HasPrefix(path, "/v1/matches/") || strings.HasPrefix(path, "/v1/organizations") ||
+		strings.HasPrefix(path, "/v1/admin/") || strings.Contains(path, "/registrations/me/")
 }
 
 func safeLogPath(path string) string {
