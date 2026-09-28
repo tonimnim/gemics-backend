@@ -1,15 +1,15 @@
 import type {
   BackendCapabilityStatus,
   EvidenceUploadIntent,
+  FinalScoreReportInput,
   LocalEvidenceAsset,
   MatchCapabilityMap,
   MatchRepository,
-  MatchResult,
   MatchRoom,
   MatchSummary,
   PreparedEvidenceUpload,
-  ResultDecisionInput,
-  SubmitMatchResultInput,
+  ScoreReportInput,
+  ScoreReportOutcome,
 } from '@/features/matches/types';
 
 const apiURL = process.env.EXPO_PUBLIC_API_URL ?? 'http://10.0.2.2:8080';
@@ -41,7 +41,8 @@ export class BackendCapabilityError extends Error {
   }
 }
 
-type APIErrorBody = { error?: { code?: string; message?: string } };
+/** Every API error is `{ "error": "<code>", "message": "<text>" }`. */
+type APIErrorBody = { error?: string; message?: string };
 
 function createRequestId() {
   return globalThis.crypto?.randomUUID?.()
@@ -66,9 +67,9 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     }
     throw new APIError(
       response.status,
-      body?.error?.message ?? `Request failed with status ${response.status}`,
+      body?.message ?? `Request failed with status ${response.status}`,
       response.headers.get('X-Request-ID') ?? undefined,
-      body?.error?.code,
+      body?.error,
     );
   }
   if (response.status === 204) return undefined as T;
@@ -98,8 +99,8 @@ export type MobileAPICapability =
   | 'match_detail'
   | 'match_check_in'
   | 'evidence_uploads'
-  | 'result_submission'
-  | 'result_decisions';
+  | 'score_report'
+  | 'final_score_report';
 
 /**
  * `demo` means a local adapter may power the screen. `unavailable` means even the
@@ -115,8 +116,8 @@ export const mobileAPICapabilities: Readonly<Record<MobileAPICapability, Backend
   match_detail: 'available',
   match_check_in: 'available',
   evidence_uploads: 'available',
-  result_submission: 'available',
-  result_decisions: 'available',
+  score_report: 'available',
+  final_score_report: 'available',
 };
 
 export const mobileAPIContract = {
@@ -130,8 +131,8 @@ export const mobileAPIContract = {
   matchCheckIn: 'POST /v1/matches/{matchId}/check-ins',
   evidenceUpload: 'POST /v1/evidence/uploads',
   evidenceUploadComplete: 'POST /v1/evidence/uploads/{id}/complete',
-  resultSubmit: 'POST /v1/matches/{matchId}/result-submissions',
-  resultDecision: 'POST /v1/result-submissions/{id}/confirmations',
+  scoreReport: 'POST /v1/matches/{matchId}/score-reports',
+  finalScoreReport: 'POST /v1/matches/{matchId}/score-reports/final',
 } as const;
 
 export type CursorPage<T> = {
@@ -213,11 +214,6 @@ export type MyMatchesQuery = {
   cursor?: string;
 };
 
-/** Planned response envelope; final generated type must come from OpenAPI when implemented. */
-export type ResultDecisionResponse = {
-  data: { match: MatchRoom; submission: WireResultSubmission; ratingChanges?: RatingChange[] };
-};
-
 type WireEvidence = {
   id: string;
   status: string;
@@ -225,38 +221,6 @@ type WireEvidence = {
   byteSize: number;
   completedAt: string;
 };
-
-type WireResultSubmission = {
-  id: string;
-  matchId: string;
-  submittedBy: string;
-  homeScore: number;
-  awayScore: number;
-  tiebreak?: { type: 'penalties'; homeScore: number; awayScore: number };
-  evidenceIds: string[];
-  status: MatchResult['status'];
-  submittedAt: string;
-};
-
-export type RatingChange = { playerId: string; gameId: string; before: number; after: number; delta: number };
-
-function mapResultSubmission(value: WireResultSubmission): MatchResult {
-  return {
-    id: value.id,
-    submittedByPlayerId: value.submittedBy,
-    score: {
-      home: value.homeScore,
-      away: value.awayScore,
-      tiebreak: value.tiebreak
-        ? { type: value.tiebreak.type, home: value.tiebreak.homeScore, away: value.tiebreak.awayScore }
-        : undefined,
-    },
-    evidence: value.evidenceIds.map((id) => ({ id, fileName: 'Result screenshot', contentType: 'image/*' })),
-    declarationAcceptedAt: value.submittedAt,
-    submittedAt: value.submittedAt,
-    status: value.status,
-  };
-}
 
 function assertAvailable(capability: MobileAPICapability) {
   const status = mobileAPICapabilities[capability];
@@ -373,29 +337,30 @@ export async function completeEvidenceUpload(evidenceId: string) {
   });
 }
 
-export async function submitMatchResult(matchId: string, input: SubmitMatchResultInput) {
-  assertAvailable('result_submission');
-  return request<{ data: WireResultSubmission }>(`/v1/matches/${encodePathPart(matchId)}/result-submissions`, {
+/**
+ * Reports the caller's entry's score blind: score only, no screenshot. The
+ * response is the caller's own room and report; it never contains the
+ * opponent's claim.
+ */
+export async function submitScoreReport(matchId: string, input: ScoreReportInput) {
+  assertAvailable('score_report');
+  const { idempotencyKey, ...report } = input;
+  return request<{ data: ScoreReportOutcome }>(`/v1/matches/${encodePathPart(matchId)}/score-reports`, {
     method: 'POST',
-    headers: idempotencyHeaders(input.idempotencyKey),
-    body: JSON.stringify({
-      homeScore: input.homeScore,
-      awayScore: input.awayScore,
-      tiebreak: input.tiebreak,
-      games: input.games,
-      evidenceIds: input.evidenceIds,
-      declarationAccepted: input.declarationAccepted,
-    }),
+    headers: idempotencyHeaders(idempotencyKey),
+    body: JSON.stringify(report),
   });
 }
 
-export async function decideResultSubmission(submissionId: string, input: ResultDecisionInput) {
-  assertAvailable('result_decisions');
-  const { idempotencyKey, ...decision } = input;
-  return request<ResultDecisionResponse>(
-    `/v1/result-submissions/${encodePathPart(submissionId)}/confirmations`,
-    { method: 'POST', headers: idempotencyHeaders(idempotencyKey), body: JSON.stringify(decision) },
-  );
+/** Sends the entry's one final score after a mismatch, with one to three ready screenshots. */
+export async function submitFinalScoreReport(matchId: string, input: FinalScoreReportInput) {
+  assertAvailable('final_score_report');
+  const { idempotencyKey, ...report } = input;
+  return request<{ data: ScoreReportOutcome }>(`/v1/matches/${encodePathPart(matchId)}/score-reports/final`, {
+    method: 'POST',
+    headers: idempotencyHeaders(idempotencyKey),
+    body: JSON.stringify(report),
+  });
 }
 
 export const httpMatchRepository: MatchRepository = {
@@ -403,8 +368,8 @@ export const httpMatchRepository: MatchRepository = {
     match_detail: mobileAPICapabilities.match_detail,
     check_in: mobileAPICapabilities.match_check_in,
     signed_evidence_upload: mobileAPICapabilities.evidence_uploads,
-    result_submission: mobileAPICapabilities.result_submission,
-    result_decision: mobileAPICapabilities.result_decisions,
+    score_report: mobileAPICapabilities.score_report,
+    final_score_report: mobileAPICapabilities.final_score_report,
   } satisfies MatchCapabilityMap,
   async getMatch(matchId, signal) {
     return (await getMatch(matchId, signal)).data;
@@ -420,11 +385,10 @@ export const httpMatchRepository: MatchRepository = {
     const evidence = (await completeEvidenceUpload(evidenceId)).data;
     return { id: evidence.id, fileName: 'Result screenshot', contentType: evidence.mediaType, uploadedAt: evidence.completedAt };
   },
-  async submitResult(matchId, input) {
-    return mapResultSubmission((await submitMatchResult(matchId, input)).data);
+  async reportScore(matchId, input) {
+    return (await submitScoreReport(matchId, input)).data;
   },
-  async decideResult(submissionId, input) {
-    const outcome = (await decideResultSubmission(submissionId, input)).data;
-    return { match: outcome.match, submission: mapResultSubmission(outcome.submission) };
+  async submitFinalScore(matchId, input) {
+    return (await submitFinalScoreReport(matchId, input)).data;
   },
 };

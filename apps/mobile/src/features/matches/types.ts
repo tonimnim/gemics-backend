@@ -4,26 +4,32 @@ export type MatchCapability =
   | 'match_detail'
   | 'check_in'
   | 'signed_evidence_upload'
-  | 'result_submission'
-  | 'result_decision';
+  | 'score_report'
+  | 'final_score_report';
 
 export type MatchCapabilityMap = Record<MatchCapability, BackendCapabilityStatus>;
 
+/**
+ * Server-derived viewer lifecycle. `awaiting_resolution` covers the short gap
+ * between a passed deadline and the server settling the match; it offers no
+ * action.
+ */
 export type MatchLifecycle =
   | 'assigned'
   | 'ready_for_check_in'
   | 'checked_in'
-  | 'opponent_action_required'
-  | 'awaiting_opponent'
-  | 'confirmed'
-  | 'disputed'
+  | 'report_required'
+  | 'awaiting_opponent_report'
+  | 'mismatch_response_required'
+  | 'awaiting_opponent_response'
+  | 'awaiting_resolution'
   | 'under_review'
-  | 'completed'
-  | 'forfeited';
+  | 'forfeited'
+  | 'completed';
 
 export type ParticipantSide = 'home' | 'away';
 
-export type MatchAllowedAction = 'check_in' | 'submit_result' | 'confirm_result' | 'dispute_result';
+export type MatchAllowedAction = 'check_in' | 'report_score' | 'submit_final_score';
 
 export type MatchParticipant = {
   playerId: string;
@@ -45,6 +51,57 @@ export type MatchScore = {
   };
 };
 
+export type GameScore = { homeScore: number; awayScore: number };
+
+export type ScoreTiebreak = { type: 'penalties'; homeScore: number; awayScore: number };
+
+/**
+ * One of the viewer's own score reports, in the wire shape of the match room.
+ * The app never receives the opponent's claim.
+ */
+export type ScoreReport = {
+  id: string;
+  kind: 'initial' | 'final';
+  homeScore: number;
+  awayScore: number;
+  tiebreak: ScoreTiebreak | null;
+  games: GameScore[];
+  /** Present only on a final report. */
+  evidenceIds?: string[];
+  reportedAt: string;
+};
+
+export type ResultVerificationPhase =
+  | 'not_started'
+  | 'awaiting_second_report'
+  | 'awaiting_responses'
+  | 'in_review'
+  | 'resolved';
+
+export type ResultVerificationResolution =
+  | 'agreed'
+  | 'report_timeout'
+  | 'response_timeout'
+  | 'platform_review'
+  | 'competition_cancelled';
+
+/**
+ * The viewer's blind view of result verification. About the opponent it says
+ * only whether they reported or responded; each deadline is set only in the
+ * phase it governs.
+ */
+export type ResultVerification = {
+  phase: ResultVerificationPhase;
+  myReport: ScoreReport | null;
+  myFinalReport: ScoreReport | null;
+  opponentReported: boolean;
+  opponentResponded: boolean;
+  reportDeadline: string | null;
+  responseDeadline: string | null;
+  resolution: ResultVerificationResolution | null;
+  entryRemoved: boolean;
+};
+
 export type MatchEvidence = {
   id: string;
   fileName: string;
@@ -53,14 +110,15 @@ export type MatchEvidence = {
   uploadedAt?: string;
 };
 
+export type MatchResultOrigin = 'agreed_reports' | 'platform_review' | 'legacy';
+
+/** The canonical confirmed score, present only once the match is completed. */
 export type MatchResult = {
-  id: string;
-  submittedByPlayerId: string;
-  score: MatchScore;
-  evidence: MatchEvidence[];
-  declarationAcceptedAt: string;
-  submittedAt: string;
-  status: 'pending_confirmation' | 'confirmed' | 'disputed' | 'under_review';
+  homeScore: number;
+  awayScore: number;
+  tiebreak: ScoreTiebreak | null;
+  origin: MatchResultOrigin;
+  confirmedAt: string;
 };
 
 /**
@@ -86,7 +144,8 @@ export type MatchRoom = {
   currentPlayerSide: ParticipantSide;
   home: MatchParticipant;
   away: MatchParticipant;
-  result?: MatchResult;
+  resultVerification: ResultVerification;
+  result: MatchResult | null;
 };
 
 export type MatchSummary = Pick<
@@ -102,9 +161,7 @@ export type MatchSummary = Pick<
   | 'currentPlayerSide'
   | 'home'
   | 'away'
-> & {
-  result?: Pick<MatchResult, 'score' | 'status'>;
-};
+>;
 
 export type MatchHistoryItem = {
   matchId: string;
@@ -112,8 +169,7 @@ export type MatchHistoryItem = {
   opponent: MatchParticipant;
   score: MatchScore;
   outcome: 'win' | 'loss' | 'draw';
-  resultStatus: 'confirmed' | 'disputed' | 'forfeit';
-  playedAt: string;
+  result: Pick<MatchResult, 'origin' | 'confirmedAt'>;
   ratingDelta: number;
 };
 
@@ -138,25 +194,27 @@ export type EvidenceUploadIntent = {
   expiresAt: string;
 };
 
-export type SubmitMatchResultInput = {
+/** A blind initial report: score only, no screenshot. */
+export type ScoreReportInput = {
   idempotencyKey: string;
   homeScore: number;
   awayScore: number;
-  tiebreak?: { type: 'penalties'; homeScore: number; awayScore: number };
-  games: Array<{ homeScore: number; awayScore: number }>;
-  evidenceIds: string[];
+  tiebreak?: ScoreTiebreak;
+  /** Optional; the server records one aggregate game when omitted. */
+  games?: GameScore[];
   declarationAccepted: true;
 };
 
-export type ResultDecisionInput =
-  | { idempotencyKey: string; decision: 'confirm' }
-  | {
-      idempotencyKey: string;
-      decision: 'dispute';
-      reasonCode: 'score_mismatch' | 'invalid_evidence' | 'match_not_played' | 'other';
-      note: string;
-      evidenceIds: string[];
-    };
+/** The one final score after a mismatch, with one to three ready screenshots. */
+export type FinalScoreReportInput = ScoreReportInput & {
+  evidenceIds: string[];
+};
+
+/** The caller's updated blind room and the report just stored. */
+export type ScoreReportOutcome = {
+  match: MatchRoom;
+  report: ScoreReport;
+};
 
 export interface MatchRepository {
   readonly capabilities: MatchCapabilityMap;
@@ -165,6 +223,6 @@ export interface MatchRepository {
   createEvidenceUploadIntent(asset: PreparedEvidenceUpload): Promise<EvidenceUploadIntent>;
   uploadEvidence(intent: EvidenceUploadIntent, asset: LocalEvidenceAsset): Promise<void>;
   completeEvidenceUpload(evidenceId: string): Promise<MatchEvidence>;
-  submitResult(matchId: string, input: SubmitMatchResultInput): Promise<MatchResult>;
-  decideResult(submissionId: string, input: ResultDecisionInput): Promise<{ match: MatchRoom; submission: MatchResult }>;
+  reportScore(matchId: string, input: ScoreReportInput): Promise<ScoreReportOutcome>;
+  submitFinalScore(matchId: string, input: FinalScoreReportInput): Promise<ScoreReportOutcome>;
 }

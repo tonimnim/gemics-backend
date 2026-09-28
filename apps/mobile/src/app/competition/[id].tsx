@@ -64,10 +64,10 @@ export default function CompetitionDetailsScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>How results work</Text>
-          <Text style={styles.sectionBody}>After the match, attach the final-result screenshot and enter the score. Your opponent confirms it or opens a dispute for referee review.</Text>
+          <Text style={styles.sectionBody}>After the match, both sides report the score without seeing each other&apos;s. Matching scores confirm the result at once. If they differ, each side sends a final score with screenshots, and Gamics reviews any score that still differs. A side that doesn&apos;t report in time is removed from the tournament.</Text>
           <View style={styles.verificationRow}>
             <Feather color={colors.green} name="shield" size={18} />
-            <Text style={styles.verificationText}>Screenshot + opponent confirmation</Text>
+            <Text style={styles.verificationText}>Blind score reports + Gamics review</Text>
           </View>
         </View>
       </ScrollView>

@@ -17,9 +17,46 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/design/tokens';
 import { getDemoMatchRoom } from '@/features/matches/demo';
-import type { LocalEvidenceAsset, MatchLifecycle, MatchParticipant, MatchScore } from '@/features/matches/types';
+import type {
+  LocalEvidenceAsset,
+  MatchAllowedAction,
+  MatchLifecycle,
+  MatchParticipant,
+  ResultVerification,
+  ScoreReport,
+  ScoreTiebreak,
+} from '@/features/matches/types';
 
 const MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024;
+const MAX_FINAL_SCREENSHOTS = 3;
+const SCREENSHOT_MEDIA_TYPES = ['image/jpeg', 'image/png'];
+/** The demo mirrors the server's default report and response windows. */
+const DEMO_WINDOW_MS = 10 * 60 * 1000;
+
+type FeatherIcon = keyof typeof Feather.glyphMap;
+type ScoreClaim = Pick<ScoreReport, 'homeScore' | 'awayScore' | 'tiebreak'>;
+type ScoreDraft = { home: string; away: string; homePenalties: string; awayPenalties: string };
+
+const emptyDraft: ScoreDraft = { home: '', away: '', homePenalties: '', awayPenalties: '' };
+
+function digitsOnly(value: string) {
+  return value.replace(/\D/g, '');
+}
+
+function formatDeadline(deadline: string | null) {
+  if (!deadline) return 'the deadline';
+  return new Date(deadline).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function localReport(kind: ScoreReport['kind'], claim: ScoreClaim): ScoreReport {
+  return {
+    id: `local-${kind}-report`,
+    kind,
+    ...claim,
+    games: [{ homeScore: claim.homeScore, awayScore: claim.awayScore }],
+    reportedAt: new Date().toISOString(),
+  };
+}
 
 function Avatar({ player, accent = colors.blue }: { player: MatchParticipant; accent?: string }) {
   return (
@@ -52,7 +89,7 @@ function ScoreInput({ label, value, onChangeText }: { label: string; value: stri
         inputMode="numeric"
         keyboardType="number-pad"
         maxLength={2}
-        onChangeText={(next) => onChangeText(next.replace(/\D/g, ''))}
+        onChangeText={(next) => onChangeText(digitsOnly(next))}
         placeholder="0"
         placeholderTextColor={colors.subtleInk}
         selectTextOnFocus
@@ -63,12 +100,65 @@ function ScoreInput({ label, value, onChangeText }: { label: string; value: stri
   );
 }
 
-function ReadOnlyScore({ home, away, homeHandle, awayHandle }: { home: number; away: number; homeHandle: string; awayHandle: string }) {
+function ScoreFields({ draft, onChange, homeLabel, awayLabel, penaltiesRequired }: {
+  draft: ScoreDraft;
+  onChange: (next: ScoreDraft) => void;
+  homeLabel: string;
+  awayLabel: string;
+  penaltiesRequired: boolean;
+}) {
   return (
-    <View style={styles.readOnlyScore}>
-      <View style={styles.readOnlyPlayer}><Text numberOfLines={1} style={styles.readOnlyHandle}>{homeHandle}</Text><Text style={styles.readOnlyNumber}>{home}</Text></View>
-      <Text style={styles.scoreDash}>–</Text>
-      <View style={styles.readOnlyPlayer}><Text numberOfLines={1} style={styles.readOnlyHandle}>{awayHandle}</Text><Text style={styles.readOnlyNumber}>{away}</Text></View>
+    <>
+      <Text style={styles.inputLabel}>FINAL SCORE</Text>
+      <View style={styles.scoreEntry}>
+        <ScoreInput label={homeLabel} onChangeText={(home) => onChange({ ...draft, home })} value={draft.home} />
+        <Text style={styles.scoreSeparator}>–</Text>
+        <ScoreInput label={awayLabel} onChangeText={(away) => onChange({ ...draft, away })} value={draft.away} />
+      </View>
+      {penaltiesRequired ? (
+        <View style={styles.penaltiesBlock}>
+          <Text style={styles.inputLabel}>PENALTY SHOOTOUT</Text>
+          <View style={styles.penaltyRow}>
+            <TextInput accessibilityLabel={`${homeLabel} penalties`} inputMode="numeric" keyboardType="number-pad" maxLength={2} onChangeText={(next) => onChange({ ...draft, homePenalties: digitsOnly(next) })} placeholder="0" placeholderTextColor={colors.subtleInk} style={styles.penaltyInput} value={draft.homePenalties} />
+            <Text style={styles.penaltySeparator}>–</Text>
+            <TextInput accessibilityLabel={`${awayLabel} penalties`} inputMode="numeric" keyboardType="number-pad" maxLength={2} onChangeText={(next) => onChange({ ...draft, awayPenalties: digitsOnly(next) })} placeholder="0" placeholderTextColor={colors.subtleInk} style={styles.penaltyInput} value={draft.awayPenalties} />
+          </View>
+        </View>
+      ) : null}
+    </>
+  );
+}
+
+function Declaration({ checked, onToggle, text }: { checked: boolean; onToggle: () => void; text: string }) {
+  return (
+    <Pressable accessibilityRole="checkbox" accessibilityState={{ checked }} onPress={onToggle} style={styles.declaration}>
+      <View style={[styles.checkbox, checked && styles.checkboxChecked]}>{checked ? <Feather color={colors.ink} name="check" size={14} /> : null}</View>
+      <Text style={styles.declarationText}>{text}</Text>
+    </Pressable>
+  );
+}
+
+/** Shows one of the viewer's own reports. The opponent's claim is never available. */
+function OwnScore({ label, report, homeHandle, awayHandle }: { label: string; report: ScoreClaim; homeHandle: string; awayHandle: string }) {
+  return (
+    <View style={styles.ownScore}>
+      <Text style={styles.inputLabel}>{label}</Text>
+      <View style={styles.readOnlyScore}>
+        <View style={styles.readOnlyPlayer}><Text numberOfLines={1} style={styles.readOnlyHandle}>{homeHandle}</Text><Text style={styles.readOnlyNumber}>{report.homeScore}</Text></View>
+        <Text style={styles.scoreDash}>–</Text>
+        <View style={styles.readOnlyPlayer}><Text numberOfLines={1} style={styles.readOnlyHandle}>{awayHandle}</Text><Text style={styles.readOnlyNumber}>{report.awayScore}</Text></View>
+      </View>
+      {report.tiebreak ? <Text style={styles.tiebreakNote}>Penalties {report.tiebreak.homeScore}–{report.tiebreak.awayScore}</Text> : null}
+    </View>
+  );
+}
+
+function StatusPanel({ icon, tone, iconColor = colors.ink, title, detail }: { icon: FeatherIcon; tone: string; iconColor?: string; title: string; detail: string }) {
+  return (
+    <View style={styles.resolution}>
+      <View style={[styles.resolutionIcon, { backgroundColor: tone }]}><Feather color={iconColor} name={icon} size={21} /></View>
+      <Text style={styles.resolutionTitle}>{title}</Text>
+      <Text style={styles.resolutionDetail}>{detail}</Text>
     </View>
   );
 }
@@ -78,26 +168,74 @@ export default function MatchRoomScreen() {
   const matchId = Array.isArray(params.id) ? params.id[0] : params.id;
   const match = useMemo(() => getDemoMatchRoom(matchId), [matchId]);
   const [lifecycle, setLifecycle] = useState<MatchLifecycle>(match.lifecycle);
-  const [homeScore, setHomeScore] = useState('');
-  const [awayScore, setAwayScore] = useState('');
-  const [homePenalties, setHomePenalties] = useState('');
-  const [awayPenalties, setAwayPenalties] = useState('');
-  const [evidence, setEvidence] = useState<LocalEvidenceAsset | null>(null);
+  const [allowedActions, setAllowedActions] = useState<MatchAllowedAction[]>(match.allowedActions);
+  const [verification, setVerification] = useState<ResultVerification>(match.resultVerification);
+  const [draft, setDraft] = useState<ScoreDraft>(emptyDraft);
+  const [screenshots, setScreenshots] = useState<LocalEvidenceAsset[]>([]);
   const [declared, setDeclared] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [submittedScore, setSubmittedScore] = useState<MatchScore | null>(null);
-  const [reviewMode, setReviewMode] = useState<'none' | 'dispute'>('none');
-  const [disputeDetails, setDisputeDetails] = useState('');
-  const [reviewResolution, setReviewResolution] = useState<'confirmed' | 'disputed' | null>(null);
 
-  const canConfirmResult = match.allowedActions.includes('confirm_result');
-  const canDisputeResult = match.allowedActions.includes('dispute_result');
-  const canReviewResult = canConfirmResult || canDisputeResult;
-  const incomingResult = canReviewResult && match.result;
+  const opponent = match.currentPlayerSide === 'home' ? match.away : match.home;
   const checkedIn = lifecycle !== 'ready_for_check_in' && lifecycle !== 'assigned';
-  const canCheckIn = match.allowedActions.includes('check_in') && !checkedIn;
-  const canSubmitResult = match.allowedActions.includes('submit_result') || lifecycle === 'checked_in';
-  const scoresAreTied = homeScore !== '' && awayScore !== '' && Number(homeScore) === Number(awayScore);
+  const canCheckIn = allowedActions.includes('check_in');
+  const canReport = allowedActions.includes('report_score');
+  const canSubmitFinal = allowedActions.includes('submit_final_score');
+  const reporting = lifecycle === 'assigned' || lifecycle === 'ready_for_check_in' || lifecycle === 'checked_in' || lifecycle === 'report_required';
+  const penaltiesRequired = !match.drawAllowed && draft.home !== '' && draft.away !== '' && Number(draft.home) === Number(draft.away);
+
+  function fail(message: string): null {
+    setFormError(message);
+    return null;
+  }
+
+  function readScore(): ScoreClaim | null {
+    if (draft.home === '' || draft.away === '') return fail('Enter both final scores.');
+    let tiebreak: ScoreTiebreak | null = null;
+    if (penaltiesRequired) {
+      if (draft.homePenalties === '' || draft.awayPenalties === '' || Number(draft.homePenalties) === Number(draft.awayPenalties)) {
+        return fail('This round needs a winner. Enter the penalty shootout score.');
+      }
+      tiebreak = { type: 'penalties', homeScore: Number(draft.homePenalties), awayScore: Number(draft.awayPenalties) };
+    }
+    if (!declared) return fail('Confirm the declaration before sending your score.');
+    return { homeScore: Number(draft.home), awayScore: Number(draft.away), tiebreak };
+  }
+
+  function moveTo(next: MatchLifecycle, actions: MatchAllowedAction[]) {
+    setLifecycle(next);
+    setAllowedActions(actions);
+    setDraft(emptyDraft);
+    setDeclared(false);
+    setFormError(null);
+  }
+
+  function checkIn() {
+    // The demo treats the opponent as checked in, so reporting opens at once.
+    moveTo('report_required', ['report_score']);
+  }
+
+  function reportScore() {
+    const claim = readScore();
+    if (!claim) return;
+    setVerification({
+      ...verification,
+      phase: 'awaiting_second_report',
+      myReport: localReport('initial', claim),
+      reportDeadline: new Date(Date.now() + DEMO_WINDOW_MS).toISOString(),
+    });
+    moveTo('awaiting_opponent_report', []);
+  }
+
+  function submitFinalScore() {
+    if (screenshots.length === 0) {
+      setFormError('Attach at least one screenshot of the final result.');
+      return;
+    }
+    const claim = readScore();
+    if (!claim) return;
+    setVerification({ ...verification, myFinalReport: localReport('final', claim) });
+    moveTo('awaiting_opponent_response', []);
+  }
 
   async function pickScreenshot() {
     setFormError(null);
@@ -109,68 +247,129 @@ export default function MatchRoomScreen() {
     if (result.canceled) return;
 
     const selected = result.assets[0];
+    const contentType = selected.mimeType ?? 'image/jpeg';
+    if (!SCREENSHOT_MEDIA_TYPES.includes(contentType)) {
+      setFormError('Choose a JPEG or PNG screenshot. Convert HEIC photos to JPEG first.');
+      return;
+    }
     if (selected.fileSize && selected.fileSize > MAX_SCREENSHOT_BYTES) {
       setFormError('Choose a screenshot smaller than 10 MB.');
       return;
     }
-    setEvidence({
+    setScreenshots((current) => [...current, {
       uri: selected.uri,
-      fileName: selected.fileName ?? `match-${match.id}-result.jpg`,
-      contentType: selected.mimeType ?? 'image/jpeg',
+      fileName: selected.fileName ?? `match-${match.id}-result-${current.length + 1}.jpg`,
+      contentType,
       byteSize: selected.fileSize,
       width: selected.width,
       height: selected.height,
-    });
+    }].slice(0, MAX_FINAL_SCREENSHOTS));
   }
 
-  function checkIn() {
-    setLifecycle('checked_in');
-    setFormError(null);
+  function removeScreenshot(uri: string) {
+    setScreenshots((current) => current.filter((shot) => shot.uri !== uri));
   }
 
-  function submitResult() {
-    if (!checkedIn) {
-      setFormError('Check in before submitting a result.');
-      return;
-    }
-    if (homeScore === '' || awayScore === '') {
-      setFormError('Enter both final scores.');
-      return;
-    }
+  function renderStatus() {
+    const { myReport, myFinalReport } = verification;
+    switch (lifecycle) {
+      case 'awaiting_opponent_report':
+        return (
+          <View style={styles.flowSection}>
+            <StatusPanel
+              detail={`${opponent.handle} has until ${formatDeadline(verification.reportDeadline)} to report. Matching scores confirm the result at once. If they don't report in time, they're removed from the tournament and you win by forfeit.`}
+              icon="clock"
+              iconColor={colors.paper}
+              title={`Waiting for ${opponent.handle}`}
+              tone={colors.blue}
+            />
+            {myReport ? <OwnScore awayHandle={match.away.handle} homeHandle={match.home.handle} label="YOUR REPORT" report={myReport} /> : null}
+            <View style={styles.timeline}>
+              <Instruction complete detail="Only you can see the score you sent" number={1} title="Score reported" />
+              <Instruction detail="Your opponent reports without seeing your score" number={2} title="Opponent reports" />
+              <Instruction detail="Matching scores confirm the result and advance the bracket" number={3} title="Scores compared" />
+            </View>
+          </View>
+        );
+      case 'mismatch_response_required':
+        return (
+          <View style={[styles.flowSection, !canSubmitFinal && styles.disabledSection]} pointerEvents={canSubmitFinal ? 'auto' : 'none'}>
+            <View style={styles.sectionHeader}>
+              <View><Text style={styles.eyebrow}>SCORES DON&apos;T MATCH</Text><Text style={styles.sectionTitle}>Submit your final score</Text></View>
+              <View style={styles.actionBadge}><Text style={styles.actionBadgeText}>ACTION NEEDED</Text></View>
+            </View>
+            <Text style={styles.sectionBody}>
+              Your report and your opponent&apos;s report differ. Neither side sees the other&apos;s score. Send your final score once, with one to three screenshots of the final result, before {formatDeadline(verification.responseDeadline)}. If you don&apos;t, you&apos;re removed from the tournament.
+            </Text>
+            {myReport ? <OwnScore awayHandle={match.away.handle} homeHandle={match.home.handle} label="YOUR FIRST REPORT" report={myReport} /> : null}
+            <ScoreFields awayLabel={match.away.handle} draft={draft} homeLabel={match.home.handle} onChange={setDraft} penaltiesRequired={penaltiesRequired} />
 
-    const score: MatchScore = { home: Number(homeScore), away: Number(awayScore) };
-    if (scoresAreTied && !match.drawAllowed) {
-      if (homePenalties === '' || awayPenalties === '' || Number(homePenalties) === Number(awayPenalties)) {
-        setFormError('This round needs a winner. Enter the penalty shootout score.');
-        return;
-      }
-      score.tiebreak = { type: 'penalties', home: Number(homePenalties), away: Number(awayPenalties) };
-    }
-    if (!evidence) {
-      setFormError('Attach the final-result screenshot.');
-      return;
-    }
-    if (!declared) {
-      setFormError('Accept the result declaration before submitting.');
-      return;
-    }
+            <Text style={styles.inputLabel}>FINAL-RESULT SCREENSHOTS · {screenshots.length}/{MAX_FINAL_SCREENSHOTS}</Text>
+            {screenshots.map((shot) => (
+              <View key={shot.uri} style={styles.shotRow}>
+                <Image accessibilityLabel={`Selected screenshot ${shot.fileName}`} resizeMode="cover" source={{ uri: shot.uri }} style={styles.shotThumb} />
+                <View style={styles.previewCopy}><Text numberOfLines={1} style={styles.previewName}>{shot.fileName}</Text><Text style={styles.previewMeta}>JPEG or PNG · max 10 MB</Text></View>
+                <Pressable accessibilityLabel="Remove screenshot" hitSlop={8} onPress={() => removeScreenshot(shot.uri)} style={styles.removeButton}><Feather color={colors.paper} name="trash-2" size={18} /></Pressable>
+              </View>
+            ))}
+            {screenshots.length < MAX_FINAL_SCREENSHOTS ? (
+              <Pressable accessibilityHint="Opens your photo library" accessibilityLabel="Add result screenshot" onPress={pickScreenshot} style={styles.uploadButton}>
+                <View style={styles.uploadIcon}><Feather color={colors.acid} name="image" size={21} /></View>
+                <View style={styles.uploadCopy}><Text style={styles.uploadTitle}>Add screenshot</Text><Text style={styles.uploadHint}>JPEG or PNG · max 10 MB · up to three</Text></View>
+                <Feather color={colors.muted} name="plus" size={20} />
+              </Pressable>
+            ) : null}
 
-    setSubmittedScore(score);
-    setLifecycle('awaiting_opponent');
-    setFormError(null);
+            <Declaration checked={declared} onToggle={() => setDeclared((current) => !current)} text="I declare that this final score and these screenshots are accurate and from this match." />
+            {formError ? <Text accessibilityLiveRegion="polite" style={styles.error}>{formError}</Text> : null}
+            <Pressable onPress={submitFinalScore} style={styles.primaryWide}>
+              <Text style={styles.primaryWideText}>Submit final score</Text>
+              <Feather color={colors.ink} name="send" size={17} />
+            </Pressable>
+            <Text style={styles.backendNote}>Prototype flow only · screenshots are not uploaded and nothing is sent to Gamics.</Text>
+          </View>
+        );
+      case 'awaiting_opponent_response':
+        return (
+          <View style={styles.flowSection}>
+            <StatusPanel
+              detail={`If ${opponent.handle}'s final score matches yours, the result is confirmed. If it still differs, Gamics reviews the match. If they don't respond by ${formatDeadline(verification.responseDeadline)}, they're removed from the tournament.`}
+              icon="clock"
+              iconColor={colors.paper}
+              title="Final score submitted"
+              tone={colors.blue}
+            />
+            {myFinalReport ? <OwnScore awayHandle={match.away.handle} homeHandle={match.home.handle} label="YOUR FINAL SCORE" report={myFinalReport} /> : null}
+          </View>
+        );
+      case 'awaiting_resolution':
+        return (
+          <View style={styles.flowSection}>
+            <StatusPanel detail="A deadline has passed and Gamics is settling this match. You'll be notified of the outcome shortly." icon="clock" iconColor={colors.paper} title="Settling the result" tone={colors.blue} />
+          </View>
+        );
+      case 'under_review':
+        return (
+          <View style={styles.flowSection}>
+            <StatusPanel detail="The final scores still differ, so Gamics staff are reviewing the screenshots. Organizers and your opponent can't see yours. You'll be notified when a decision is made." icon="shield" title="Under Gamics review" tone={colors.orange} />
+          </View>
+        );
+      default:
+        return (
+          <View style={styles.flowSection}>
+            <StatusPanel
+              detail={verification.entryRemoved
+                ? 'Your entry was removed from this tournament because a score or final score was not sent in time, or after a Gamics review.'
+                : 'This match is over. The confirmed result is part of the bracket.'}
+              icon={verification.entryRemoved ? 'user-x' : 'check'}
+              title={verification.entryRemoved ? 'Removed from tournament' : 'Match over'}
+              tone={verification.entryRemoved ? colors.orange : colors.acid}
+            />
+            {match.result ? <OwnScore awayHandle={match.away.handle} homeHandle={match.home.handle} label="CONFIRMED RESULT" report={match.result} /> : null}
+          </View>
+        );
+    }
   }
-
-  function submitDispute() {
-    if (disputeDetails.trim().length < 10) {
-      setFormError('Describe the problem in at least 10 characters.');
-      return;
-    }
-    setReviewResolution('disputed');
-    setLifecycle('under_review');
-    setFormError(null);
-  }
-
-  const opponent = match.currentPlayerSide === 'home' ? match.away : match.home;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -196,78 +395,7 @@ export default function MatchRoomScreen() {
             <View style={styles.competitor}><Avatar accent={colors.orange} player={match.away} /><Text numberOfLines={1} style={styles.handle}>{match.away.handle}</Text></View>
           </View>
 
-          {incomingResult ? (
-            <View style={styles.flowSection}>
-              {reviewResolution === 'confirmed' ? (
-                <View style={styles.resolution}>
-                  <View style={[styles.resolutionIcon, { backgroundColor: colors.acid }]}><Feather color={colors.ink} name="check" size={22} /></View>
-                  <Text style={styles.resolutionTitle}>Demo confirmation recorded</Text>
-                  <Text style={styles.resolutionDetail}>Nothing was sent to Gamics and no record or bracket was updated. The confirmation API is still pending.</Text>
-                </View>
-              ) : reviewResolution === 'disputed' ? (
-                <View style={styles.resolution}>
-                  <View style={[styles.resolutionIcon, { backgroundColor: colors.orange }]}><Feather color={colors.ink} name="flag" size={20} /></View>
-                  <Text style={styles.resolutionTitle}>Demo dispute recorded</Text>
-                  <Text style={styles.resolutionDetail}>Nothing was sent and no referee queue was created. The decision API must exist before a real match can be frozen.</Text>
-                </View>
-              ) : (
-                <>
-                  <View style={styles.sectionHeader}>
-                    <View><Text style={styles.eyebrow}>OPPONENT SUBMITTED</Text><Text style={styles.sectionTitle}>Check the result</Text></View>
-                    <View style={styles.actionBadge}><Text style={styles.actionBadgeText}>ACTION NEEDED</Text></View>
-                  </View>
-                  <Text style={styles.sectionBody}>Only confirm if the score and screenshot match the game you played.</Text>
-                  <ReadOnlyScore home={incomingResult.score.home} away={incomingResult.score.away} homeHandle={match.home.handle} awayHandle={match.away.handle} />
-
-                  <View style={styles.receivedEvidence}>
-                    <View style={styles.receivedIcon}><Feather color={colors.acid} name="image" size={20} /></View>
-                    <View style={styles.receivedCopy}><Text style={styles.receivedTitle}>Final-result screenshot</Text><Text numberOfLines={1} style={styles.receivedName}>{incomingResult.evidence[0]?.fileName}</Text></View>
-                    <Feather color={colors.muted} name="maximize-2" size={18} />
-                  </View>
-
-                  {reviewMode === 'dispute' ? (
-                    <View style={styles.disputeForm}>
-                      <Text style={styles.inputLabel}>WHAT IS WRONG?</Text>
-                      <TextInput
-                        accessibilityLabel="Dispute details"
-                        multiline
-                        onChangeText={setDisputeDetails}
-                        placeholder="Example: the screenshot shows 2–1, but I won 3–2."
-                        placeholderTextColor={colors.subtleInk}
-                        style={styles.disputeInput}
-                        textAlignVertical="top"
-                        value={disputeDetails}
-                      />
-                      {formError ? <Text accessibilityLiveRegion="polite" style={styles.error}>{formError}</Text> : null}
-                      <View style={styles.reviewActions}>
-                        <Pressable onPress={() => { setReviewMode('none'); setFormError(null); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Cancel</Text></Pressable>
-                        <Pressable onPress={submitDispute} style={styles.dangerButton}><Text style={styles.dangerButtonText}>Submit dispute</Text></Pressable>
-                      </View>
-                    </View>
-                  ) : (
-                    <View style={styles.reviewActions}>
-                      <Pressable disabled={!canDisputeResult} onPress={() => setReviewMode('dispute')} style={[styles.secondaryButton, !canDisputeResult && styles.buttonUnavailable]}><Feather color={colors.paper} name="flag" size={16} /><Text style={styles.secondaryButtonText}>Dispute</Text></Pressable>
-                      <Pressable disabled={!canConfirmResult} onPress={() => { setReviewResolution('confirmed'); setLifecycle('confirmed'); }} style={[styles.primaryButton, !canConfirmResult && styles.buttonUnavailable]}><Feather color={colors.ink} name="check" size={17} /><Text style={styles.primaryButtonText}>Confirm result</Text></Pressable>
-                    </View>
-                  )}
-                </>
-              )}
-            </View>
-          ) : lifecycle === 'awaiting_opponent' && submittedScore ? (
-            <View style={styles.flowSection}>
-              <View style={styles.resolution}>
-                <View style={[styles.resolutionIcon, { backgroundColor: colors.blue }]}><Feather color={colors.paper} name="clock" size={21} /></View>
-                <Text style={styles.resolutionTitle}>Waiting for {opponent.handle}</Text>
-                <Text style={styles.resolutionDetail}>Your result is saved in this prototype. The signed upload and submission APIs are still required before it can be authoritative.</Text>
-              </View>
-              <ReadOnlyScore home={submittedScore.home} away={submittedScore.away} homeHandle={match.home.handle} awayHandle={match.away.handle} />
-              <View style={styles.timeline}>
-                <Instruction complete detail="Score, declaration and screenshot added" number={1} title="Result submitted" />
-                <Instruction detail="Opponent can confirm or open a dispute" number={2} title="Opponent verification" />
-                <Instruction detail="Confirmed result advances the bracket" number={3} title="Progression" />
-              </View>
-            </View>
-          ) : (
+          {reporting ? (
             <>
               <View style={styles.flowSection}>
                 <View style={styles.sectionHeader}><View><Text style={styles.eyebrow}>STEP 1</Text><Text style={styles.sectionTitle}>Check in</Text></View>{checkedIn ? <Feather color={colors.green} name="check-circle" size={23} /> : null}</View>
@@ -298,56 +426,23 @@ export default function MatchRoomScreen() {
                 </View>
               </View>
 
-              <View style={[styles.flowSection, !canSubmitResult && styles.disabledSection]} pointerEvents={canSubmitResult ? 'auto' : 'none'}>
-                <View><Text style={styles.eyebrow}>STEP 3</Text><Text style={styles.sectionTitle}>Submit result</Text></View>
-                <Text style={styles.inputLabel}>FINAL SCORE</Text>
-                <View style={styles.scoreEntry}>
-                  <ScoreInput label={match.home.handle} onChangeText={setHomeScore} value={homeScore} />
-                  <Text style={styles.scoreSeparator}>–</Text>
-                  <ScoreInput label={match.away.handle} onChangeText={setAwayScore} value={awayScore} />
-                </View>
-
-                {scoresAreTied && !match.drawAllowed ? (
-                  <View style={styles.penaltiesBlock}>
-                    <Text style={styles.inputLabel}>PENALTY SHOOTOUT</Text>
-                    <View style={styles.penaltyRow}>
-                      <TextInput accessibilityLabel={`${match.home.handle} penalties`} inputMode="numeric" keyboardType="number-pad" maxLength={2} onChangeText={(next) => setHomePenalties(next.replace(/\D/g, ''))} placeholder="0" placeholderTextColor={colors.subtleInk} style={styles.penaltyInput} value={homePenalties} />
-                      <Text style={styles.penaltySeparator}>–</Text>
-                      <TextInput accessibilityLabel={`${match.away.handle} penalties`} inputMode="numeric" keyboardType="number-pad" maxLength={2} onChangeText={(next) => setAwayPenalties(next.replace(/\D/g, ''))} placeholder="0" placeholderTextColor={colors.subtleInk} style={styles.penaltyInput} value={awayPenalties} />
-                    </View>
-                  </View>
-                ) : null}
-
-                <Text style={styles.inputLabel}>FINAL-RESULT SCREENSHOT</Text>
-                {evidence ? (
-                  <View style={styles.previewWrap}>
-                    <Image accessibilityLabel="Selected result screenshot" resizeMode="cover" source={{ uri: evidence.uri }} style={styles.preview} />
-                    <View style={styles.previewFooter}>
-                      <View style={styles.previewCopy}><Text numberOfLines={1} style={styles.previewName}>{evidence.fileName}</Text><Text style={styles.previewMeta}>Ready to upload · max 10 MB</Text></View>
-                      <Pressable accessibilityLabel="Remove screenshot" hitSlop={8} onPress={() => setEvidence(null)} style={styles.removeButton}><Feather color={colors.paper} name="trash-2" size={18} /></Pressable>
-                    </View>
-                  </View>
-                ) : (
-                  <Pressable accessibilityHint="Opens your photo library" accessibilityLabel="Add result screenshot" onPress={pickScreenshot} style={styles.uploadButton}>
-                    <View style={styles.uploadIcon}><Feather color={colors.acid} name="image" size={21} /></View>
-                    <View style={styles.uploadCopy}><Text style={styles.uploadTitle}>Choose screenshot</Text><Text style={styles.uploadHint}>JPG, PNG or HEIC · max 10 MB</Text></View>
-                    <Feather color={colors.muted} name="plus" size={20} />
-                  </Pressable>
-                )}
-
-                <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: declared }} onPress={() => setDeclared((current) => !current)} style={styles.declaration}>
-                  <View style={[styles.checkbox, declared && styles.checkboxChecked]}>{declared ? <Feather color={colors.ink} name="check" size={14} /> : null}</View>
-                  <Text style={styles.declarationText}>I declare that this score and screenshot are accurate and from this match.</Text>
-                </Pressable>
-
+              <View style={[styles.flowSection, !canReport && styles.disabledSection]} pointerEvents={canReport ? 'auto' : 'none'}>
+                <View><Text style={styles.eyebrow}>STEP 3</Text><Text style={styles.sectionTitle}>Report the score</Text></View>
+                <Text style={styles.sectionBody}>
+                  Report the score only; no screenshot is needed yet. Your opponent can&apos;t see your score and you won&apos;t see theirs. Matching scores confirm the result at once. After the first report, the other side has {Math.round(DEMO_WINDOW_MS / 60000)} minutes to report or is removed from the tournament.
+                </Text>
+                <ScoreFields awayLabel={match.away.handle} draft={draft} homeLabel={match.home.handle} onChange={setDraft} penaltiesRequired={penaltiesRequired} />
+                <Declaration checked={declared} onToggle={() => setDeclared((current) => !current)} text="I declare that this is the final score of this match." />
                 {formError ? <Text accessibilityLiveRegion="polite" style={styles.error}>{formError}</Text> : null}
-                <Pressable onPress={submitResult} style={styles.primaryWide}>
-                  <Text style={styles.primaryWideText}>Submit for confirmation</Text>
+                <Pressable onPress={reportScore} style={styles.primaryWide}>
+                  <Text style={styles.primaryWideText}>Report score</Text>
                   <Feather color={colors.ink} name="send" size={17} />
                 </Pressable>
-                <Text style={styles.backendNote}>Prototype flow only · signed evidence upload and result APIs are not live yet.</Text>
+                <Text style={styles.backendNote}>Prototype flow only · score reports are not sent to Gamics yet.</Text>
               </View>
             </>
+          ) : (
+            renderStatus()
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -411,9 +506,8 @@ const styles = StyleSheet.create({
   uploadCopy: { flex: 1 },
   uploadTitle: { color: colors.paper, fontSize: 13, fontWeight: '800' },
   uploadHint: { color: colors.muted, marginTop: 3, fontSize: 10 },
-  previewWrap: { overflow: 'hidden', borderRadius: radius.md, backgroundColor: colors.panel },
-  preview: { width: '100%', aspectRatio: 16 / 9, backgroundColor: colors.subtleInk },
-  previewFooter: { minHeight: 56, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  shotRow: { minHeight: 68, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: radius.md, backgroundColor: colors.panel },
+  shotThumb: { width: 48, height: 48, borderRadius: radius.sm, backgroundColor: colors.subtleInk },
   previewCopy: { flex: 1, minWidth: 0 },
   previewName: { color: colors.paper, fontSize: 12, fontWeight: '700' },
   previewMeta: { color: colors.muted, marginTop: 2, fontSize: 9 },
@@ -424,25 +518,13 @@ const styles = StyleSheet.create({
   declarationText: { flex: 1, color: colors.paper, fontSize: 12, lineHeight: 17 },
   error: { color: colors.orange, fontSize: 12, lineHeight: 17 },
   backendNote: { color: colors.muted, fontSize: 9, lineHeight: 14, textAlign: 'center' },
+  ownScore: { gap: 6 },
   readOnlyScore: { minHeight: 112, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.md, borderRadius: radius.md, backgroundColor: colors.panel },
   readOnlyPlayer: { width: 100, alignItems: 'center' },
   readOnlyHandle: { width: '100%', color: colors.muted, fontFamily: fonts.mono, fontSize: 9, textAlign: 'center' },
   readOnlyNumber: { color: colors.paper, marginTop: 4, fontFamily: fonts.mono, fontSize: 34, fontWeight: '900' },
   scoreDash: { color: colors.muted, fontSize: 24 },
-  receivedEvidence: { minHeight: 68, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: radius.md, backgroundColor: colors.panel },
-  receivedIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ink },
-  receivedCopy: { flex: 1, minWidth: 0 },
-  receivedTitle: { color: colors.paper, fontSize: 12, fontWeight: '700' },
-  receivedName: { color: colors.muted, marginTop: 3, fontSize: 10 },
-  reviewActions: { flexDirection: 'row', gap: spacing.sm },
-  secondaryButton: { minHeight: 50, flex: 1, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line },
-  secondaryButtonText: { color: colors.paper, fontSize: 13, fontWeight: '800' },
-  primaryButton: { minHeight: 50, flex: 1.35, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: radius.md, backgroundColor: colors.acid },
-  primaryButtonText: { color: colors.ink, fontSize: 13, fontWeight: '900' },
-  disputeForm: { gap: spacing.md },
-  disputeInput: { minHeight: 116, padding: 12, borderRadius: radius.md, color: colors.paper, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.line, fontSize: 13, lineHeight: 19 },
-  dangerButton: { minHeight: 50, flex: 1.5, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.orange },
-  dangerButtonText: { color: colors.ink, fontSize: 13, fontWeight: '900' },
+  tiebreakNote: { color: colors.muted, fontFamily: fonts.mono, fontSize: 10, textAlign: 'center' },
   resolution: { alignItems: 'center', paddingVertical: spacing.lg },
   resolutionIcon: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginBottom: 13 },
   resolutionTitle: { color: colors.paper, fontSize: 21, fontWeight: '900', textAlign: 'center' },

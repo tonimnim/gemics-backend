@@ -7,19 +7,31 @@ import { colors, fonts, radius, spacing } from '@/design/tokens';
 import { demoAssignedMatches, demoMatchHistory } from '@/features/matches/demo';
 import type { MatchHistoryItem, MatchSummary } from '@/features/matches/types';
 
+function needsAction(match: MatchSummary) {
+  return match.allowedActions.includes('report_score') || match.allowedActions.includes('submit_final_score');
+}
+
 function statusCopy(match: MatchSummary) {
-  if (match.allowedActions.includes('confirm_result') || match.allowedActions.includes('dispute_result')) {
-    return { label: 'Confirm result', tone: colors.orange };
+  if (match.allowedActions.includes('submit_final_score')) {
+    return { label: 'Scores differ · send final score', tone: colors.orange };
+  }
+  if (match.allowedActions.includes('report_score')) {
+    return { label: 'Report score', tone: colors.orange };
   }
   if (match.allowedActions.includes('check_in')) {
     return { label: 'Check-in open', tone: colors.acid };
   }
   switch (match.lifecycle) {
-    case 'awaiting_opponent':
+    case 'awaiting_opponent_report':
+    case 'awaiting_opponent_response':
       return { label: 'Awaiting opponent', tone: colors.blue };
-    case 'disputed':
+    case 'awaiting_resolution':
+      return { label: 'Settling result', tone: colors.blue };
     case 'under_review':
-      return { label: 'Under review', tone: colors.orange };
+      return { label: 'Gamics review', tone: colors.orange };
+    case 'forfeited':
+    case 'completed':
+      return { label: 'Finished', tone: colors.muted };
     default:
       return { label: 'Scheduled', tone: colors.muted };
   }
@@ -79,8 +91,8 @@ function HistoryRow({ item }: { item: MatchHistoryItem }) {
 }
 
 export default function MatchesScreen() {
-  const needsAction = demoAssignedMatches.filter((match) => match.lifecycle === 'opponent_action_required');
-  const upcoming = demoAssignedMatches.filter((match) => match.lifecycle !== 'opponent_action_required');
+  const actionable = demoAssignedMatches.filter(needsAction);
+  const upcoming = demoAssignedMatches.filter((match) => !needsAction(match));
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -88,7 +100,7 @@ export default function MatchesScreen() {
         <View style={styles.header}>
           <View>
             <Text style={styles.title}>Matches</Text>
-            <Text style={styles.subtitle}>Play, report, verify.</Text>
+            <Text style={styles.subtitle}>Play, report blind, settle.</Text>
           </View>
           <View style={styles.demoBadge}>
             <View style={styles.demoDot} />
@@ -96,10 +108,10 @@ export default function MatchesScreen() {
           </View>
         </View>
 
-        {needsAction.length > 0 ? (
+        {actionable.length > 0 ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Needs your action</Text>
-            <View style={styles.list}>{needsAction.map((match) => <MatchRow key={match.id} match={match} />)}</View>
+            <View style={styles.list}>{actionable.map((match) => <MatchRow key={match.id} match={match} />)}</View>
           </View>
         ) : null}
 

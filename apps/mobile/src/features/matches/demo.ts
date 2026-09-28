@@ -1,4 +1,4 @@
-import type { MatchHistoryItem, MatchRoom, MatchSummary } from './types';
+import type { MatchHistoryItem, MatchRoom, MatchSummary, ResultVerification } from './types';
 
 const brian = {
   playerId: 'player-brian',
@@ -20,6 +20,19 @@ const pressing = {
   displayName: 'Pressing King',
   initials: 'PK',
 } as const;
+
+/** Blind room state before either entry has reported. */
+const notStarted: ResultVerification = {
+  phase: 'not_started',
+  myReport: null,
+  myFinalReport: null,
+  opponentReported: false,
+  opponentResponded: false,
+  reportDeadline: null,
+  responseDeadline: null,
+  resolution: null,
+  entryRemoved: false,
+};
 
 export const demoMatchRooms: Record<string, MatchRoom> = {
   'match-024': {
@@ -46,6 +59,8 @@ export const demoMatchRooms: Record<string, MatchRoom> = {
     currentPlayerSide: 'home',
     home: { ...brian, side: 'home' },
     away: { ...slick, side: 'away' },
+    resultVerification: notStarted,
+    result: null,
   },
   'match-025': {
     id: 'match-025',
@@ -59,32 +74,32 @@ export const demoMatchRooms: Record<string, MatchRoom> = {
     drawAllowed: true,
     scheduledAt: '2026-08-09T16:00:00+03:00',
     checkInClosesAt: '2026-08-09T16:10:00+03:00',
-    lifecycle: 'opponent_action_required',
-    allowedActions: ['confirm_result', 'dispute_result'],
+    lifecycle: 'mismatch_response_required',
+    allowedActions: ['submit_final_score'],
     friendMatchInstructions: [
-      { title: 'Review the submitted score', detail: 'Compare it with the match you played.' },
-      { title: 'Inspect the screenshot', detail: 'Both handles and the final score should be visible.' },
+      { title: 'Check your final-result screenshot', detail: 'Both handles and the final score should be visible.' },
+      { title: 'Submit your final score', detail: 'Send the score once, with one to three screenshots, before the deadline.' },
     ],
     currentPlayerId: brian.playerId,
     currentPlayerSide: 'away',
     home: { ...pressing, side: 'home', checkedInAt: '2026-08-09T15:55:00+03:00' },
     away: { ...brian, side: 'away', checkedInAt: '2026-08-09T15:56:00+03:00' },
-    result: {
-      id: 'result-025',
-      submittedByPlayerId: pressing.playerId,
-      score: { home: 2, away: 1 },
-      evidence: [
-        {
-          id: 'evidence-025',
-          fileName: 'final-result-m025.jpg',
-          contentType: 'image/jpeg',
-          uploadedAt: '2026-08-09T16:31:00+03:00',
-        },
-      ],
-      declarationAcceptedAt: '2026-08-09T16:32:00+03:00',
-      submittedAt: '2026-08-09T16:32:00+03:00',
-      status: 'pending_confirmation',
+    resultVerification: {
+      ...notStarted,
+      phase: 'awaiting_responses',
+      myReport: {
+        id: 'report-025-away',
+        kind: 'initial',
+        homeScore: 1,
+        awayScore: 2,
+        tiebreak: null,
+        games: [{ homeScore: 1, awayScore: 2 }],
+        reportedAt: '2026-08-09T16:31:00+03:00',
+      },
+      opponentReported: true,
+      responseDeadline: '2026-08-09T16:43:00+03:00',
     },
+    result: null,
   },
 };
 
@@ -100,7 +115,6 @@ export const demoAssignedMatches: MatchSummary[] = Object.values(demoMatchRooms)
   currentPlayerSide: match.currentPlayerSide,
   home: match.home,
   away: match.away,
-  result: match.result ? { score: match.result.score, status: match.result.status } : undefined,
 }));
 
 export const demoMatchHistory: MatchHistoryItem[] = [
@@ -110,8 +124,7 @@ export const demoMatchHistory: MatchHistoryItem[] = [
     opponent: { ...slick, side: 'away' },
     score: { home: 3, away: 1 },
     outcome: 'win',
-    resultStatus: 'confirmed',
-    playedAt: '2026-08-08T19:14:00+03:00',
+    result: { origin: 'agreed_reports', confirmedAt: '2026-08-08T19:14:00+03:00' },
     ratingDelta: 18,
   },
   {
@@ -120,8 +133,7 @@ export const demoMatchHistory: MatchHistoryItem[] = [
     opponent: { playerId: 'player-tiki', handle: '@tiki_taka254', displayName: 'Tiki Taka', initials: 'TT', side: 'home' },
     score: { home: 0, away: 2 },
     outcome: 'win',
-    resultStatus: 'confirmed',
-    playedAt: '2026-08-02T14:20:00+03:00',
+    result: { origin: 'agreed_reports', confirmedAt: '2026-08-02T14:20:00+03:00' },
     ratingDelta: 21,
   },
   {
@@ -130,8 +142,7 @@ export const demoMatchHistory: MatchHistoryItem[] = [
     opponent: { playerId: 'player-mombasa', handle: '@mombasa10', displayName: 'Mombasa 10', initials: 'M1', side: 'away' },
     score: { home: 1, away: 2 },
     outcome: 'loss',
-    resultStatus: 'confirmed',
-    playedAt: '2026-07-27T12:45:00+03:00',
+    result: { origin: 'agreed_reports', confirmedAt: '2026-07-27T12:45:00+03:00' },
     ratingDelta: -12,
   },
 ];

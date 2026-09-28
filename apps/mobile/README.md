@@ -16,9 +16,11 @@ checks, but evidence capture, notifications and secure session storage will be
 validated in development builds before release.
 
 The current player build includes the native five-tab shell, compact searchable
-rankings, public player profiles, match history and a screenshot-backed result
-confirmation/dispute prototype. Match, ranking and evidence mutations are visibly
-marked demo-only and capability-gated; they do not claim a backend action succeeded.
+rankings, public player profiles, match history and a blind score-report
+prototype: a score-only report, and a final score with one to three screenshots
+when the reports don't match. The opponent's score is never shown. Match, ranking
+and evidence mutations are visibly marked demo-only and capability-gated; they do
+not claim a backend action succeeded.
 
 Backend handoff:
 
