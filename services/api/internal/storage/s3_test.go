@@ -23,7 +23,7 @@ func TestS3PresignPutRequiresProviderVerifiedChecksum(t *testing.T) {
 	}
 	digest := sha256.Sum256([]byte("result image"))
 	checksum := base64.StdEncoding.EncodeToString(digest[:])
-	intent, err := client.PresignPut(context.Background(), "evidence/2026/08/object.bin", "image/jpeg", checksum, 10*time.Minute)
+	intent, err := client.PresignPut(context.Background(), "evidence/2026/08/object.bin", "image/jpeg", checksum, 12, 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +72,112 @@ func TestS3StatReadsProviderChecksum(t *testing.T) {
 	}
 	if info.Size != 1234 || !EqualChecksum(info.ChecksumSHA256, checksum) || info.ETag != "etag-value" {
 		t.Fatalf("unexpected object info: %#v", info)
+	}
+}
+
+func TestS3UsesPublicHostForPresignsAndInternalHostForStat(t *testing.T) {
+	digest := sha256.Sum256([]byte("result image"))
+	checksum := base64.StdEncoding.EncodeToString(digest[:])
+	var internalHost string
+	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead || r.Host != internalHost || r.URL.Path != "/gamics-evidence/evidence/object.jpg" {
+			t.Fatalf("unexpected internal request: method=%s host=%s", r.Method, r.Host)
+		}
+		w.Header().Set("Content-Length", "12")
+		w.Header().Set("x-amz-checksum-sha256", checksum)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer internal.Close()
+	internalHost = strings.TrimPrefix(internal.URL, "http://")
+
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	client, err := NewS3(S3Config{
+		Endpoint: internal.URL, PublicEndpoint: "http://192.0.2.25:9000", Region: "af-south-1",
+		Bucket: "gamics-evidence", AccessKey: "local-access", SecretKey: "do-not-leak-this-secret",
+		ForcePathStyle: true, HTTPClient: internal.Client(), Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	put, err := client.PresignPut(context.Background(), "evidence/object.jpg", "image/jpeg", checksum, 12, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get, err := client.PresignGet(context.Background(), "evidence/object.jpg", 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{put.URL, get.URL} {
+		parsed, parseErr := url.Parse(raw)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		if parsed.Host != "192.0.2.25:9000" || parsed.Path != "/gamics-evidence/evidence/object.jpg" {
+			t.Fatalf("presign was not routed to the public origin: %s", raw)
+		}
+		if strings.Contains(raw, "do-not-leak-this-secret") {
+			t.Fatal("secret key leaked into a presigned URL")
+		}
+	}
+	if _, err = client.Stat(context.Background(), "evidence/object.jpg"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestS3PublicEndpointDefaultsToInternalAndChangesHostBoundSignature(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	digest := sha256.Sum256([]byte("result image"))
+	checksum := base64.StdEncoding.EncodeToString(digest[:])
+	base := S3Config{
+		Endpoint: "http://minio:9000", Region: "af-south-1", Bucket: "gamics-evidence",
+		AccessKey: "access", SecretKey: "secret", ForcePathStyle: true, Now: func() time.Time { return now },
+	}
+	internalOnly, err := NewS3(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	internalIntent, err := internalOnly.PresignPut(context.Background(), "evidence/object.jpg", "image/jpeg", checksum, 12, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	internalURL, _ := url.Parse(internalIntent.URL)
+	if internalURL.Host != "minio:9000" {
+		t.Fatalf("blank public endpoint did not default to internal: %s", internalIntent.URL)
+	}
+
+	base.PublicEndpoint = "http://localhost:9000"
+	publicClient, err := NewS3(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicIntent, err := publicClient.PresignPut(context.Background(), "evidence/object.jpg", "image/jpeg", checksum, 12, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicURL, _ := url.Parse(publicIntent.URL)
+	if publicURL.Host != "localhost:9000" {
+		t.Fatalf("public host was ignored: %s", publicIntent.URL)
+	}
+	if internalURL.Query().Get("X-Amz-Signature") == publicURL.Query().Get("X-Amz-Signature") {
+		t.Fatal("changing the signed Host did not change the signature")
+	}
+}
+
+func TestS3RejectsUnsafePublicEndpoints(t *testing.T) {
+	base := S3Config{
+		Endpoint: "https://objects.internal", Region: "af-south-1", Bucket: "gamics-evidence",
+		AccessKey: "access", SecretKey: "secret", ForcePathStyle: true,
+	}
+	for _, endpoint := range []string{
+		"http://user:password@localhost:9000",
+		"http://localhost:9000/storage",
+		"http://localhost:9000?secret=value",
+		"ftp://localhost:9000",
+	} {
+		base.PublicEndpoint = endpoint
+		if _, err := NewS3(base); err == nil {
+			t.Fatalf("unsafe public endpoint accepted: %s", endpoint)
+		}
 	}
 }
 

@@ -1,0 +1,13 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": ["http://localhost:3000"],
+        "methods": ["PUT", "GET", "HEAD"],
+        "headers": ["Content-Type", "Content-Length", "If-None-Match", "x-amz-checksum-sha256"]
+      },
+      "exposeHeaders": ["ETag", "x-amz-checksum-sha256"],
+      "maxAgeSeconds": 3600
+    }
+  ]
+}
