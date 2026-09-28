@@ -136,6 +136,23 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "unsupported_fee", "This competition fee cannot be collected through M-Pesa.")
 		return
 	}
+	eligibility, eligibilityErr := loadCompetitionEligibility(r.Context(), tx, input.CompetitionID, userID,
+		input.GameAccountID, now.UTC(), s.config.StrikeBanThreshold)
+	if errors.Is(eligibilityErr, errInvalidEligibilityPolicy) {
+		s.logger.Error("invalid competition eligibility policy", "competition_id", input.CompetitionID, "error", eligibilityErr)
+		writeError(w, http.StatusServiceUnavailable, "eligibility_policy_invalid", "This competition's eligibility policy is unavailable.")
+		return
+	}
+	if eligibilityErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "eligibility_unavailable", "Eligibility cannot be evaluated right now.")
+		return
+	}
+	if issue := eligibility.firstBlockingIssue(); issue != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "competition_ineligible", "message": issue.Message, "issue": issue, "eligibility": eligibility,
+		})
+		return
+	}
 
 	var accountGameID, entryDisplayName string
 	var onboardingComplete bool
@@ -407,11 +424,9 @@ func (s *Server) processCallbackEvent(ctx context.Context, eventID int64, callba
 		return s.finishCallbackEvent(ctx, eventID, "")
 	}
 	if status == "succeeded" && data.ResultCode != 0 {
-		_, err = s.db.Writer.Exec(ctx, `UPDATE payment_intents SET status='review',updated_at=now(),
-			provider_result_description='Conflicting callback received after successful payment' WHERE id=$1`, paymentID)
-		if err != nil {
-			return err
-		}
+		// A verified successful collection is immutable accounting history. The
+		// conflicting callback remains durably visible through its event record,
+		// without rewriting any successful payment fields.
 		return s.finishCallbackEvent(ctx, eventID, "conflicting callback received after successful payment")
 	}
 	command, err := s.db.Writer.Exec(ctx, `UPDATE payment_intents SET callback_payload=$2,
@@ -437,7 +452,7 @@ func (s *Server) processCallbackEvent(ctx context.Context, eventID int64, callba
 			return fmt.Errorf("callback/query result mismatch: callback=%d query=%s", data.ResultCode, queryCode)
 		}
 		_, err = s.db.Writer.Exec(ctx, `UPDATE payment_intents SET status='failed',completed_at=now(),updated_at=now()
-			WHERE id=$1 AND status IN ('initiating','pending','callback_received')`, paymentID)
+			WHERE id=$1 AND status IN ('initiating','pending','callback_received','review')`, paymentID)
 		if err != nil {
 			return err
 		}
@@ -464,11 +479,73 @@ func (s *Server) processCallbackEvent(ctx context.Context, eventID int64, callba
 	return s.finishCallbackEvent(ctx, eventID, "")
 }
 
+type verifiedPaymentRegistrationPlan struct {
+	EntryStatus  string
+	RefundReason string
+	RefundNote   string
+}
+
+func planVerifiedPaymentRegistration(competitionStatus string, drawExists, capacityFull bool,
+	existingEntryStatus *string, existingEntryInDraw bool) verifiedPaymentRegistrationPlan {
+	refund := func(reason, note string) verifiedPaymentRegistrationPlan {
+		return verifiedPaymentRegistrationPlan{EntryStatus: "withdrawal_pending", RefundReason: reason, RefundNote: note}
+	}
+	if competitionStatus == "cancelled" {
+		return refund("competition_cancelled", "Verified M-Pesa payment arrived after the competition was cancelled; automatic full refund required.")
+	}
+	if existingEntryStatus != nil {
+		if *existingEntryStatus == "withdrawn" || *existingEntryStatus == "disqualified" || *existingEntryStatus == "withdrawal_pending" {
+			return refund("operations_adjustment", "Verified M-Pesa payment cannot reactivate an inactive entry; automatic full refund required.")
+		}
+		// A player already frozen into the draw is not a late entrant. Preserve
+		// that participant and attach the independently verified collection.
+		if existingEntryInDraw {
+			return verifiedPaymentRegistrationPlan{EntryStatus: *existingEntryStatus}
+		}
+		if drawExists {
+			return refund("operations_adjustment", "Verified M-Pesa payment arrived after the bracket draw was frozen; automatic full refund required.")
+		}
+		if competitionStatus == "registration_open" || competitionStatus == "check_in" {
+			return verifiedPaymentRegistrationPlan{EntryStatus: *existingEntryStatus}
+		}
+		return refund("operations_adjustment", "Verified M-Pesa payment arrived after registration could join the competition; automatic full refund required.")
+	}
+	if drawExists {
+		return refund("operations_adjustment", "Verified M-Pesa payment arrived after the bracket draw was frozen; automatic full refund required.")
+	}
+	if capacityFull {
+		return refund("operations_adjustment", "Verified M-Pesa payment arrived after competition capacity was filled; automatic full refund required.")
+	}
+	if competitionStatus != "registration_open" && competitionStatus != "check_in" {
+		return refund("operations_adjustment", "Verified M-Pesa payment arrived after registration could join the competition; automatic full refund required.")
+	}
+	return verifiedPaymentRegistrationPlan{EntryStatus: "registered"}
+}
+
+// planConductSuspendedPayment applies the strike ban to a verified payment
+// (D14): a payer at the conduct strike limit gets no new entry, only an
+// automatic refund. Existing entries are unaffected, and a refund already
+// planned for another reason keeps that reason.
+func planConductSuspendedPayment(plan verifiedPaymentRegistrationPlan, existingEntryStatus *string,
+	conductSuspended bool) verifiedPaymentRegistrationPlan {
+	if !conductSuspended || existingEntryStatus != nil || plan.RefundReason != "" {
+		return plan
+	}
+	return verifiedPaymentRegistrationPlan{EntryStatus: "withdrawal_pending", RefundReason: "operations_adjustment",
+		RefundNote: "Verified M-Pesa payment arrived after the account reached the conduct strike limit; automatic full refund required."}
+}
+
+const invalidTransactionTimestampReviewSQL = `UPDATE payment_intents SET status='review',
+	provider_result_description='Invalid provider transaction timestamp',completed_at=NULL,updated_at=now()
+	WHERE id=$1 AND status IN ('pending','callback_received','review')`
+
+const competitionCapacityEntriesSQL = `SELECT count(*) FROM competition_entries WHERE competition_id=$1
+	AND status NOT IN ('withdrawn','disqualified')`
+
 func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transactionDate string, payload []byte) error {
 	transactionAt := parseMPesaTime(transactionDate)
 	if transactionAt == nil {
-		_, updateErr := s.db.Writer.Exec(ctx, `UPDATE payment_intents SET status='review',
-			provider_result_description='Invalid provider transaction timestamp',updated_at=now() WHERE id=$1`, paymentID)
+		_, updateErr := s.db.Writer.Exec(ctx, invalidTransactionTimestampReviewSQL, paymentID)
 		if updateErr != nil {
 			return updateErr
 		}
@@ -479,6 +556,17 @@ func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transa
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+	// The competition row and the payer's entry are locked below, so the
+	// competition gate comes first, as for every writer a result finalizer can
+	// race. The unlocked read only names the gate.
+	var gateCompetitionID string
+	if err = tx.QueryRow(ctx, `SELECT competition_id FROM payment_intents WHERE id=$1`, paymentID).
+		Scan(&gateCompetitionID); err != nil {
+		return err
+	}
+	if err = lockCompetitionProgressionGate(ctx, tx, gateCompetitionID); err != nil {
+		return err
+	}
 	var userID, competitionID, gameAccountID, displayName, paymentStatus string
 	err = tx.QueryRow(ctx, `SELECT user_id,competition_id,game_account_id,entry_display_name,status
 		FROM payment_intents WHERE id=$1 FOR UPDATE`, paymentID).
@@ -486,11 +574,11 @@ func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transa
 	if err != nil {
 		return err
 	}
+	if competitionID != gateCompetitionID {
+		return errors.New("payment competition changed before its row was locked")
+	}
 	if paymentStatus == "succeeded" {
 		return tx.Commit(ctx)
-	}
-	if paymentStatus == "failed" {
-		return s.commitPaymentReview(ctx, tx, paymentID, "Conflicting success and failure results; manual review required")
 	}
 	var receiptOwner string
 	err = tx.QueryRow(ctx, "SELECT id FROM payment_intents WHERE provider_receipt=$1 AND id<>$2", receipt, paymentID).Scan(&receiptOwner)
@@ -507,26 +595,43 @@ func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transa
 	if err != nil {
 		return err
 	}
-	if competitionStatus == "cancelled" {
-		return s.commitPaymentReview(ctx, tx, paymentID, "Competition was cancelled; refund required")
+	var drawExists bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM competition_draws WHERE competition_id=$1)`, competitionID).Scan(&drawExists); err != nil {
+		return err
 	}
-	var entryID, entryStatus string
-	err = tx.QueryRow(ctx, `SELECT id,status FROM competition_entries WHERE competition_id=$1 AND captain_user_id=$2`,
-		competitionID, userID).Scan(&entryID, &entryStatus)
-	if err == nil && (entryStatus == "withdrawn" || entryStatus == "disqualified") {
-		return s.commitPaymentReview(ctx, tx, paymentID, "Player has an inactive competition entry; refund or organizer reactivation required")
+	var entryID string
+	var existingEntryStatus *string
+	var entryStatus string
+	err = tx.QueryRow(ctx, `SELECT id,status FROM competition_entries
+		WHERE competition_id=$1 AND captain_user_id=$2 FOR UPDATE`, competitionID, userID).Scan(&entryID, &entryStatus)
+	entryExists := err == nil
+	if entryExists {
+		existingEntryStatus = &entryStatus
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return err
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		var entries int
-		if err = tx.QueryRow(ctx, `SELECT count(*) FROM competition_entries WHERE competition_id=$1
-			AND status NOT IN ('withdrawn','disqualified')`, competitionID).Scan(&entries); err != nil {
+	var entryInDraw bool
+	if entryExists {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM competition_draw_entries
+			WHERE competition_id=$1 AND entry_id=$2)`, competitionID, entryID).Scan(&entryInDraw); err != nil {
 			return err
 		}
-		if entries >= maxEntries {
-			return s.commitPaymentReview(ctx, tx, paymentID, "Competition became full; refund required")
-		}
-		err = tx.QueryRow(ctx, `INSERT INTO competition_entries(competition_id,display_name,captain_user_id)
-			VALUES ($1,$2,$3) RETURNING id`, competitionID, displayName, userID).Scan(&entryID)
+	}
+	var entries int
+	if err = tx.QueryRow(ctx, competitionCapacityEntriesSQL, competitionID).Scan(&entries); err != nil {
+		return err
+	}
+	var activeStrikes int
+	if err = tx.QueryRow(ctx, `SELECT `+activePlayerStrikesSQL+` FROM users player WHERE player.id=$1`, userID).
+		Scan(&activeStrikes); err != nil {
+		return err
+	}
+	plan := planVerifiedPaymentRegistration(competitionStatus, drawExists, !entryExists && entries >= maxEntries,
+		existingEntryStatus, entryInDraw)
+	plan = planConductSuspendedPayment(plan, existingEntryStatus, strikeBanApplies(activeStrikes, s.config.StrikeBanThreshold))
+	if !entryExists {
+		err = tx.QueryRow(ctx, `INSERT INTO competition_entries(competition_id,display_name,captain_user_id,status)
+			VALUES ($1,$2,$3,$4) RETURNING id`, competitionID, displayName, userID, plan.EntryStatus).Scan(&entryID)
 		if err != nil {
 			return err
 		}
@@ -535,8 +640,13 @@ func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transa
 		if err != nil {
 			return err
 		}
-	} else if err != nil {
-		return err
+	} else if plan.RefundReason != "" && entryStatus != "withdrawal_pending" {
+		// A withdrawn or removed entry keeps its status, so a late payment can
+		// never revive it; the refund below still returns the money.
+		if _, err = tx.Exec(ctx, `UPDATE competition_entries SET status='withdrawal_pending',updated_at=now()
+			WHERE id=$1 AND status NOT IN ('withdrawn','disqualified')`, entryID); err != nil {
+			return err
+		}
 	}
 	command, err := tx.Exec(ctx, `UPDATE payment_intents SET status='succeeded',entry_id=$2,provider_receipt=$3,
 		provider_transaction_at=$4,callback_payload=$5,completed_at=now(),updated_at=now()
@@ -547,24 +657,70 @@ func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transa
 		}
 		return err
 	}
+	var refundID *string
+	if plan.RefundReason != "" {
+		var value string
+		err = tx.QueryRow(ctx, `INSERT INTO payment_refunds
+			(payment_id,user_id,entry_id,amount_minor,currency,reason_code,mandatory,player_note)
+			SELECT id,user_id,entry_id,amount_minor,currency,$2,true,$3 FROM payment_intents WHERE id=$1
+			RETURNING id`, paymentID, plan.RefundReason, plan.RefundNote).Scan(&value)
+		if err != nil {
+			return err
+		}
+		refundID = &value
+	}
+	var refundIDValue any
+	registrationDisposition := "registered"
+	if refundID != nil {
+		refundIDValue = *refundID
+		registrationDisposition = "refund_requested"
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload)
-		VALUES ('payment_intent',$1,'payment.succeeded',jsonb_build_object('paymentId',$1,'entryId',$2,'competitionId',$3))`,
-		paymentID, entryID, competitionID)
+		VALUES ('payment_intent',$1,'payment.succeeded',jsonb_build_object('paymentId',$1::text,
+		'entryId',$2::text,'competitionId',$3::text,'refundId',$4::text,
+		'registrationDisposition',$5::text))`, paymentID, entryID, competitionID, refundIDValue,
+		registrationDisposition)
 	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,subject_type,subject_id,after_state)
-		VALUES ($1,$2,'payment.succeeded','payment_intent',$3,jsonb_build_object('entryId',$4,'competitionId',$5))`,
-		organizationID, userID, paymentID, entryID, competitionID)
+		VALUES ($1,$2,'payment.succeeded','payment_intent',$3,jsonb_build_object('entryId',$4::text,
+		'competitionId',$5::text,'providerReceipt',$6::text,'refundId',$7::text))`,
+		organizationID, userID, paymentID, entryID, competitionID, receipt, refundIDValue)
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if refundID != nil {
+		_, err = tx.Exec(ctx, `INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload)
+			VALUES ('payment_refund',$1,'payment.refund_requested',jsonb_build_object('refundId',$1::text,
+			'paymentId',$2::text,'entryId',$3::text,'userId',$4::text,'reasonCode',$5::text,'mandatory',true))`,
+			*refundID, paymentID, entryID, userID, plan.RefundReason)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,subject_type,
+			subject_id,after_state) VALUES ($1,$2,'payment.refund_requested','payment_refund',$3,
+			jsonb_build_object('paymentId',$4::text,'entryId',$5::text,'status','requested',
+			'reasonCode',$6::text,'mandatory',true,
+			'amountMinor',(SELECT amount_minor FROM payment_intents WHERE id=$4)))`,
+			organizationID, userID, *refundID, paymentID, entryID, plan.RefundReason)
+		if err != nil {
+			return err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	// Registration capacity and the player's registration state changed in the
+	// committed transaction. Retire addressable detail/bracket responses; cached
+	// list counters intentionally converge through their short freshness window.
+	s.invalidateCompetitionCachesContext(context.WithoutCancel(ctx), competitionID)
+	return nil
 }
 
 func (s *Server) commitPaymentReview(ctx context.Context, tx pgx.Tx, paymentID, reason string) error {
 	if _, err := tx.Exec(ctx, `UPDATE payment_intents SET status='review',provider_result_description=$2,
-		updated_at=now() WHERE id=$1`, paymentID, reason); err != nil {
+		completed_at=NULL,updated_at=now() WHERE id=$1`, paymentID, reason); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -581,11 +737,16 @@ func (s *Server) applyQueryResult(ctx context.Context, paymentID string, respons
 	}
 	if err := validateQueryResponse(response, merchantID, checkoutID); err != nil {
 		s.logger.Warn("invalid M-Pesa query response", "payment_id", paymentID, "error", err)
+		s.escalatePaymentReconciliation(ctx, paymentID, "Repeated Daraja queries returned invalid or mismatched responses")
 		return
 	}
 	resultCode := string(response.ResultCode)
 	if resultCode == "0" {
 		s.replayPendingCallbacks(ctx, checkoutID)
+		// STK query does not return the receipt/amount/phone metadata needed to
+		// safely complete a collection. If the success callback is truly lost,
+		// escalate exactly once rather than leaving the intent pending forever.
+		s.escalatePaymentReconciliation(ctx, paymentID, "Daraja reports success but the receipt callback is missing")
 		return
 	}
 	if resultCode != "" {
@@ -594,10 +755,24 @@ func (s *Server) applyQueryResult(ctx context.Context, paymentID string, respons
 		// flight. Preserve the payment until a matching callback arrives; after a
 		// bounded number of attempts, route it to manual reconciliation.
 		_, _ = s.db.Writer.Exec(ctx, `UPDATE payment_intents SET provider_result_code=$2,
-			provider_result_description=$3,updated_at=now(),
-			status=CASE WHEN query_attempts >= 12 THEN 'review' ELSE status END,
-			completed_at=CASE WHEN query_attempts >= 12 THEN now() ELSE completed_at END
+			provider_result_description=$3,updated_at=now()
 			WHERE id=$1 AND status IN ('pending','callback_received')`, paymentID, resultCode, response.ResultDesc)
+		s.escalatePaymentReconciliation(ctx, paymentID, "Repeated Daraja queries did not produce a matching terminal callback")
+	}
+}
+
+func (s *Server) escalatePaymentReconciliation(ctx context.Context, paymentID, reason string) {
+	_, err := s.db.Writer.Exec(ctx, `WITH escalated AS (
+		UPDATE payment_intents SET status='review',provider_result_description=$2,completed_at=NULL,updated_at=now()
+		WHERE id=$1 AND status IN ('pending','callback_received') AND query_attempts>=$3
+		RETURNING id,user_id
+	)
+	INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload)
+	SELECT 'payment_intent',id,'payment.reconciliation_review_required',
+		jsonb_build_object('paymentId',id::text,'userId',user_id::text,'reason',$2::text)
+	FROM escalated`, paymentID, truncate(reason, 500), paymentReconcileMaxTries)
+	if err != nil {
+		s.logger.Warn("escalate payment reconciliation", "payment_id", paymentID, "error", err)
 	}
 }
 
@@ -688,11 +863,18 @@ func (s *Server) paymentVelocityAllowed(ctx context.Context, userID, phone, ip s
 		}
 		var count int
 		query := "SELECT count(*) FROM payment_intents WHERE " + check.column + "=$1 AND created_at>now()-$2::interval"
-		if err := s.db.Writer.QueryRow(ctx, query, check.value, check.window.String()).Scan(&count); err != nil || count > check.limit {
+		if err := s.db.Writer.QueryRow(ctx, query, check.value, check.window.String()).Scan(&count); err != nil || !paymentVelocityCountAllowed(count, check.limit) {
 			return false
 		}
 	}
 	return true
+}
+
+// The fallback query runs after the new intent commits, so count already
+// includes the request being evaluated. This mirrors Redis INCR: the Nth
+// request is allowed and request N+1 is rejected.
+func paymentVelocityCountAllowed(count, limit int) bool {
+	return limit > 0 && count <= limit
 }
 
 func readMPesaCallback(w http.ResponseWriter, r *http.Request) ([]byte, callbackEnvelope, error) {

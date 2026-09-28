@@ -1,0 +1,350 @@
+# Paid registration lifecycle and player game-account verification contract.
+paths:
+  /v1/me/payments:
+    get:
+      operationId: listMyPayments
+      tags: [Payments]
+      summary: List the player's durable payment and receipt history.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [initiating, pending, callback_received, succeeded, failed, review]
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Signed keyset-paginated payment history.
+          content: { application/json: { schema: { $ref: "#/components/schemas/PaymentHistoryPage" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/refunds:
+    get:
+      operationId: listMyRefunds
+      tags: [Payments]
+      summary: List paid-withdrawal and cancellation refund states.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [requested, approved, processing, manual_review, succeeded, rejected, failed]
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Signed keyset-paginated refund history.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RefundPage" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/competitions/{id}/registrations/me/withdrawal-requests:
+    post:
+      operationId: requestPaidRegistrationWithdrawal
+      tags: [Payments, Registrations]
+      summary: Request withdrawal and refund review for a paid registration.
+      description: >-
+        Requires an Idempotency-Key. The entry remains capacity-reserved as
+        withdrawal_pending until the refund succeeds or, for a voluntary request,
+        is rejected. A competition-cancellation refund is mandatory and cannot be
+        rejected. Refunds are never reported as successful without a recorded
+        provider receipt.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reasonCode: { type: string, enum: [player_withdrawal], default: player_withdrawal }
+                note: { type: string, maxLength: 500, default: "" }
+      responses:
+        "200":
+          description: The same refund request already exists.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RefundResponse" } } }
+        "202":
+          description: Refund review requested.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RefundResponse" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/admin/refunds:
+    get:
+      operationId: listRefundQueue
+      tags: [Platform operations]
+      summary: List the platform-staff refund queue.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [requested, approved, processing, manual_review, succeeded, rejected, failed]
+            default: requested
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Signed, operator- and status-bound keyset page of the refund queue.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RefundPage" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/admin/refunds/{id}/decisions:
+    post:
+      operationId: decideRefund
+      tags: [Platform operations]
+      summary: Approve, reject or reconcile a refund with a provider receipt.
+      description: Refunds with mandatory=true are automatic full refunds and cannot be rejected.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, reject, mark_succeeded, mark_failed] }
+                note:
+                  type: string
+                  maxLength: 1000
+                  default: ""
+                  description: Required and non-empty for reject and mark_failed.
+                providerReceipt:
+                  type: string
+                  maxLength: 128
+                  default: ""
+                  description: Required only for mark_succeeded and forbidden for every other decision.
+      responses:
+        "200":
+          description: Updated refund.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RefundResponse" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/game-accounts/{id}/verification-requests:
+    post:
+      operationId: requestGameAccountVerification
+      tags: [Game accounts]
+      summary: Request Gamics manual-evidence review of a connected game account.
+      description: >-
+        Requires an Idempotency-Key and one to three private completed evidence
+        uploads. Approval is a Gamics review and does not claim publisher verification.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [evidenceIds]
+              properties:
+                evidenceIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  uniqueItems: true
+                  items: { type: string, format: uuid }
+                note: { type: string, maxLength: 500, default: "" }
+      responses:
+        "201":
+          description: Verification requested.
+          content: { application/json: { schema: { $ref: "#/components/schemas/GameAccountVerificationResponse" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/game-accounts/{id}/verification:
+    get:
+      operationId: getGameAccountVerification
+      tags: [Game accounts]
+      summary: Return the latest verification request for a connected account.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Latest verification request.
+          content: { application/json: { schema: { $ref: "#/components/schemas/GameAccountVerificationResponse" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/me/game-accounts/{id}/verification-requests/{requestId}:
+    delete:
+      operationId: withdrawGameAccountVerification
+      tags: [Game accounts]
+      summary: Withdraw a pending manual verification request.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Verification request withdrawn. }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/admin/game-account-verifications:
+    get:
+      operationId: listGameAccountVerificationQueue
+      tags: [Platform operations]
+      summary: List the platform reviewer game-account queue.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [requested, under_review, approved, rejected], default: requested }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Signed, operator- and status-bound keyset page of the verification queue.
+          content: { application/json: { schema: { $ref: "#/components/schemas/GameAccountVerificationPage" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /v1/admin/game-account-verifications/{id}/decisions:
+    post:
+      operationId: decideGameAccountVerification
+      tags: [Platform operations]
+      summary: Approve or reject a Gamics manual-evidence account review.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+                reason: { type: string, maxLength: 1000, default: "" }
+      responses:
+        "200":
+          description: Verification decided.
+          content: { application/json: { schema: { $ref: "#/components/schemas/GameAccountVerificationResponse" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+components:
+  schemas:
+    PaymentHistoryItem:
+      allOf:
+        - { $ref: "#/components/schemas/PaymentIntent" }
+        - type: object
+          required: [refund]
+          properties:
+            refund:
+              oneOf:
+                - { $ref: "#/components/schemas/PaymentRefund" }
+                - { type: "null" }
+    PaymentHistoryPage:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/PaymentHistoryItem" } }
+        page: { $ref: "#/components/schemas/CursorPage" }
+    PaymentRefund:
+      type: object
+      additionalProperties: false
+      required: [id, paymentId, entryId, amountMinor, currency, reasonCode, mandatory, playerNote, status, requestedAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        paymentId: { type: string, format: uuid }
+        entryId: { type: string, format: uuid }
+        amountMinor: { type: integer, format: int64, minimum: 1 }
+        currency: { type: string, enum: [KES] }
+        reasonCode: { type: string, enum: [player_withdrawal, competition_cancelled, duplicate_payment, operations_adjustment] }
+        mandatory: { type: boolean, description: True for an automatic full refund that staff cannot reject. }
+        playerNote: { type: string, maxLength: 500 }
+        status: { type: string, enum: [requested, approved, processing, manual_review, succeeded, rejected, failed] }
+        providerReceipt: { type: [string, "null"] }
+        providerResultDescription: { type: [string, "null"] }
+        requestedAt: { type: string, format: date-time }
+        reviewedAt: { type: [string, "null"], format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RefundPage:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/PaymentRefund" } }
+        page: { $ref: "#/components/schemas/CursorPage" }
+    RefundResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/PaymentRefund" }
+    GameAccountVerification:
+      type: object
+      additionalProperties: false
+      required:
+        [id, gameAccountId, userId, method, status, playerNote, decisionReason,
+         publisherVerified, evidenceIds, requestedAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        gameAccountId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        method: { type: string, enum: [manual_evidence, publisher_api] }
+        status: { type: string, enum: [requested, under_review, approved, rejected, withdrawn] }
+        playerNote: { type: string, maxLength: 500 }
+        decisionReason: { type: string, maxLength: 1000 }
+        publisherVerified: { type: boolean }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+        requestedAt: { type: string, format: date-time }
+        reviewedAt: { type: [string, "null"], format: date-time }
+        updatedAt: { type: string, format: date-time }
+    GameAccountVerificationPage:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/GameAccountVerification" } }
+        page: { $ref: "#/components/schemas/CursorPage" }
+    GameAccountVerificationResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/GameAccountVerification" }

@@ -1,0 +1,224 @@
+# Platform-admin M-Pesa review contract. This fragment has no organization
+# authorization path: payment_review.manage is granted only to active platform
+# admins. Raw callback payloads, request IPs, hashes and full phone numbers are
+# deliberately absent.
+paths:
+  /v1/admin/payment-reviews:
+    get:
+      operationId: listPaymentReviews
+      tags: [Platform payment review]
+      summary: List a signed, operator-bound M-Pesa review queue page.
+      description: The default status is review. The payer's full phone number is never returned.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [initiating, pending, callback_received, succeeded, failed, review], default: review }
+        - { name: competitionId, in: query, schema: { type: string, format: uuid } }
+        - name: checkout
+          in: query
+          schema: { type: string, enum: [any, present, missing], default: any }
+        - { name: minAttempts, in: query, schema: { type: integer, minimum: 0, maximum: 12, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - name: cursor
+          in: query
+          description: Signed cursor bound to the platform operator and every active filter.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Payment review queue page.
+          headers: { Cache-Control: { schema: { type: string, const: "private, no-store" } } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/PaymentReviewQueueEnvelope" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/admin/payment-reviews/{id}:
+    get:
+      operationId: getPaymentReview
+      tags: [Platform payment review]
+      summary: Get safe payment, callback-processing and staff-action history.
+      description: Callback bytes, request IP and the payer's full phone number are never returned. Each history list is bounded to 100 items and reports truncation.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Safe review detail.
+          headers: { Cache-Control: { schema: { type: string, const: "private, no-store" } } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/PaymentReviewDetailEnvelope" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/admin/payment-reviews/{id}/decisions:
+    post:
+      operationId: decidePaymentReview
+      tags: [Platform payment review]
+      summary: Safely retry provider verification, replay stored callbacks or record failure.
+      description: >-
+        There is deliberately no manual success action. Success remains possible only through
+        the existing callback path after independent Daraja query validation of checkout ID,
+        receipt, amount and phone. A succeeded payment is immutable.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [retry_query, replay_callbacks, mark_failed] }
+                note:
+                  type: string
+                  maxLength: 1000
+                  default: ""
+                  description: Required and non-empty for mark_failed.
+            examples:
+              retryQuery: { value: { decision: retry_query, note: Retry after Safaricom support confirmed recovery. } }
+              replayCallbacks: { value: { decision: replay_callbacks } }
+              fail: { value: { decision: mark_failed, note: No collection exists after provider investigation. } }
+      responses:
+        "200":
+          description: Payment safely marked failed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/PaymentReviewDecisionEnvelope" } } }
+        "202":
+          description: A bounded provider-query cycle or callback replay was accepted.
+          content: { application/json: { schema: { $ref: "#/components/schemas/PaymentReviewDecisionEnvelope" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+components:
+  schemas:
+    PaymentReviewQueueEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/PaymentReviewItem" } }
+        page: { $ref: "#/components/schemas/PaymentReviewPage" }
+    PaymentReviewPage:
+      type: object
+      additionalProperties: false
+      required: [nextCursor, hasMore]
+      properties:
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+    PaymentReviewItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - userId
+        - playerDisplayName
+        - competitionId
+        - competitionName
+        - entryId
+        - amountMinor
+        - currency
+        - phoneNumber
+        - status
+        - merchantRequestId
+        - checkoutRequestId
+        - providerReceipt
+        - providerResultCode
+        - providerResultDescription
+        - queryAttempts
+        - lastQueryAt
+        - nextQueryAt
+        - createdAt
+        - updatedAt
+        - completedAt
+        - callbackCount
+        - pendingCallbackCount
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        playerDisplayName: { type: string }
+        competitionId: { type: string, format: uuid }
+        competitionName: { type: string }
+        entryId: { type: [string, "null"], format: uuid }
+        amountMinor: { type: integer, format: int64, minimum: 1 }
+        currency: { const: KES }
+        phoneNumber: { type: string, pattern: "^254[17]\\*{5}[0-9]{3}$", description: Masked projection only. }
+        status: { type: string, enum: [initiating, pending, callback_received, succeeded, failed, review] }
+        merchantRequestId: { type: [string, "null"] }
+        checkoutRequestId: { type: [string, "null"] }
+        providerReceipt: { type: [string, "null"] }
+        providerResultCode: { type: [string, "null"] }
+        providerResultDescription: { type: [string, "null"] }
+        queryAttempts: { type: integer, minimum: 0 }
+        lastQueryAt: { type: [string, "null"], format: date-time }
+        nextQueryAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+        callbackCount: { type: integer, minimum: 0 }
+        pendingCallbackCount: { type: integer, minimum: 0 }
+    PaymentReviewDetailEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [payment, callbackEvents, actions, callbacksTruncated, actionsTruncated]
+          properties:
+            payment: { $ref: "#/components/schemas/PaymentReviewItem" }
+            callbackEvents: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/PaymentReviewCallbackEvent" } }
+            actions: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/PaymentReviewAuditEvent" } }
+            callbacksTruncated: { type: boolean }
+            actionsTruncated: { type: boolean }
+    PaymentReviewCallbackEvent:
+      type: object
+      additionalProperties: false
+      required: [id, merchantRequestId, requestId, payloadSha256, receivedAt, processedAt, processingError]
+      properties:
+        id: { type: integer, format: int64 }
+        merchantRequestId: { type: [string, "null"] }
+        requestId: { type: [string, "null"] }
+        payloadSha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        receivedAt: { type: string, format: date-time }
+        processedAt: { type: [string, "null"], format: date-time }
+        processingError: { type: [string, "null"] }
+    PaymentReviewAuditEvent:
+      type: object
+      additionalProperties: false
+      required: [id, actorUserId, action, requestId, beforeState, afterState, occurredAt]
+      properties:
+        id: { type: integer, format: int64 }
+        actorUserId: { type: [string, "null"], format: uuid }
+        action: { type: string }
+        requestId: { type: [string, "null"] }
+        beforeState: { type: [object, "null"], additionalProperties: true }
+        afterState: { type: [object, "null"], additionalProperties: true }
+        occurredAt: { type: string, format: date-time }
+    PaymentReviewDecisionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [payment, decision, callbackReplayRequested, queryAttemptBudget]
+          properties:
+            payment: { $ref: "#/components/schemas/PaymentReviewItem" }
+            decision: { type: string, enum: [retry_query, replay_callbacks, mark_failed] }
+            callbackReplayRequested:
+              type: boolean
+              description: True when the committed action requested callback replay; it does not claim a callback proved success.
+            queryAttemptBudget: { type: integer, const: 12 }
