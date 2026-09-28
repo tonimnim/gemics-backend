@@ -1,0 +1,517 @@
+# Gamics result review queue and conduct strikes. Merge this OpenAPI 3.1
+# fragment with the main contract and match-score-reports.paths.yaml, which
+# define CursorPage, GameScore, TiebreakScore, IdempotencyKey and the Error
+# response.
+#
+# Auth: platform staff only. Every route needs an active platform_staff_roles
+# row whose role grants result_review.manage (reviewer or admin); revoking a
+# strike needs player_strike.revoke (admin only). Organization roles never
+# reach these routes: organizers do not decide results. A staff member who
+# plays in, captains an entry in, or belongs to the organization of the match
+# under review cannot list, open or decide that review.
+# Idempotency: both POST operations require an Idempotency-Key scoped to the
+# operator and the review or strike.
+# Blindness: players never see the opponent's claim. Reviewers see both claims
+# and their screenshots here because resolving the mismatch is their job; the
+# player-facing room never contains the opponent's score before the match is
+# resolved.
+paths:
+  /v1/admin/result-reviews:
+    get:
+      operationId: listResultReviews
+      tags: [Platform result review]
+      summary: List a signed, operator-bound page of the Gamics result review queue.
+      description: >-
+        queued reviews are served oldest first; decided and closed reviews newest first. Reviews of
+        matches the operator plays in, captains in or organizes are silently omitted.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ResultReviewStatus" } }
+        - { name: competitionId, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - name: cursor
+          in: query
+          description: Signed cursor bound to the operator and every filter. It expires after 15 minutes.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Review queue page.
+          headers: { Cache-Control: { schema: { type: string, const: "private, no-store" } } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/ResultReviewPageEnvelope" } } }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: invalid_status, invalid_competition, invalid_limit, invalid_cursor.
+        "401": { $ref: "#/components/responses/Error" }
+        "403":
+          $ref: "#/components/responses/Error"
+          description: platform_access_denied.
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable.
+  /v1/admin/result-reviews/{id}:
+    get:
+      operationId: getResultReview
+      tags: [Platform result review]
+      summary: Get one review with both entries' claims, screenshots and strike history.
+      description: Screenshots are fetched through GET /v1/evidence/{id}, which checks the reviewer again.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Review detail.
+          headers: { Cache-Control: { schema: { type: string, const: "private, no-store" } } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/ResultReviewEnvelope" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403":
+          $ref: "#/components/responses/Error"
+          description: platform_access_denied; result_review_conflict (the operator plays in, captains in or organizes this match).
+        "404":
+          $ref: "#/components/responses/Error"
+          description: result_review_not_found (unknown or malformed id).
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable.
+  /v1/admin/result-reviews/{id}/decisions:
+    post:
+      operationId: decideResultReview
+      tags: [Platform result review]
+      summary: Decide a queued review and settle the match.
+      description: >-
+        accept_home or accept_away confirms that entry's current claim (its final report, or its initial
+        report when it has none); corrected_score confirms a score Gamics sets; all three apply
+        progression and ratings. remove_both cancels the match and removes both entries from the
+        tournament without touching ratings. strikeUserIds may name only the reporter of a current claim
+        that this decision rejects; each strike counts towards the registration ban until an admin
+        revokes it. The decision is audited and both entries receive the same push, without the score.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResultReviewDecisionRequest" }
+            examples:
+              acceptHome:
+                value: { expectedVersion: 1, decision: accept_home, strikeUserIds: ["4d3e5536-bf3c-4dba-a643-575e43f56970"], note: "The away screenshot shows a different match." }
+              corrected:
+                value: { expectedVersion: 1, decision: corrected_score, correctedScore: { homeScore: 3, awayScore: 2 }, note: "Both screenshots show 3-2 after extra time." }
+      responses:
+        "200":
+          description: Decision recorded. The body is the updated review detail.
+          headers:
+            Idempotency-Replayed:
+              description: Present with the value true when the stored response for this key was replayed.
+              schema: { type: string, enum: ["true"] }
+          content: { application/json: { schema: { $ref: "#/components/schemas/ResultReviewEnvelope" } } }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: >-
+            idempotency_key_required, invalid_idempotency_key; invalid_request; invalid_review_decision
+            (unknown decision, correctedScore present or missing for the wrong decision, note outside 10..2000
+            characters, expectedVersion below 1); invalid_score (the corrected score does not fit the stage);
+            invalid_strike_user (more than two users, or a user who is not the reporter of a rejected claim).
+        "401": { $ref: "#/components/responses/Error" }
+        "403":
+          $ref: "#/components/responses/Error"
+          description: platform_access_denied; result_review_conflict.
+        "404":
+          $ref: "#/components/responses/Error"
+          description: result_review_not_found.
+        "409":
+          $ref: "#/components/responses/Error"
+          description: >-
+            competition_closed (the competition is cancelled or completed); review_already_decided (the
+            review is decided or closed); review_version_conflict (expectedVersion is stale); match_changed;
+            idempotency_conflict.
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable.
+  /v1/admin/player-strikes:
+    get:
+      operationId: listPlayerStrikes
+      tags: [Platform result review]
+      summary: List conduct strikes, newest first, optionally for one player.
+      description: Strikes against the operator, or from a match the operator plays in, captains in or organizes, are omitted.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [active, revoked, all], default: active } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - name: cursor
+          in: query
+          description: Signed cursor bound to the operator and every filter. It expires after 15 minutes.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Strike feed page.
+          headers: { Cache-Control: { schema: { type: string, const: "private, no-store" } } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/PlayerStrikePageEnvelope" } } }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: invalid_user, invalid_status, invalid_limit, invalid_cursor.
+        "401": { $ref: "#/components/responses/Error" }
+        "403":
+          $ref: "#/components/responses/Error"
+          description: platform_access_denied.
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable.
+  /v1/admin/player-strikes/{id}/revocations:
+    post:
+      operationId: revokePlayerStrike
+      tags: [Platform result review]
+      summary: Revoke an active conduct strike (admins only).
+      description: The strike stays in the feed as history but no longer counts towards the registration ban. The player gets an inbox notification.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlayerStrikeRevocationRequest" }
+      responses:
+        "200":
+          description: Strike revoked.
+          headers:
+            Idempotency-Replayed:
+              description: Present with the value true when the stored response for this key was replayed.
+              schema: { type: string, enum: ["true"] }
+          content: { application/json: { schema: { $ref: "#/components/schemas/PlayerStrikeEnvelope" } } }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: idempotency_key_required, invalid_idempotency_key; invalid_request; invalid_strike_revocation (reason outside 10..500 characters).
+        "401": { $ref: "#/components/responses/Error" }
+        "403":
+          $ref: "#/components/responses/Error"
+          description: platform_access_denied (only admins revoke strikes); result_review_conflict (the strike is the admin's own, or from a match the admin plays in, captains in or organizes).
+        "404":
+          $ref: "#/components/responses/Error"
+          description: player_strike_not_found.
+        "409":
+          $ref: "#/components/responses/Error"
+          description: strike_already_revoked, idempotency_conflict.
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable.
+
+components:
+  schemas:
+    ResultReviewStatus:
+      type: string
+      description: queued reviews wait for a decision; decided reviews carry one; closed reviews left the queue because the competition was cancelled.
+      enum: [queued, decided, closed]
+      default: queued
+    ResultReviewReason:
+      type: string
+      description: >-
+        reports_differ when both entries responded to a mismatch and still disagree; evidence_unavailable
+        when the response window ended while a non-responder's screenshot was still stuck in Gamics'
+        own processing, so nobody was removed. Never sent to players.
+      enum: [reports_differ, evidence_unavailable]
+    ResultReviewDecisionCode:
+      type: string
+      enum: [accept_home, accept_away, corrected_score, remove_both]
+    ResultReviewMatch:
+      type: object
+      additionalProperties: false
+      required: [id, competitionId, competitionName, gameId, stageFormat, bracket, roundNumber, matchNumber, bestOf]
+      properties:
+        id: { type: string, format: uuid }
+        competitionId: { type: string, format: uuid }
+        competitionName: { type: string }
+        gameId: { type: string }
+        stageFormat: { type: string, enum: [single_elimination, double_elimination, round_robin] }
+        bracket: { type: string }
+        roundNumber: { type: integer, minimum: 1 }
+        matchNumber: { type: integer, minimum: 1 }
+        bestOf: { type: integer, minimum: 1 }
+    ResultReviewSummary:
+      type: object
+      additionalProperties: false
+      required: [id, status, reason, version, queuedAt, decision, decidedAt, decidedBy, match]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ResultReviewStatus" }
+        reason: { $ref: "#/components/schemas/ResultReviewReason" }
+        version: { type: integer, minimum: 1, description: Send as expectedVersion when deciding. }
+        queuedAt: { type: string, format: date-time }
+        decision:
+          oneOf:
+            - { $ref: "#/components/schemas/ResultReviewDecisionCode" }
+            - { type: "null" }
+        decidedAt: { type: [string, "null"], format: date-time, description: When the review was decided or closed. }
+        decidedBy: { type: [string, "null"], format: uuid, description: The staff decider; null for a closed review or a system decider. }
+        match: { $ref: "#/components/schemas/ResultReviewMatch" }
+    ResultReviewParticipant:
+      type: object
+      additionalProperties: false
+      required: [entryId, entryStatus, captainUserId, displayName, handle]
+      properties:
+        entryId: { type: string, format: uuid }
+        entryStatus: { type: string, enum: [registered, checked_in, accepted, withdrawal_pending, withdrawn, disqualified] }
+        captainUserId: { type: string, format: uuid }
+        displayName: { type: string }
+        handle: { type: [string, "null"] }
+    StaffScoreReportView:
+      type: object
+      additionalProperties: false
+      description: One entry's claim as Gamics staff see it. Players never receive this view.
+      required: [id, reportedBy, homeScore, awayScore, tiebreak, games, reportedAt, evidence]
+      properties:
+        id: { type: string, format: uuid }
+        reportedBy:
+          type: object
+          additionalProperties: false
+          required: [userId, displayName]
+          properties:
+            userId: { type: string, format: uuid }
+            displayName: { type: string }
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        tiebreak:
+          oneOf:
+            - { $ref: "#/components/schemas/TiebreakScore" }
+            - { type: "null" }
+        games:
+          type: array
+          items: { $ref: "#/components/schemas/GameScore" }
+        reportedAt: { type: string, format: date-time }
+        evidence:
+          type: array
+          maxItems: 3
+          description: Screenshots of a final report, in submission order; empty for an initial report.
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, mediaType, byteSize, ready]
+            properties:
+              id: { type: string, format: uuid }
+              mediaType: { type: string, enum: [image/jpeg, image/png] }
+              byteSize: { type: integer, format: int64 }
+              ready: { type: boolean }
+    ResultReviewEntryReports:
+      type: object
+      additionalProperties: false
+      required: [initial, final]
+      properties:
+        initial:
+          oneOf:
+            - { $ref: "#/components/schemas/StaffScoreReportView" }
+            - { type: "null" }
+        final:
+          oneOf:
+            - { $ref: "#/components/schemas/StaffScoreReportView" }
+            - { type: "null" }
+    ReviewScore:
+      type: object
+      additionalProperties: false
+      required: [homeScore, awayScore]
+      properties:
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        games:
+          type: array
+          maxItems: 99
+          description: Optional 1..bestOf breakdown; one aggregate game is recorded when omitted.
+          items: { $ref: "#/components/schemas/GameScore" }
+        tiebreak:
+          oneOf:
+            - { $ref: "#/components/schemas/TiebreakScore" }
+            - { type: "null" }
+    ResultReviewDecisionView:
+      type: object
+      additionalProperties: false
+      required: [decision, correctedScore, note, deciderKind, decidedBy, deciderRef, decidedAt]
+      properties:
+        decision: { $ref: "#/components/schemas/ResultReviewDecisionCode" }
+        correctedScore:
+          oneOf:
+            - { $ref: "#/components/schemas/ReviewScore" }
+            - { type: "null" }
+        note: { type: string }
+        deciderKind: { type: string, enum: [staff, system], description: "system is reserved for a future automated decider, which can neither correct a score nor record strikes." }
+        decidedBy: { type: [string, "null"], format: uuid }
+        deciderRef: { type: [string, "null"], maxLength: 128 }
+        decidedAt: { type: string, format: date-time }
+    ResultReviewWindowUpload:
+      type: object
+      additionalProperties: false
+      description: An upload a non-responding entry's player made during the response window of an evidence_unavailable review, with its current status. Completed uploads can be opened through GET /v1/evidence/{id}.
+      required: [entryId, evidenceId, uploadedBy, status, processingErrorCode, createdAt]
+      properties:
+        entryId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        uploadedBy: { type: string, format: uuid }
+        status: { type: string, enum: [pending, processing, completed, failed, rejected, expired] }
+        processingErrorCode: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+    ResultReviewDetail:
+      type: object
+      additionalProperties: false
+      description: The summary fields plus both entries' claims. Here decision is the full decision object, or null until the review is decided.
+      required:
+        - id
+        - status
+        - reason
+        - version
+        - queuedAt
+        - decision
+        - decidedAt
+        - decidedBy
+        - match
+        - participants
+        - reports
+        - verification
+        - responseWindowUploads
+        - activeStrikeCounts
+        - strikes
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ResultReviewStatus" }
+        reason: { $ref: "#/components/schemas/ResultReviewReason" }
+        version: { type: integer, minimum: 1 }
+        queuedAt: { type: string, format: date-time }
+        decision:
+          oneOf:
+            - { $ref: "#/components/schemas/ResultReviewDecisionView" }
+            - { type: "null" }
+        decidedAt: { type: [string, "null"], format: date-time }
+        decidedBy: { type: [string, "null"], format: uuid }
+        match: { $ref: "#/components/schemas/ResultReviewMatch" }
+        participants:
+          type: object
+          additionalProperties: false
+          required: [home, away]
+          properties:
+            home: { $ref: "#/components/schemas/ResultReviewParticipant" }
+            away: { $ref: "#/components/schemas/ResultReviewParticipant" }
+        reports:
+          type: object
+          additionalProperties: false
+          required: [home, away]
+          properties:
+            home: { $ref: "#/components/schemas/ResultReviewEntryReports" }
+            away: { $ref: "#/components/schemas/ResultReviewEntryReports" }
+        verification:
+          type: object
+          additionalProperties: false
+          required: [firstReportEntryId, firstReportedAt, reportDeadlineAt, mismatchAt, responseDeadlineAt]
+          properties:
+            firstReportEntryId: { type: string, format: uuid }
+            firstReportedAt: { type: string, format: date-time }
+            reportDeadlineAt: { type: string, format: date-time }
+            mismatchAt: { type: [string, "null"], format: date-time }
+            responseDeadlineAt: { type: [string, "null"], format: date-time }
+        responseWindowUploads:
+          type: array
+          description: >-
+            Filled only for reason evidence_unavailable, otherwise empty: every upload the non-responders' players made
+            during the response window, with its current status. The screenshot that was stuck at the deadline stays
+            listed after processing completes.
+          items: { $ref: "#/components/schemas/ResultReviewWindowUpload" }
+        activeStrikeCounts:
+          type: object
+          description: Active strike count for every user who reported on this match, keyed by user id.
+          additionalProperties: { type: integer, minimum: 0 }
+        strikes:
+          type: array
+          description: Strikes recorded by this review's decision.
+          items: { $ref: "#/components/schemas/PlayerStrike" }
+    ResultReviewDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, decision, note]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        decision: { $ref: "#/components/schemas/ResultReviewDecisionCode" }
+        correctedScore:
+          description: Required for corrected_score and forbidden for every other decision. Validated against the stage's best-of and format.
+          oneOf:
+            - { $ref: "#/components/schemas/ReviewScore" }
+            - { type: "null" }
+        strikeUserIds:
+          type: array
+          maxItems: 2
+          uniqueItems: true
+          description: >-
+            Reporters of current claims this decision rejects: the away reporter for accept_home, the home
+            reporter for accept_away, either reporter whose claim differs from a corrected score, and either
+            reporter for remove_both. A claim equal to the accepted one cannot be struck.
+          items: { type: string, format: uuid }
+        note: { type: string, minLength: 10, maxLength: 2000 }
+    ResultReviewPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/ResultReviewSummary" }
+        page: { $ref: "#/components/schemas/CursorPage" }
+    ResultReviewEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/ResultReviewDetail" }
+    PlayerStrike:
+      type: object
+      additionalProperties: false
+      description: A conduct strike recorded by a Gamics review against the reporter of a rejected claim. Active strikes count towards the registration ban.
+      required: [id, userId, matchId, reviewId, reasonCode, note, createdByKind, createdBy, createdAt, revokedAt, revokedBy, revokeReason]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        matchId: { type: string, format: uuid }
+        reviewId: { type: string, format: uuid }
+        reasonCode: { type: string, const: false_result_report }
+        note: { type: string }
+        createdByKind: { type: string, const: staff }
+        createdBy: { type: [string, "null"], format: uuid }
+        createdAt: { type: string, format: date-time }
+        revokedAt: { type: [string, "null"], format: date-time }
+        revokedBy: { type: [string, "null"], format: uuid }
+        revokeReason: { type: [string, "null"] }
+    PlayerStrikeEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/PlayerStrike" }
+    PlayerStrikePageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PlayerStrike" }
+        page: { $ref: "#/components/schemas/CursorPage" }
+    PlayerStrikeRevocationRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 10, maxLength: 500 }

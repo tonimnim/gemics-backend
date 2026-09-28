@@ -43,47 +43,88 @@ type friendMatchInstruction struct {
 	Detail string `json:"detail"`
 }
 
-type matchRoomResponse struct {
-	ID                      string                    `json:"id"`
-	Code                    string                    `json:"code"`
-	CompetitionID           string                    `json:"competitionId"`
-	CompetitionName         string                    `json:"competitionName"`
-	GameID                  string                    `json:"gameId"`
-	GameName                string                    `json:"gameName"`
-	StageID                 string                    `json:"stageId"`
-	StageName               string                    `json:"stageName"`
-	RoundName               string                    `json:"roundName"`
-	RoundNumber             int                       `json:"roundNumber"`
-	MatchNumber             int                       `json:"matchNumber"`
-	Bracket                 string                    `json:"bracket"`
-	BestOf                  int16                     `json:"bestOf"`
-	DrawAllowed             bool                      `json:"drawAllowed"`
-	ScheduledAt             *time.Time                `json:"scheduledAt"`
-	CheckInOpensAt          *time.Time                `json:"checkInOpensAt"`
-	CheckInClosesAt         *time.Time                `json:"checkInClosesAt"`
-	ResultDueAt             *time.Time                `json:"resultDueAt"`
-	CompletedAt             *time.Time                `json:"completedAt"`
-	State                   string                    `json:"state"`
-	Lifecycle               string                    `json:"lifecycle"`
-	Version                 int                       `json:"version"`
-	CurrentPlayerID         string                    `json:"currentPlayerId"`
-	CurrentPlayerSide       string                    `json:"currentPlayerSide"`
-	Home                    *matchParticipantResponse `json:"home"`
-	Away                    *matchParticipantResponse `json:"away"`
-	PendingResult           *matchPendingResult       `json:"pendingResult,omitempty"`
-	AllowedActions          []string                  `json:"allowedActions"`
-	FriendMatchInstructions []friendMatchInstruction  `json:"friendMatchInstructions"`
+type matchVerificationPolicyResponse struct {
+	ReportWindowSeconds           int64 `json:"reportWindowSeconds"`
+	ReminderBeforeDeadlineSeconds int64 `json:"reminderBeforeDeadlineSeconds"`
+	ResponseWindowSeconds         int64 `json:"responseWindowSeconds"`
+	FinalReportEvidence           struct {
+		MinItems   int      `json:"minItems"`
+		MaxItems   int      `json:"maxItems"`
+		MediaTypes []string `json:"mediaTypes"`
+	} `json:"finalReportEvidence"`
 }
 
-type matchPendingResult struct {
+// scoreReportView is one of the viewer's own reports. The room never carries a
+// view of the other entry's report (R2).
+type scoreReportView struct {
 	ID          string              `json:"id"`
-	SubmittedBy string              `json:"submittedBy"`
+	Kind        string              `json:"kind"`
 	HomeScore   int                 `json:"homeScore"`
 	AwayScore   int                 `json:"awayScore"`
-	Tiebreak    *tiebreakScoreInput `json:"tiebreak,omitempty"`
-	EvidenceIDs []string            `json:"evidenceIds"`
-	Status      string              `json:"status"`
-	SubmittedAt time.Time           `json:"submittedAt"`
+	Tiebreak    *tiebreakScoreInput `json:"tiebreak"`
+	Games       []gameScoreInput    `json:"games"`
+	EvidenceIDs []string            `json:"evidenceIds,omitempty"`
+	ReportedAt  time.Time           `json:"reportedAt"`
+}
+
+// matchResultVerificationResponse is the viewer's blind view of the result
+// verification. About the other entry it says only whether it reported or
+// responded.
+type matchResultVerificationResponse struct {
+	Phase             string           `json:"phase"`
+	MyReport          *scoreReportView `json:"myReport"`
+	MyFinalReport     *scoreReportView `json:"myFinalReport"`
+	OpponentReported  bool             `json:"opponentReported"`
+	OpponentResponded bool             `json:"opponentResponded"`
+	ReportDeadline    *time.Time       `json:"reportDeadline"`
+	ResponseDeadline  *time.Time       `json:"responseDeadline"`
+	Resolution        *string          `json:"resolution"`
+	EntryRemoved      bool             `json:"entryRemoved"`
+}
+
+// matchConfirmedResultResponse is the canonical score, shown once the match
+// is completed.
+type matchConfirmedResultResponse struct {
+	HomeScore   int                 `json:"homeScore"`
+	AwayScore   int                 `json:"awayScore"`
+	Tiebreak    *tiebreakScoreInput `json:"tiebreak"`
+	Origin      string              `json:"origin"`
+	ConfirmedAt time.Time           `json:"confirmedAt"`
+}
+
+type matchRoomResponse struct {
+	ID                      string                          `json:"id"`
+	Code                    string                          `json:"code"`
+	CompetitionID           string                          `json:"competitionId"`
+	CompetitionName         string                          `json:"competitionName"`
+	GameID                  string                          `json:"gameId"`
+	GameName                string                          `json:"gameName"`
+	StageID                 string                          `json:"stageId"`
+	StageName               string                          `json:"stageName"`
+	RoundName               string                          `json:"roundName"`
+	RoundNumber             int                             `json:"roundNumber"`
+	MatchNumber             int                             `json:"matchNumber"`
+	Bracket                 string                          `json:"bracket"`
+	BestOf                  int16                           `json:"bestOf"`
+	DrawAllowed             bool                            `json:"drawAllowed"`
+	ScheduledAt             *time.Time                      `json:"scheduledAt"`
+	CheckInOpensAt          *time.Time                      `json:"checkInOpensAt"`
+	CheckInClosesAt         *time.Time                      `json:"checkInClosesAt"`
+	ResultDueAt             *time.Time                      `json:"resultDueAt"`
+	CompletedAt             *time.Time                      `json:"completedAt"`
+	State                   string                          `json:"state"`
+	CompletionReason        *string                         `json:"completionReason"`
+	Lifecycle               string                          `json:"lifecycle"`
+	Version                 int                             `json:"version"`
+	CurrentPlayerID         string                          `json:"currentPlayerId"`
+	CurrentPlayerSide       string                          `json:"currentPlayerSide"`
+	Home                    *matchParticipantResponse       `json:"home"`
+	Away                    *matchParticipantResponse       `json:"away"`
+	VerificationPolicy      matchVerificationPolicyResponse `json:"verificationPolicy"`
+	ResultVerification      matchResultVerificationResponse `json:"resultVerification"`
+	Result                  *matchConfirmedResultResponse   `json:"result"`
+	AllowedActions          []string                        `json:"allowedActions"`
+	FriendMatchInstructions []friendMatchInstruction        `json:"friendMatchInstructions"`
 }
 
 type matchSummaryResponse struct {
@@ -106,48 +147,52 @@ type matchSummaryResponse struct {
 }
 
 type matchRecord struct {
-	ID                          string
-	CompetitionID               string
-	CompetitionName             string
-	GameID                      string
-	GameName                    string
-	StageID                     string
-	StageName                   string
-	StageFormat                 string
-	BestOf                      int16
-	StageConfig                 []byte
-	RulesSnapshot               []byte
-	Bracket                     string
-	RoundNumber                 int
-	MatchNumber                 int
-	State                       string
-	ScheduledAt                 *time.Time
-	CheckInOpensAt              *time.Time
-	CheckInClosesAt             *time.Time
-	ResultDueAt                 *time.Time
-	CompletedAt                 *time.Time
-	Version                     int
-	SortAt                      time.Time
-	CurrentEntryID              string
-	CurrentSide                 string
-	HomePlayerID                *string
-	HomeHandle                  *string
-	HomeDisplayName             *string
-	HomeCheckedInAt             *time.Time
-	AwayPlayerID                *string
-	AwayHandle                  *string
-	AwayDisplayName             *string
-	AwayCheckedInAt             *time.Time
-	SubmissionID                *string
-	SubmittedBy                 *string
-	SubmissionState             *string
-	SubmissionHomeScore         *int
-	SubmissionAwayScore         *int
-	SubmissionTiebreakType      *string
-	SubmissionHomeTiebreakScore *int
-	SubmissionAwayTiebreakScore *int
-	SubmissionEvidence          []byte
-	SubmissionCreatedAt         *time.Time
+	ID                     string
+	CompetitionID          string
+	CompetitionName        string
+	GameID                 string
+	GameName               string
+	StageID                string
+	StageName              string
+	StageFormat            string
+	BestOf                 int16
+	StageConfig            []byte
+	RulesSnapshot          []byte
+	Bracket                string
+	RoundNumber            int
+	MatchNumber            int
+	State                  string
+	CompletionReason       *string
+	ScheduledAt            *time.Time
+	CheckInOpensAt         *time.Time
+	CheckInClosesAt        *time.Time
+	ResultDueAt            *time.Time
+	CompletedAt            *time.Time
+	Version                int
+	SortAt                 time.Time
+	CurrentEntryID         string
+	CurrentEntryStatus     *string
+	CurrentSide            string
+	HomePlayerID           *string
+	HomeHandle             *string
+	HomeDisplayName        *string
+	HomeCheckedInAt        *time.Time
+	AwayPlayerID           *string
+	AwayHandle             *string
+	AwayDisplayName        *string
+	AwayCheckedInAt        *time.Time
+	VerificationPhase      *string
+	ReportWindowSeconds    *int
+	ReminderLeadSeconds    *int
+	ResponseWindowSeconds  *int
+	ReportDeadlineAt       *time.Time
+	ResponseDeadlineAt     *time.Time
+	VerificationResolution *string
+	MyInitialReport        *scoreReportView
+	MyFinalReport          *scoreReportView
+	OpponentReported       bool
+	OpponentResponded      bool
+	ConfirmedResult        *matchConfirmedResultResponse
 }
 
 type matchCursor struct {
@@ -174,16 +219,15 @@ type matchQueryer interface {
 const matchSelectColumns = `
 	SELECT m.id::text,m.competition_id::text,c.name,c.game_id,g.name,
 		m.stage_id::text,stage.name,stage.format,stage.best_of,stage.config,c.rules_snapshot,
-		m.bracket,m.round_number,m.match_number,m.state,m.scheduled_at,
+		m.bracket,m.round_number,m.match_number,m.state,m.completion_reason,m.scheduled_at,
 		m.check_in_opens_at,m.check_in_closes_at,m.result_due_at,m.completed_at,m.version,
-		COALESCE(m.completed_at,m.scheduled_at,m.created_at),mine.entry_id::text,
+		COALESCE(m.completed_at,m.scheduled_at,m.created_at),mine.entry_id::text,mine_entry.status,
 		CASE WHEN mine.entry_id=m.home_entry_id THEN 'home' ELSE 'away' END,
 		home_player.user_id,home_player.handle,home_player.display_name,home_checkin.checked_in_at,
 		away_player.user_id,away_player.handle,away_player.display_name,away_checkin.checked_in_at,
-		latest_submission.id,latest_submission.submitted_by,latest_submission.status,
-		latest_submission.home_score,latest_submission.away_score,latest_submission.tiebreak_type,
-		latest_submission.home_tiebreak_score,latest_submission.away_tiebreak_score,
-		latest_submission.evidence_objects,latest_submission.submitted_at
+		verification.phase,verification.report_window_seconds,verification.reminder_lead_seconds,
+		verification.response_window_seconds,verification.report_deadline_at,verification.response_deadline_at,
+		verification.resolution,my_reports.reports,opponent.reported,opponent.responded,confirmed.result
 	FROM matches m
 	JOIN competitions c ON c.id=m.competition_id
 	JOIN games g ON g.id=c.game_id
@@ -191,6 +235,7 @@ const matchSelectColumns = `
 	JOIN entry_members mine ON mine.user_id=$1
 		AND mine.roster_role IN ('starter','substitute')
 		AND (mine.entry_id=m.home_entry_id OR mine.entry_id=m.away_entry_id)
+	LEFT JOIN competition_entries mine_entry ON mine_entry.id=mine.entry_id
 	LEFT JOIN competition_entries home_entry ON home_entry.id=m.home_entry_id
 	LEFT JOIN competition_entries away_entry ON away_entry.id=m.away_entry_id
 	LEFT JOIN LATERAL (
@@ -221,15 +266,33 @@ const matchSelectColumns = `
 	) away_player ON true
 	LEFT JOIN match_check_ins home_checkin ON home_checkin.match_id=m.id AND home_checkin.entry_id=m.home_entry_id
 	LEFT JOIN match_check_ins away_checkin ON away_checkin.match_id=m.id AND away_checkin.entry_id=m.away_entry_id
+	LEFT JOIN match_result_verifications verification ON verification.match_id=m.id
 	LEFT JOIN LATERAL (
-		SELECT submission.id::text,submission.submitted_by::text,submission.status,
-			submission.home_score,submission.away_score,submission.tiebreak_type,
-			submission.home_tiebreak_score,submission.away_tiebreak_score,
-			submission.evidence_objects,submission.submitted_at
+		SELECT json_object_agg(report.kind,json_build_object(
+			'id',report.id,'kind',report.kind,'homeScore',report.home_score,'awayScore',report.away_score,
+			'tiebreak',CASE WHEN report.tiebreak_type IS NULL THEN NULL ELSE json_build_object(
+				'type',report.tiebreak_type,'homeScore',report.home_tiebreak_score,
+				'awayScore',report.away_tiebreak_score) END,
+			'games',report.game_results,'reportedAt',report.reported_at,
+			'evidenceIds',(SELECT COALESCE(json_agg(evidence.evidence_id::text ORDER BY evidence.position),'[]'::json)
+				FROM match_result_report_evidence evidence WHERE evidence.report_id=report.id))) AS reports
+		FROM match_result_reports report
+		WHERE report.match_id=m.id AND report.entry_id=mine.entry_id
+	) my_reports ON true
+	LEFT JOIN LATERAL (
+		SELECT COALESCE(bool_or(other.kind='initial'),false) AS reported,
+			COALESCE(bool_or(other.kind='final'),false) AS responded
+		FROM match_result_reports other WHERE other.match_id=m.id AND other.entry_id<>mine.entry_id
+	) opponent ON true
+	LEFT JOIN LATERAL (
+		SELECT json_build_object('homeScore',submission.home_score,'awayScore',submission.away_score,
+			'tiebreak',CASE WHEN submission.tiebreak_type IS NULL THEN NULL ELSE json_build_object(
+				'type',submission.tiebreak_type,'homeScore',submission.home_tiebreak_score,
+				'awayScore',submission.away_tiebreak_score) END,
+			'origin',submission.origin,'confirmedAt',COALESCE(submission.decided_at,submission.submitted_at)) AS result
 		FROM result_submissions submission
-		WHERE submission.match_id=m.id AND submission.status<>'superseded'
-		ORDER BY submission.submitted_at DESC,submission.id DESC LIMIT 1
-	) latest_submission ON true
+		WHERE m.state='completed' AND submission.match_id=m.id AND submission.status='confirmed'
+	) confirmed ON true
 `
 
 func (s *Server) listMyMatches(w http.ResponseWriter, r *http.Request) {
@@ -531,19 +594,22 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 	records := make([]matchRecord, 0)
 	for rows.Next() {
 		var record matchRecord
+		var reports, confirmed []byte
 		if err := rows.Scan(
 			&record.ID, &record.CompetitionID, &record.CompetitionName, &record.GameID, &record.GameName,
 			&record.StageID, &record.StageName, &record.StageFormat, &record.BestOf, &record.StageConfig, &record.RulesSnapshot,
-			&record.Bracket, &record.RoundNumber, &record.MatchNumber, &record.State, &record.ScheduledAt,
+			&record.Bracket, &record.RoundNumber, &record.MatchNumber, &record.State, &record.CompletionReason, &record.ScheduledAt,
 			&record.CheckInOpensAt, &record.CheckInClosesAt, &record.ResultDueAt, &record.CompletedAt, &record.Version,
-			&record.SortAt, &record.CurrentEntryID, &record.CurrentSide,
+			&record.SortAt, &record.CurrentEntryID, &record.CurrentEntryStatus, &record.CurrentSide,
 			&record.HomePlayerID, &record.HomeHandle, &record.HomeDisplayName, &record.HomeCheckedInAt,
 			&record.AwayPlayerID, &record.AwayHandle, &record.AwayDisplayName, &record.AwayCheckedInAt,
-			&record.SubmissionID, &record.SubmittedBy, &record.SubmissionState,
-			&record.SubmissionHomeScore, &record.SubmissionAwayScore, &record.SubmissionTiebreakType,
-			&record.SubmissionHomeTiebreakScore, &record.SubmissionAwayTiebreakScore,
-			&record.SubmissionEvidence, &record.SubmissionCreatedAt,
+			&record.VerificationPhase, &record.ReportWindowSeconds, &record.ReminderLeadSeconds,
+			&record.ResponseWindowSeconds, &record.ReportDeadlineAt, &record.ResponseDeadlineAt,
+			&record.VerificationResolution, &reports, &record.OpponentReported, &record.OpponentResponded, &confirmed,
 		); err != nil {
+			return nil, err
+		}
+		if err := record.decodeResultViews(reports, confirmed); err != nil {
 			return nil, err
 		}
 		records = append(records, record)
@@ -551,9 +617,38 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 	return records, rows.Err()
 }
 
+// decodeResultViews reads the viewer's own reports and the confirmed result,
+// which the room query builds as JSON.
+func (record *matchRecord) decodeResultViews(reports, confirmed []byte) error {
+	if len(reports) > 0 {
+		var own struct {
+			Initial *scoreReportView `json:"initial"`
+			Final   *scoreReportView `json:"final"`
+		}
+		if err := json.Unmarshal(reports, &own); err != nil {
+			return err
+		}
+		for _, report := range []*scoreReportView{own.Initial, own.Final} {
+			if report != nil {
+				report.ReportedAt = report.ReportedAt.UTC()
+			}
+		}
+		record.MyInitialReport, record.MyFinalReport = own.Initial, own.Final
+	}
+	if len(confirmed) > 0 {
+		var result matchConfirmedResultResponse
+		if err := json.Unmarshal(confirmed, &result); err != nil {
+			return err
+		}
+		result.ConfirmedAt = result.ConfirmedAt.UTC()
+		record.ConfirmedResult = &result
+	}
+	return nil
+}
+
 func (record matchRecord) response(userID string, now time.Time) matchRoomResponse {
 	opensAt, closesAt := record.checkInWindow()
-	lifecycle, actions := record.presentation(userID, now, opensAt, closesAt)
+	lifecycle, actions := record.presentation(now, opensAt, closesAt)
 	settings := resolveMatchSettings(record.GameID, record.StageFormat, record.RulesSnapshot, record.StageConfig)
 	roundName := fmt.Sprintf("Round %d", record.RoundNumber)
 	if record.StageFormat == "round_robin" {
@@ -567,30 +662,52 @@ func (record matchRecord) response(userID string, now time.Time) matchRoomRespon
 		Bracket: record.Bracket, BestOf: record.BestOf, DrawAllowed: settings.DrawAllowed,
 		ScheduledAt: utcTime(record.ScheduledAt), CheckInOpensAt: utcTime(opensAt), CheckInClosesAt: utcTime(closesAt),
 		ResultDueAt: utcTime(record.ResultDueAt), CompletedAt: utcTime(record.CompletedAt),
-		State: record.State, Lifecycle: lifecycle, Version: record.Version,
+		State: record.State, CompletionReason: record.CompletionReason, Lifecycle: lifecycle, Version: record.Version,
 		CurrentPlayerID: userID, CurrentPlayerSide: record.CurrentSide,
 		Home:           participantResponse(record.HomePlayerID, record.HomeHandle, record.HomeDisplayName, "home", record.HomeCheckedInAt),
 		Away:           participantResponse(record.AwayPlayerID, record.AwayHandle, record.AwayDisplayName, "away", record.AwayCheckedInAt),
 		AllowedActions: actions, FriendMatchInstructions: settings.Instructions,
+		VerificationPolicy: resolveMatchVerificationPolicy(record.verificationSettings(settings.Verification)),
+		ResultVerification: record.resultVerification(),
 	}
-	if record.SubmissionID != nil && record.SubmittedBy != nil && record.SubmissionState != nil &&
-		record.SubmissionHomeScore != nil && record.SubmissionAwayScore != nil && record.SubmissionCreatedAt != nil {
-		pending := &matchPendingResult{
-			ID: *record.SubmissionID, SubmittedBy: *record.SubmittedBy,
-			HomeScore: *record.SubmissionHomeScore, AwayScore: *record.SubmissionAwayScore,
-			Status: *record.SubmissionState, SubmittedAt: record.SubmissionCreatedAt.UTC(), EvidenceIDs: []string{},
-		}
-		_ = json.Unmarshal(record.SubmissionEvidence, &pending.EvidenceIDs)
-		if record.SubmissionTiebreakType != nil && record.SubmissionHomeTiebreakScore != nil && record.SubmissionAwayTiebreakScore != nil {
-			pending.Tiebreak = &tiebreakScoreInput{
-				Type:      *record.SubmissionTiebreakType,
-				HomeScore: *record.SubmissionHomeTiebreakScore,
-				AwayScore: *record.SubmissionAwayTiebreakScore,
-			}
-		}
-		room.PendingResult = pending
+	if record.State == "completed" {
+		room.Result = record.ConfirmedResult
 	}
 	return room
+}
+
+// verificationSettings are the windows the viewer is held to: the snapshot once
+// a verification row exists, otherwise the resolved rules.
+func (record matchRecord) verificationSettings(resolved matchVerificationSettings) matchVerificationSettings {
+	if record.ReportWindowSeconds == nil || record.ReminderLeadSeconds == nil || record.ResponseWindowSeconds == nil {
+		return resolved
+	}
+	return matchVerificationSettings{
+		ReportWindow:   time.Duration(*record.ReportWindowSeconds) * time.Second,
+		ReminderLead:   time.Duration(*record.ReminderLeadSeconds) * time.Second,
+		ResponseWindow: time.Duration(*record.ResponseWindowSeconds) * time.Second,
+	}
+}
+
+// resultVerification is the viewer's blind view. Each deadline is shown only
+// in the phase it governs.
+func (record matchRecord) resultVerification() matchResultVerificationResponse {
+	view := matchResultVerificationResponse{
+		Phase: "not_started", MyReport: record.MyInitialReport, MyFinalReport: record.MyFinalReport,
+		OpponentReported: record.OpponentReported, OpponentResponded: record.OpponentResponded,
+		Resolution:   record.VerificationResolution,
+		EntryRemoved: record.CurrentEntryStatus != nil && *record.CurrentEntryStatus == "disqualified",
+	}
+	if record.VerificationPhase != nil {
+		view.Phase = *record.VerificationPhase
+	}
+	switch view.Phase {
+	case "awaiting_second_report":
+		view.ReportDeadline = utcTime(record.ReportDeadlineAt)
+	case "awaiting_responses":
+		view.ResponseDeadline = utcTime(record.ResponseDeadlineAt)
+	}
+	return view
 }
 
 func summarizeMatch(room matchRoomResponse) matchSummaryResponse {
@@ -637,8 +754,11 @@ func (record matchRecord) checkInWindow() (*time.Time, *time.Time) {
 	return opensAt, closesAt
 }
 
-func (record matchRecord) presentation(userID string, now time.Time, opensAt, closesAt *time.Time) (string, []string) {
-	actions := make([]string, 0, 2)
+// presentation derives the viewer's lifecycle and actions. An action is offered
+// only while its deadline is open, so none fails with a closed window;
+// awaiting_resolution covers the gap until the worker acts on a deadline.
+func (record matchRecord) presentation(now time.Time, opensAt, closesAt *time.Time) (string, []string) {
+	actions := make([]string, 0, 1)
 	switch record.State {
 	case "pending":
 		return "assigned", actions
@@ -652,19 +772,34 @@ func (record matchRecord) presentation(userID string, now time.Time, opensAt, cl
 		}
 		return "assigned", actions
 	case "in_progress":
-		if record.HomeCheckedInAt != nil && record.AwayCheckedInAt != nil &&
-			(record.ResultDueAt == nil || now.Before(*record.ResultDueAt)) && record.SubmissionID == nil {
-			actions = append(actions, "submit_result")
+		switch {
+		case !deadlineOpen(record.ResultDueAt, now, true):
+			return "awaiting_resolution", actions
+		case record.HomeCheckedInAt != nil && record.AwayCheckedInAt != nil && record.MyInitialReport == nil:
+			return "report_required", append(actions, "report_score")
+		default:
+			return "checked_in", actions
 		}
-		return "checked_in", actions
 	case "awaiting_confirmation":
-		if record.SubmissionState != nil && *record.SubmissionState == "pending_confirmation" &&
-			record.SubmittedBy != nil && *record.SubmittedBy != userID {
-			return "opponent_action_required", append(actions, "confirm_result", "dispute_result")
+		switch {
+		case record.MyInitialReport != nil:
+			return "awaiting_opponent_report", actions
+		case deadlineOpen(record.ReportDeadlineAt, now, false):
+			return "report_required", append(actions, "report_score")
+		default:
+			return "awaiting_resolution", actions
 		}
-		return "awaiting_opponent", actions
 	case "disputed":
-		return "under_review", actions
+		switch {
+		case record.VerificationPhase == nil || *record.VerificationPhase != "awaiting_responses":
+			return "under_review", actions
+		case record.MyFinalReport != nil:
+			return "awaiting_opponent_response", actions
+		case deadlineOpen(record.ResponseDeadlineAt, now, false):
+			return "mismatch_response_required", append(actions, "submit_final_score")
+		default:
+			return "awaiting_resolution", actions
+		}
 	case "forfeit":
 		return "forfeited", actions
 	case "completed", "cancelled":
@@ -672,6 +807,16 @@ func (record matchRecord) presentation(userID string, now time.Time, opensAt, cl
 	default:
 		return "assigned", actions
 	}
+}
+
+// deadlineOpen reports whether now is strictly before the deadline, so the
+// window is closed at the deadline instant, as it is for the handlers. A
+// missing deadline counts as open only where a match may have none.
+func deadlineOpen(deadline *time.Time, now time.Time, openWhenMissing bool) bool {
+	if deadline == nil {
+		return openWhenMissing
+	}
+	return now.Before(*deadline)
 }
 
 func (record matchRecord) currentCheckedInAt() *time.Time {
@@ -711,15 +856,20 @@ func (record matchRecord) checkInRejection(now time.Time) (string, string, time.
 type matchSettings struct {
 	DrawAllowed  bool
 	Instructions []friendMatchInstruction
+	Verification matchVerificationSettings
 }
 
 type matchRuleOverrides struct {
-	DrawAllowed             *bool                    `json:"drawAllowed"`
-	FriendMatchInstructions []friendMatchInstruction `json:"friendMatchInstructions"`
+	DrawAllowed             *bool                       `json:"drawAllowed"`
+	FriendMatchInstructions []friendMatchInstruction    `json:"friendMatchInstructions"`
+	MatchVerification       *matchVerificationOverrides `json:"matchVerification"`
 }
 
 func resolveMatchSettings(gameID, stageFormat string, competitionRules, stageConfig []byte) matchSettings {
-	settings := matchSettings{DrawAllowed: stageFormat == "round_robin", Instructions: defaultFriendMatchInstructions(gameID)}
+	settings := matchSettings{
+		DrawAllowed: stageFormat == "round_robin", Instructions: defaultFriendMatchInstructions(gameID),
+		Verification: defaultMatchVerificationSettings(),
+	}
 	apply := func(raw []byte) {
 		if len(raw) == 0 {
 			return
@@ -734,6 +884,7 @@ func resolveMatchSettings(gameID, stageFormat string, competitionRules, stageCon
 		if validFriendMatchInstructions(override.FriendMatchInstructions) {
 			settings.Instructions = override.FriendMatchInstructions
 		}
+		applyMatchVerificationOverrides(&settings.Verification, override.MatchVerification)
 	}
 	apply(competitionRules)
 	apply(stageConfig)

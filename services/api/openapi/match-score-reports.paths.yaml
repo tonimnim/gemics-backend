@@ -1,0 +1,327 @@
+# Blind dual score reports (result verification v2). Merge this OpenAPI 3.1
+# fragment with the main contract, which defines MatchRoom, GameScore,
+# TiebreakScore, MatchVerificationPolicy and the Error response.
+#
+# Auth: both operations need a signed-in player who is a starter or substitute
+# of one of the match's entries. Anyone else, including coaches, organizers and
+# Gamics staff, gets 404 match_not_found, exactly as for a missing match.
+# Idempotency: both operations require an Idempotency-Key. Keys are scoped to
+# the caller, the match and the report kind, so a replay returns the caller's
+# own stored response with Idempotency-Replayed: true.
+# Blindness: each entry reports its score without seeing the other entry's
+# claim. Responses, errors and pushes never contain the opponent's score before
+# the match is resolved; the room only says whether the opponent has reported
+# or responded. After resolution only the canonical result is shown.
+paths:
+  /v1/matches/{matchId}/score-reports:
+    post:
+      operationId: createScoreReport
+      tags: [Match results]
+      summary: Report your entry's score, blind (score only, no screenshot).
+      description: >-
+        Any starter or substitute may report once for their entry. The first report starts the other
+        entry's report window (verificationPolicy.reportWindowSeconds, 10 minutes by default) and a
+        reminder push reaches that entry reminderBeforeDeadlineSeconds before the window ends. A second
+        report that agrees with the first (same totals and tiebreak; the games breakdown is ignored)
+        confirms the result at once, advances the bracket and applies ratings. A second report that
+        differs opens the response window, and both entries are told only that the scores don't match.
+        If the other entry stays silent, the worker removes it from the tournament when the window ends
+        and the reporter wins by forfeit. If nobody reports by resultDueAt, both entries are removed.
+        The response and every error depend only on the caller's own entry and never reveal the
+        opponent's score.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: matchId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScoreReportRequest" }
+            examples:
+              scoreOnly: { value: { homeScore: 2, awayScore: 1, declarationAccepted: true } }
+              penalties:
+                value: { homeScore: 1, awayScore: 1, tiebreak: { type: penalties, homeScore: 4, awayScore: 3 }, declarationAccepted: true }
+      responses:
+        "201":
+          description: Report stored. The body is the caller's blind room and the report just stored.
+          headers:
+            Idempotency-Replayed:
+              description: Present with the value true when the stored response for this key was replayed.
+              schema: { type: string, enum: ["true"] }
+          content: { application/json: { schema: { $ref: "#/components/schemas/ScoreReportResponseEnvelope" } } }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: >-
+            idempotency_key_required, invalid_idempotency_key; invalid_request (malformed body or unknown
+            field); invalid_score_report (declarationAccepted is not true, or a score is outside 0..99);
+            invalid_score (games or tiebreak do not fit the stage's best-of and format).
+        "401":
+          $ref: "#/components/responses/Error"
+          description: authentication_required, invalid_access_token, invalid_session.
+        "404":
+          $ref: "#/components/responses/Error"
+          description: match_not_found (unknown or malformed id, or the caller is not a starter or substitute of either entry).
+        "409":
+          $ref: "#/components/responses/Error"
+          description: >-
+            competition_closed (the competition is cancelled or completed); report_not_allowed (the match is
+            not in progress or awaiting the second report); report_already_submitted (the caller's entry
+            already reported); report_window_closed (resultDueAt passed before any report, or the report
+            window ended); match_changed (a concurrent change; refresh and retry); idempotency_conflict.
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable, session_check_unavailable.
+  /v1/matches/{matchId}/score-reports/final:
+    post:
+      operationId: createFinalScoreReport
+      tags: [Match results]
+      summary: Submit your entry's one final score with screenshots after a mismatch.
+      description: >-
+        Allowed only while resultVerification.phase is awaiting_responses and before responseDeadline.
+        Each entry may respond once with its final score and one to three of its own screenshots that
+        are processed (ready=true), JPEG or PNG, and not attached to anything else. The current claims
+        are compared after every response: agreement confirms the result at once; a lone differing
+        response waits for the other entry; two differing responses send the match to the Gamics review
+        queue. When the window ends, a non-responder is removed from the tournament and a lone responder
+        advances; if nobody responded, both entries are removed. A non-responder whose screenshot is
+        still stuck in Gamics' own processing is never removed; the match goes to Gamics review instead.
+        The response and every error never reveal the opponent's score.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: matchId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FinalScoreReportRequest" }
+            example:
+              homeScore: 2
+              awayScore: 1
+              evidenceIds: ["4d3e5536-bf3c-4dba-a643-575e43f56970"]
+              declarationAccepted: true
+      responses:
+        "201":
+          description: Final report stored and its screenshots attached. The body is the caller's blind room and the final report just stored.
+          headers:
+            Idempotency-Replayed:
+              description: Present with the value true when the stored response for this key was replayed.
+              schema: { type: string, enum: ["true"] }
+          content: { application/json: { schema: { $ref: "#/components/schemas/ScoreReportResponseEnvelope" } } }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: >-
+            idempotency_key_required, invalid_idempotency_key; invalid_request; invalid_score_report;
+            invalid_score; invalid_evidence (not one to three distinct evidence UUIDs).
+        "401":
+          $ref: "#/components/responses/Error"
+          description: authentication_required, invalid_access_token, invalid_session.
+        "404":
+          $ref: "#/components/responses/Error"
+          description: match_not_found.
+        "409":
+          $ref: "#/components/responses/Error"
+          description: >-
+            competition_closed; response_not_allowed (the match is not awaiting mismatch responses);
+            response_already_submitted (the caller's entry already responded); response_window_closed;
+            evidence_not_ready (a screenshot is not the caller's, not processed, not JPEG/PNG, or already
+            used); match_changed; idempotency_conflict.
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable, session_check_unavailable.
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Printable ASCII without spaces. Reuse the same key to retry after a network failure.
+      schema: { type: string, minLength: 8, maxLength: 128 }
+  schemas:
+    ScoreReportRequest:
+      type: object
+      additionalProperties: false
+      description: One entry's blind score claim. Only the server compares it with the other entry's claim.
+      required: [homeScore, awayScore, declarationAccepted]
+      properties:
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        games:
+          type: array
+          maxItems: 99
+          description: >-
+            Optional game-by-game breakdown: 1..bestOf games whose totals equal homeScore and awayScore.
+            When omitted, the server records one aggregate game. It never decides whether two claims agree.
+          items: { $ref: "#/components/schemas/GameScore" }
+        tiebreak:
+          description: Required for a tied elimination match (a penalty shootout with a winner); forbidden otherwise. Round-robin draws have no tiebreak.
+          oneOf:
+            - { $ref: "#/components/schemas/TiebreakScore" }
+            - { type: "null" }
+        declarationAccepted: { type: boolean, const: true }
+    FinalScoreReportRequest:
+      type: object
+      additionalProperties: false
+      description: One entry's single response to a mismatch. Same score rules as ScoreReportRequest, plus the screenshots that prove it.
+      required: [homeScore, awayScore, evidenceIds, declarationAccepted]
+      properties:
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        games:
+          type: array
+          maxItems: 99
+          items: { $ref: "#/components/schemas/GameScore" }
+        tiebreak:
+          oneOf:
+            - { $ref: "#/components/schemas/TiebreakScore" }
+            - { type: "null" }
+        evidenceIds:
+          type: array
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          description: The caller's own processed (ready=true) JPEG or PNG uploads that are not attached to anything else.
+          items: { type: string, format: uuid }
+        declarationAccepted: { type: boolean, const: true }
+    ScoreReportView:
+      type: object
+      additionalProperties: false
+      description: >-
+        One of the viewer's own reports. There is no view of the other entry's report: this schema never
+        contains the opponent's score before the match is resolved, or after.
+      required: [id, kind, homeScore, awayScore, tiebreak, games, reportedAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [initial, final] }
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        tiebreak:
+          oneOf:
+            - { $ref: "#/components/schemas/TiebreakScore" }
+            - { type: "null" }
+        games:
+          type: array
+          items: { $ref: "#/components/schemas/GameScore" }
+        evidenceIds:
+          type: array
+          description: Present only on a final report, in the order they were submitted.
+          items: { type: string, format: uuid }
+        reportedAt: { type: string, format: date-time }
+    ScoreReportResponseEnvelope:
+      type: object
+      additionalProperties: false
+      description: The caller's own room and report. Never contains the opponent's score before the match is resolved.
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [match, report]
+          properties:
+            match: { $ref: "#/components/schemas/MatchRoom" }
+            report: { $ref: "#/components/schemas/ScoreReportView" }
+    ResultVerification:
+      type: object
+      additionalProperties: false
+      description: >-
+        The viewer's blind view of result verification. Never contains the opponent's score before the
+        match is resolved: about the other entry it says only whether it reported or responded. Each
+        deadline is shown only in the phase it governs.
+      required: [phase, myReport, myFinalReport, opponentReported, opponentResponded, reportDeadline, responseDeadline, resolution, entryRemoved]
+      properties:
+        phase:
+          type: string
+          enum: [not_started, awaiting_second_report, awaiting_responses, in_review, resolved]
+          description: not_started until the first report. A resolved match may also stay not_started when nobody ever reported.
+        myReport:
+          oneOf:
+            - { $ref: "#/components/schemas/ScoreReportView" }
+            - { type: "null" }
+        myFinalReport:
+          oneOf:
+            - { $ref: "#/components/schemas/ScoreReportView" }
+            - { type: "null" }
+        opponentReported: { type: boolean }
+        opponentResponded: { type: boolean }
+        reportDeadline:
+          type: [string, "null"]
+          format: date-time
+          description: End of the second entry's report window; set only in awaiting_second_report.
+        responseDeadline:
+          type: [string, "null"]
+          format: date-time
+          description: End of the mismatch response window; set only in awaiting_responses.
+        resolution:
+          type: [string, "null"]
+          enum: [agreed, report_timeout, response_timeout, platform_review, competition_cancelled, null]
+        entryRemoved:
+          type: boolean
+          description: True once the viewer's entry has been removed (disqualified) from the tournament.
+    MatchConfirmedResult:
+      type: object
+      additionalProperties: false
+      description: The canonical score, present only when the match state is completed.
+      required: [homeScore, awayScore, tiebreak, origin, confirmedAt]
+      properties:
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        tiebreak:
+          oneOf:
+            - { $ref: "#/components/schemas/TiebreakScore" }
+            - { type: "null" }
+        origin:
+          type: string
+          enum: [agreed_reports, platform_review, legacy]
+          description: agreed_reports when both entries' claims matched; platform_review when Gamics decided; legacy for results confirmed before result verification v2.
+        confirmedAt: { type: string, format: date-time }
+    MatchLifecycle:
+      type: string
+      description: >-
+        The viewer's lifecycle. awaiting_resolution covers the short gap between a passed deadline and
+        the worker acting on it; it offers no actions. A removed entry is shown by
+        resultVerification.entryRemoved, not by a lifecycle.
+      enum:
+        - assigned
+        - ready_for_check_in
+        - checked_in
+        - report_required
+        - awaiting_opponent_report
+        - mismatch_response_required
+        - awaiting_opponent_response
+        - awaiting_resolution
+        - under_review
+        - forfeited
+        - completed
+    MatchAllowedAction:
+      type: string
+      description: check_in maps to POST /check-ins, report_score to POST /score-reports and submit_final_score to POST /score-reports/final.
+      enum: [check_in, report_score, submit_final_score]
+    MatchCompletionReason:
+      type: [string, "null"]
+      description: >-
+        Why a terminal match ended. report_timeout, response_timeout and no_result_reported remove the
+        silent entries from the tournament; platform_review is a Gamics review decision;
+        competition_cancelled is set when the competition is cancelled. referee is a legacy history value
+        that is never written any more.
+      enum:
+        - played
+        - walkover
+        - double_no_show
+        - timeout_forfeit
+        - reset_not_required
+        - correction_voided
+        - report_timeout
+        - response_timeout
+        - no_result_reported
+        - platform_review
+        - competition_cancelled
+        - referee
+        - null

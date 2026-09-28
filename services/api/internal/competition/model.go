@@ -49,6 +49,25 @@ var transitions = map[Status]map[Status]struct{}{
 	StatusRunning:      {StatusCompleted: {}, StatusCancelled: {}},
 }
 
+// AllowedTransitions lists, in lifecycle order, the statuses reachable from the
+// given one. Organizer clients render controls from this instead of hardcoding
+// the state machine, so the server stays the single source of truth for what an
+// organizer may do next.
+func AllowedTransitions(from Status) []Status {
+	allowed, ok := transitions[from]
+	if !ok {
+		return []Status{}
+	}
+	ordered := []Status{StatusPublished, StatusRegistration, StatusCheckIn, StatusRunning, StatusCompleted, StatusCancelled}
+	result := make([]Status, 0, len(allowed))
+	for _, candidate := range ordered {
+		if _, ok := allowed[candidate]; ok {
+			result = append(result, candidate)
+		}
+	}
+	return result
+}
+
 func (c *Competition) Transition(to Status) error {
 	allowed, ok := transitions[c.Status]
 	if !ok {
@@ -75,30 +94,4 @@ func (c Competition) ValidateSchedule() error {
 		return errors.New("competition cannot start before registration ends")
 	}
 	return nil
-}
-
-type ResultStatus string
-
-const (
-	ResultPending    ResultStatus = "pending_confirmation"
-	ResultConfirmed  ResultStatus = "confirmed"
-	ResultDisputed   ResultStatus = "disputed"
-	ResultRejected   ResultStatus = "rejected"
-	ResultSuperseded ResultStatus = "superseded"
-)
-
-// ResultSubmission is append-only. Corrections create a new submission and an
-// audit event instead of silently changing competitive history.
-type ResultSubmission struct {
-	ID           string
-	MatchID      string
-	SubmittedBy  string
-	HomeScore    int
-	AwayScore    int
-	EvidenceKeys []string
-	Status       ResultStatus
-	SubmittedAt  time.Time
-	ConfirmedBy  string
-	ConfirmedAt  *time.Time
-	SupersedesID string
 }

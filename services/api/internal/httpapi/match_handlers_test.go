@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -68,35 +70,147 @@ func TestMatchPresentationDerivesAllowedActions(t *testing.T) {
 		State: "ready", CurrentSide: "home", HomePlayerID: &homeID, AwayPlayerID: &awayID,
 		CheckInOpensAt: &opens, CheckInClosesAt: &closes, ResultDueAt: &due,
 	}
-	lifecycle, actions := record.presentation(homeID, now, &opens, &closes)
+	lifecycle, actions := record.presentation(now, &opens, &closes)
 	if lifecycle != "ready_for_check_in" || !slices.Equal(actions, []string{"check_in"}) {
 		t.Fatalf("unexpected ready presentation: %q %v", lifecycle, actions)
 	}
 
 	checkedIn := now.Add(-time.Minute)
 	record.HomeCheckedInAt = &checkedIn
-	lifecycle, actions = record.presentation(homeID, now, &opens, &closes)
+	lifecycle, actions = record.presentation(now, &opens, &closes)
 	if lifecycle != "checked_in" || len(actions) != 0 {
 		t.Fatalf("unexpected one-sided check-in presentation: %q %v", lifecycle, actions)
 	}
+}
 
-	record.State = "in_progress"
-	record.AwayCheckedInAt = &checkedIn
-	lifecycle, actions = record.presentation(homeID, now, &opens, &closes)
-	if lifecycle != "checked_in" || !slices.Equal(actions, []string{"submit_result"}) {
-		t.Fatalf("unexpected playable presentation: %q %v", lifecycle, actions)
+func TestMatchPresentationFollowsTheBlindReportPhases(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	checkedIn, open := now.Add(-time.Minute), now.Add(time.Minute)
+	at := func(value time.Time) *time.Time { return &value }
+	phase := func(value string) *string { return &value }
+	mine := &scoreReportView{Kind: "initial", HomeScore: 2, AwayScore: 1}
+	mineFinal := &scoreReportView{Kind: "final", HomeScore: 2, AwayScore: 1}
+	tests := []struct {
+		name      string
+		record    matchRecord
+		lifecycle string
+		actions   []string
+	}{
+		{"both checked in and nobody reported", matchRecord{State: "in_progress", HomeCheckedInAt: &checkedIn,
+			AwayCheckedInAt: &checkedIn, ResultDueAt: at(open)}, "report_required", []string{"report_score"}},
+		{"one side checked in", matchRecord{State: "in_progress", HomeCheckedInAt: &checkedIn, ResultDueAt: at(open)},
+			"checked_in", nil},
+		{"result deadline reached", matchRecord{State: "in_progress", HomeCheckedInAt: &checkedIn,
+			AwayCheckedInAt: &checkedIn, ResultDueAt: at(now)}, "awaiting_resolution", nil},
+		{"my entry reported first", matchRecord{State: "awaiting_confirmation", VerificationPhase: phase("awaiting_second_report"),
+			ReportDeadlineAt: at(open), MyInitialReport: mine}, "awaiting_opponent_report", nil},
+		{"the other entry reported first", matchRecord{State: "awaiting_confirmation",
+			VerificationPhase: phase("awaiting_second_report"), ReportDeadlineAt: at(open)}, "report_required", []string{"report_score"}},
+		{"report window reached", matchRecord{State: "awaiting_confirmation",
+			VerificationPhase: phase("awaiting_second_report"), ReportDeadlineAt: at(now)}, "awaiting_resolution", nil},
+		{"my entry responded", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_responses"),
+			ResponseDeadlineAt: at(open), MyInitialReport: mine, MyFinalReport: mineFinal}, "awaiting_opponent_response", nil},
+		{"mismatch awaits my response", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_responses"),
+			ResponseDeadlineAt: at(open), MyInitialReport: mine}, "mismatch_response_required", []string{"submit_final_score"}},
+		{"response window reached", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_responses"),
+			ResponseDeadlineAt: at(now), MyInitialReport: mine}, "awaiting_resolution", nil},
+		{"Gamics review", matchRecord{State: "disputed", VerificationPhase: phase("in_review"), MyInitialReport: mine},
+			"under_review", nil},
+		{"forfeit", matchRecord{State: "forfeit"}, "forfeited", nil},
+		{"completed", matchRecord{State: "completed"}, "completed", nil},
+		{"cancelled", matchRecord{State: "cancelled"}, "completed", nil},
+		{"pending", matchRecord{State: "pending"}, "assigned", nil},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lifecycle, actions := test.record.presentation(now, nil, nil)
+			if lifecycle != test.lifecycle || !slices.Equal(actions, test.actions) {
+				t.Fatalf("presentation = %q %v, want %q %v", lifecycle, actions, test.lifecycle, test.actions)
+			}
+		})
+	}
+}
 
-	submissionID, submissionState, submittedBy := "submission-1", "pending_confirmation", awayID
-	record.State = "awaiting_confirmation"
-	record.SubmissionID, record.SubmissionState, record.SubmittedBy = &submissionID, &submissionState, &submittedBy
-	lifecycle, actions = record.presentation(homeID, now, &opens, &closes)
-	if lifecycle != "opponent_action_required" || !slices.Equal(actions, []string{"confirm_result", "dispute_result"}) {
-		t.Fatalf("unexpected opponent decision presentation: %q %v", lifecycle, actions)
+func TestMatchRoomNeverRevealsTheOtherEntryClaim(t *testing.T) {
+	// The other entry reported 7-3. Side B's record carries only its own 1-0 and
+	// the other entry's booleans, and the room must not grow a field for more.
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	deadline := now.Add(8 * time.Minute)
+	phase := "awaiting_responses"
+	record := matchRecord{
+		ID: testMatchID, State: "disputed", CurrentSide: "away", VerificationPhase: &phase, ResponseDeadlineAt: &deadline,
+		MyInitialReport: &scoreReportView{Kind: "initial", HomeScore: 1, AwayScore: 0,
+			Games: []gameScoreInput{{HomeScore: 1, AwayScore: 0}}, ReportedAt: now.Add(-time.Minute)},
+		OpponentReported: true, OpponentResponded: true,
 	}
-	lifecycle, actions = record.presentation(awayID, now, &opens, &closes)
-	if lifecycle != "awaiting_opponent" || len(actions) != 0 {
-		t.Fatalf("submitter must not confirm their own result: %q %v", lifecycle, actions)
+	raw, err := json.Marshal(record.response("away-player", now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{`"homeScore":7`, `"awayScore":3`, "pendingResult", "opponentReport\""} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("room leaks %s: %s", forbidden, raw)
+		}
+	}
+	var room struct {
+		ResultVerification map[string]json.RawMessage `json:"resultVerification"`
+		Result             json.RawMessage            `json:"result"`
+	}
+	if err = json.Unmarshal(raw, &room); err != nil {
+		t.Fatal(err)
+	}
+	keys := slices.Sorted(maps.Keys(room.ResultVerification))
+	want := []string{"entryRemoved", "myFinalReport", "myReport", "opponentReported", "opponentResponded",
+		"phase", "reportDeadline", "resolution", "responseDeadline"}
+	if !slices.Equal(keys, want) {
+		t.Fatalf("resultVerification keys = %v, want %v", keys, want)
+	}
+	if string(room.ResultVerification["opponentReported"]) != "true" || string(room.ResultVerification["opponentResponded"]) != "true" ||
+		string(room.ResultVerification["reportDeadline"]) != "null" || string(room.Result) != "null" {
+		t.Fatalf("unexpected blind view: %s", raw)
+	}
+}
+
+func TestMatchRoomShowsTheConfirmedResultOnlyWhenCompleted(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	record := matchRecord{State: "completed", ConfirmedResult: &matchConfirmedResultResponse{
+		HomeScore: 2, AwayScore: 1, Origin: "agreed_reports", ConfirmedAt: now,
+	}}
+	if room := record.response("player", now); room.Result == nil || room.Result.HomeScore != 2 {
+		t.Fatalf("completed match hides its result: %+v", room.Result)
+	}
+	for _, state := range []string{"forfeit", "cancelled", "disputed"} {
+		record.State = state
+		if room := record.response("player", now); room.Result != nil {
+			t.Fatalf("%s match shows a result: %+v", state, room.Result)
+		}
+	}
+}
+
+func TestMatchRecordDecodesTheRoomQueryJSON(t *testing.T) {
+	var record matchRecord
+	reports := []byte(`{"initial":{"id":"4d3e5536-bf3c-4dba-a643-575e43f56970","kind":"initial","homeScore":1,"awayScore":1,
+		"tiebreak":{"type":"penalties","homeScore":4,"awayScore":3},"games":[{"homeScore":1,"awayScore":1}],
+		"reportedAt":"2026-09-28T14:31:00.123456+03:00","evidenceIds":[]},
+		"final":{"id":"5d3e5536-bf3c-4dba-a643-575e43f56970","kind":"final","homeScore":2,"awayScore":1,"tiebreak":null,
+		"games":[{"homeScore":2,"awayScore":1}],"reportedAt":"2026-09-28T11:40:00+00:00",
+		"evidenceIds":["6d3e5536-bf3c-4dba-a643-575e43f56970"]}}`)
+	confirmed := []byte(`{"homeScore":2,"awayScore":1,"tiebreak":null,"origin":"agreed_reports",
+		"confirmedAt":"2026-09-28T14:45:00+03:00"}`)
+	if err := record.decodeResultViews(reports, confirmed); err != nil {
+		t.Fatal(err)
+	}
+	initial, final := record.MyInitialReport, record.MyFinalReport
+	if initial == nil || final == nil || initial.Tiebreak == nil || initial.Tiebreak.HomeScore != 4 ||
+		!initial.ReportedAt.Equal(time.Date(2026, 9, 28, 11, 31, 0, 123456000, time.UTC)) || initial.ReportedAt.Location() != time.UTC ||
+		len(final.EvidenceIDs) != 1 || final.Tiebreak != nil {
+		t.Fatalf("unexpected reports: %+v %+v", initial, final)
+	}
+	if record.ConfirmedResult == nil || record.ConfirmedResult.ConfirmedAt.Hour() != 11 {
+		t.Fatalf("unexpected confirmed result: %+v", record.ConfirmedResult)
+	}
+	if err := (&matchRecord{}).decodeResultViews(nil, nil); err != nil {
+		t.Fatalf("absent views must decode as empty: %v", err)
 	}
 }
 
@@ -134,6 +248,29 @@ func TestMatchSettingsUseValidatedStageOverrides(t *testing.T) {
 	settings = resolveMatchSettings("efootball-mobile", "single_elimination", nil, invalid)
 	if len(settings.Instructions) != 4 {
 		t.Fatalf("invalid rules must fall back to safe defaults: %+v", settings.Instructions)
+	}
+}
+
+func TestMatchVerificationPolicyUsesTheSnapshotOnceReported(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	record := matchRecord{
+		State: "in_progress", GameID: "efootball-mobile", StageFormat: "single_elimination",
+		RulesSnapshot: []byte(`{"matchVerification":{"reportWindowMinutes":20,"reminderBeforeDeadlineMinutes":5,"responseWindowMinutes":15}}`),
+	}
+	policy := record.response("player", now).VerificationPolicy
+	if policy.ReportWindowSeconds != 1200 || policy.ReminderBeforeDeadlineSeconds != 300 || policy.ResponseWindowSeconds != 900 {
+		t.Fatalf("rules were not applied before the first report: %+v", policy)
+	}
+	if policy.FinalReportEvidence.MinItems != 1 || policy.FinalReportEvidence.MaxItems != 3 ||
+		!slices.Equal(policy.FinalReportEvidence.MediaTypes, []string{"image/jpeg", "image/png"}) {
+		t.Fatalf("unexpected final report evidence policy: %+v", policy.FinalReportEvidence)
+	}
+
+	reportWindow, reminderLead, responseWindow := 600, 180, 600
+	record.ReportWindowSeconds, record.ReminderLeadSeconds, record.ResponseWindowSeconds = &reportWindow, &reminderLead, &responseWindow
+	policy = record.response("player", now).VerificationPolicy
+	if policy.ReportWindowSeconds != 600 || policy.ReminderBeforeDeadlineSeconds != 180 || policy.ResponseWindowSeconds != 600 {
+		t.Fatalf("a rules edit moved the snapshotted windows: %+v", policy)
 	}
 }
 
