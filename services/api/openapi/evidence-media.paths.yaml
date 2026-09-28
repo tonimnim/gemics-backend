@@ -1,0 +1,373 @@
+# Private screenshot evidence and avatar media contract. Merge this OpenAPI 3.1
+# fragment with the main contract. Match evidence is JPEG or PNG screenshots
+# only: HEIC/HEIF must be converted to JPEG first, and video is not accepted.
+# Completion is asynchronous: an upload returns processing until the
+# screenshot worker verifies it, and it can be attached to a final score report
+# only once ready=true. Evidence is visible to its uploader, and to Gamics
+# platform reviewers and admins without a conflict of interest in the match;
+# never to opponents or organizers.
+paths:
+  /v1/evidence/uploads:
+    post:
+      operationId: createEvidenceUpload
+      tags: [Evidence]
+      summary: Create a checksum-bound private JPEG or PNG screenshot upload.
+      description: >-
+        Convert HEIC/HEIF to JPEG before calculating size and SHA-256. The signed PUT binds
+        Content-Length, Content-Type, If-None-Match=* and the SHA-256; upload the raw bytes, not
+        multipart/form-data. Per-player request and daily byte budgets return 429 with Retry-After.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateEvidenceUpload" }
+      responses:
+        "201":
+          description: Short-lived signed PUT intent. The required headers must be sent unchanged.
+          content: { application/json: { schema: { $ref: "#/components/schemas/UploadIntentEnvelope" } } }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: >-
+            invalid_request; invalid_evidence_upload (not JPEG or PNG, a video or a durationSeconds field,
+            a size outside the limit, or a malformed checksum).
+        "401": { $ref: "#/components/responses/Error" }
+        "429":
+          $ref: "#/components/responses/Error"
+          description: evidence_rate_limited, with Retry-After.
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: >-
+            evidence_limits_unavailable (upload protection is down; retry after Retry-After),
+            evidence_storage_unavailable, database_unavailable.
+  /v1/evidence/uploads/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getEvidenceUpload
+      tags: [Evidence]
+      summary: Poll an owned evidence upload's verification status.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current upload and asynchronous processing state.
+          content: { application/json: { schema: { $ref: "#/components/schemas/EvidenceEnvelope" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404":
+          $ref: "#/components/responses/Error"
+          description: evidence_not_found.
+        "429":
+          $ref: "#/components/responses/Error"
+          description: evidence_rate_limited, with Retry-After.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: evidence_limits_unavailable (with Retry-After), database_unavailable.
+  /v1/evidence/uploads/{id}/complete:
+    post:
+      operationId: completeEvidenceUpload
+      tags: [Evidence]
+      summary: Durably queue an uploaded screenshot for asynchronous verification.
+      description: >-
+        Returns processing with ready=false. Poll GET /v1/evidence/uploads/{id} with backoff until
+        ready=true before attaching the screenshot to a final score report. Repeating completion is
+        safe. The screenshot worker verifies the JPEG/PNG structure, dimensions, decode budget, size and
+        SHA-256; a legacy video upload is failed with processing error video_unsupported.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Verification queued, or the current state for an idempotent completion retry.
+          content: { application/json: { schema: { $ref: "#/components/schemas/EvidenceEnvelope" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404":
+          $ref: "#/components/responses/Error"
+          description: evidence_not_found.
+        "409":
+          $ref: "#/components/responses/Error"
+          description: evidence_not_pending.
+        "410":
+          $ref: "#/components/responses/Error"
+          description: evidence_upload_expired.
+        "422":
+          $ref: "#/components/responses/Error"
+          description: evidence_media_unsupported (a legacy video upload; video evidence is not accepted).
+        "429":
+          $ref: "#/components/responses/Error"
+          description: evidence_rate_limited, with Retry-After.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: evidence_limits_unavailable (with Retry-After), evidence_storage_unavailable, database_unavailable.
+  /v1/evidence/{id}:
+    get:
+      operationId: getEvidenceAccess
+      tags: [Evidence]
+      summary: Obtain short-lived private access to a processed screenshot.
+      description: >-
+        Evidence is visible to its uploader, and to active Gamics platform reviewers and admins once it
+        is attached to something. A reviewer or admin who plays in, captains an entry in, or belongs to
+        the organization of the match a score-report screenshot belongs to reaches it only as its
+        uploader. Opponents and organizers never reach another player's evidence; they get the same 404
+        as for a missing upload.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Short-lived signed private download.
+          content: { application/json: { schema: { $ref: "#/components/schemas/EvidenceAccessEnvelope" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404":
+          $ref: "#/components/responses/Error"
+          description: evidence_not_found (missing, not processed, or not visible to the caller).
+        "503":
+          $ref: "#/components/responses/Error"
+          description: evidence_storage_unavailable, database_unavailable.
+
+  /v1/me/avatar/uploads:
+    post:
+      operationId: createAvatarUpload
+      tags: [Profile media]
+      summary: Create a private checksum-bound avatar upload.
+      description: Per-player upload-count and daily byte budgets return 429 with Retry-After.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [mediaType, byteSize, sha256]
+              properties:
+                mediaType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+                byteSize: { type: integer, format: int64, minimum: 1, maximum: 10485760 }
+                sha256: { type: string, pattern: "^[0-9a-fA-F]{64}$" }
+      responses:
+        "201":
+          description: Short-lived signed private upload.
+          content: { application/json: { schema: { $ref: "#/components/schemas/UploadIntentEnvelope" } } }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: invalid_request, invalid_avatar_upload.
+        "401": { $ref: "#/components/responses/Error" }
+        "429":
+          $ref: "#/components/responses/Error"
+          description: avatar_rate_limited, with Retry-After.
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: avatar_limits_unavailable (with Retry-After), avatar_storage_unavailable, database_unavailable.
+  /v1/me/avatar/uploads/{id}/complete:
+    post:
+      operationId: completeAvatarUpload
+      tags: [Profile media]
+      summary: Verify an avatar upload's provider-reported size and checksum.
+      description: Completions share a per-player per-minute limit that returns 429 with Retry-After.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Avatar media is ready to select.
+          content: { application/json: { schema: { $ref: "#/components/schemas/AvatarUploadEnvelope" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404":
+          $ref: "#/components/responses/Error"
+          description: avatar_upload_not_found.
+        "409":
+          $ref: "#/components/responses/Error"
+          description: avatar_upload_not_pending, avatar_upload_incomplete.
+        "410":
+          $ref: "#/components/responses/Error"
+          description: avatar_upload_expired.
+        "422":
+          $ref: "#/components/responses/Error"
+          description: avatar_verification_failed.
+        "429":
+          $ref: "#/components/responses/Error"
+          description: avatar_rate_limited, with Retry-After.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: avatar_limits_unavailable (with Retry-After), avatar_storage_unavailable, avatar_verification_unavailable, database_unavailable.
+  /v1/me/avatar:
+    patch:
+      operationId: updateProfileAvatar
+      tags: [Profile media]
+      summary: Atomically select a completed owned upload as the profile avatar.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [uploadId]
+              properties: { uploadId: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Profile avatar updated.
+          content: { application/json: { schema: { $ref: "#/components/schemas/AvatarSelectionEnvelope" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    get:
+      operationId: getMyAvatarAccess
+      tags: [Profile media]
+      summary: Get short-lived private object access for the active avatar.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Signed avatar access.
+          content: { application/json: { schema: { $ref: "#/components/schemas/AvatarAccessEnvelope" } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/players/{playerId}/avatar:
+    get:
+      operationId: getPublicAvatarAccess
+      tags: [Profile media]
+      summary: Redirect to a short-lived object URL for a discoverable active player's avatar.
+      parameters:
+        - { name: playerId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "307":
+          description: Temporary redirect to the signed avatar object. Clients may use this stable API path directly as an image URI.
+          headers:
+            Location:
+              required: true
+              schema: { type: string, format: uri }
+            Cache-Control:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+components:
+  schemas:
+    CreateEvidenceUpload:
+      type: object
+      additionalProperties: false
+      required: [mediaType, byteSize, sha256]
+      properties:
+        mediaType: { type: string, enum: [image/jpeg, image/png] }
+        byteSize:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 26214400
+          description: The deployment's EVIDENCE_MAX_BYTES (10 MiB by default), never more than 25 MiB.
+        sha256: { type: string, pattern: "^[0-9a-fA-F]{64}$" }
+    UploadIntent:
+      type: object
+      required: [id, uploadUrl, requiredHeaders, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        uploadUrl: { type: string, format: uri }
+        requiredHeaders: { type: object, additionalProperties: { type: string } }
+        expiresAt: { type: string, format: date-time }
+    UploadIntentEnvelope:
+      type: object
+      required: [data]
+      properties: { data: { $ref: "#/components/schemas/UploadIntent" } }
+    EvidenceProcessingErrorCode:
+      type: [string, "null"]
+      description: >-
+        Set when the upload is rejected or failed. Rejected (the file is at fault): checksum_mismatch,
+        size_mismatch, size_exceeded, media_type_mismatch, unsupported_image_type, invalid_image,
+        unsupported_image_encoding, image_dimensions_exceeded. Failed: upload_missing (the object was
+        never uploaded), verification_unavailable and processing_aborted (Gamics could not verify it; a
+        mismatch response is then escalated to Gamics review instead of removing the player),
+        video_unsupported (legacy video). legacy_error marks an older unclassified error.
+      enum:
+        - checksum_mismatch
+        - size_mismatch
+        - size_exceeded
+        - media_type_mismatch
+        - unsupported_image_type
+        - invalid_image
+        - unsupported_image_encoding
+        - image_dimensions_exceeded
+        - upload_missing
+        - verification_unavailable
+        - processing_aborted
+        - video_unsupported
+        - legacy_error
+        - null
+    Evidence:
+      type: object
+      required: [id, status, mediaKind, mediaType, byteSize, ready, completedAt, processedAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, processing, completed, failed, rejected, expired] }
+        mediaKind: { type: string, enum: [image, video], description: "video appears only on legacy uploads, which are failed." }
+        mediaType: { type: string }
+        byteSize: { type: integer, format: int64 }
+        declaredDurationSeconds: { type: [number, "null"], description: Legacy video uploads only. }
+        verifiedDurationSeconds: { type: [number, "null"], description: Legacy video uploads only. }
+        processingStatus: { type: [string, "null"], enum: [queued, running, succeeded, rejected, failed, null] }
+        processingErrorCode: { $ref: "#/components/schemas/EvidenceProcessingErrorCode" }
+        ready: { type: boolean, description: True only when status is completed. }
+        completedAt: { type: [string, "null"], format: date-time, description: Client completion and verification queue time. }
+        processedAt: { type: [string, "null"], format: date-time, description: Asynchronous screenshot verification completion time. }
+    EvidenceEnvelope:
+      type: object
+      required: [data]
+      properties: { data: { $ref: "#/components/schemas/Evidence" } }
+    EvidenceAccessEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [id, mediaKind, mediaType, byteSize, downloadUrl, expiresAt]
+          properties:
+            id: { type: string, format: uuid }
+            mediaKind: { type: string, enum: [image] }
+            mediaType: { type: string, enum: [image/jpeg, image/png] }
+            byteSize: { type: integer, format: int64 }
+            downloadUrl: { type: string, format: uri }
+            expiresAt: { type: string, format: date-time }
+    AvatarUpload:
+      type: object
+      required: [id, status, mediaType, byteSize, completedAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, completed, attached, failed, expired] }
+        mediaType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        byteSize: { type: integer, format: int64 }
+        completedAt: { type: [string, "null"], format: date-time }
+    AvatarUploadEnvelope:
+      type: object
+      required: [data]
+      properties: { data: { $ref: "#/components/schemas/AvatarUpload" } }
+    AvatarSelectionEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [uploadId, status, updatedAt, accessEndpoint]
+          properties:
+            uploadId: { type: string, format: uuid }
+            status: { const: active }
+            updatedAt: { type: string, format: date-time }
+            accessEndpoint: { const: /v1/me/avatar }
+    AvatarAccessEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [mediaType, downloadUrl, expiresAt]
+          properties:
+            mediaType: { type: string }
+            downloadUrl: { type: string, format: uri }
+            expiresAt: { type: string, format: date-time }
