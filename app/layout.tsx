@@ -17,7 +17,20 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: new URL(origin),
     title: "Gamics — Your game. Your name.",
     description,
-    icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
+    // Browsers cache favicons far more aggressively than page assets, and a
+    // stale one survives an ordinary reload. Bump this when the mark changes.
+    // PNG rather than SVG. Chrome renders an SVG favicon through a separate
+    // rasterisation path that proved unreliable here, and Google's favicon
+    // crawler and older Safari want a bitmap regardless. logo.svg remains the
+    // scalable master for everything that is not a tab icon.
+    icons: {
+      icon: [
+        { url: "/favicon-32.png?v=4", sizes: "32x32", type: "image/png" },
+        { url: "/favicon-16.png?v=4", sizes: "16x16", type: "image/png" },
+      ],
+      shortcut: "/favicon-32.png?v=4",
+      apple: "/apple-touch-icon.png?v=4",
+    },
     openGraph: {
       title: "Gamics — Your game. Your name.",
       description,

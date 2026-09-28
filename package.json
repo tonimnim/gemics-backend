@@ -14,8 +14,13 @@
     "mobile:start": "npm --prefix apps/mobile run start",
     "mobile:typecheck": "npm --prefix apps/mobile run typecheck",
     "mobile:lint": "npm --prefix apps/mobile run lint",
-    "api:dev": "go run ./services/api/cmd/api",
-    "api:test": "go -C services/api test ./..."
+    "api:dev": "go -C services/api run ./cmd/api",
+    "api:test": "go -C services/api test ./...",
+    "api:vet": "go -C services/api vet ./...",
+    "stack:up": "docker compose --env-file .env.docker up --build",
+    "stack:r2:up": "docker compose --env-file .env.docker --env-file .env.r2 -f compose.yaml -f compose.r2.yaml up --build -d",
+    "stack:r2:down": "docker compose --env-file .env.docker --env-file .env.r2 -f compose.yaml -f compose.r2.yaml down",
+    "stack:down": "docker compose --env-file .env.docker down"
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.0.2",

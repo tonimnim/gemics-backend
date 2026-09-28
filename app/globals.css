@@ -20,7 +20,11 @@ button { cursor: pointer; }
 
 .site-header { height: 84px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .brand { display: inline-flex; gap: 10px; align-items: center; font-size: 1rem; font-weight: 900; letter-spacing: .14em; }
-.brand-mark { display: grid; place-items: center; width: 31px; height: 31px; color: var(--ink); background: var(--acid); border: 2px solid var(--ink); transform: skew(-8deg); font-weight: 950; letter-spacing: 0; }
+/* The mark stands alone: no plate, no border, no skew. It is inked rather than
+   acid because acid on the paper background measures 1.16:1 and would vanish.
+   48px is the floor at which the face buttons resolve at all. */
+.brand-mark { display: block; width: 48px; height: 48px; color: var(--ink); }
+.brand-mark svg { width: 100%; height: 100%; display: block; }
 nav { display: flex; gap: 34px; font-size: .8rem; font-weight: 700; }
 nav a:hover { text-decoration: underline; text-underline-offset: 5px; }
 .button { min-height: 45px; padding: 0 18px; border: 1px solid var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 20px; font-size: .78rem; font-weight: 850; text-transform: uppercase; letter-spacing: .04em; }
@@ -69,6 +73,15 @@ nav a:hover { text-decoration: underline; text-underline-offset: 5px; }
 .competition-content { padding: 23px; flex: 1; }.game-label { font: 750 .58rem var(--font-geist-mono), monospace; }.competition-card h3 { margin: 10px 0 5px; font-size: 1.28rem; }.competition-card p { margin: 0; color: #62635d; font-size: .82rem; }
 .competition-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 31px; font: .64rem var(--font-geist-mono), monospace; }.competition-meta strong { font-size: .72rem; }.capacity { height: 4px; background: #dddcd4; margin-top: 9px; }.capacity i { display: block; height: 100%; background: var(--ink); }
 .competition-card button { position: absolute; right: 13px; top: 13px; width: 36px; height: 36px; border: 1px solid var(--ink); background: white; font-weight: 900; }
+
+/* Tournament listing: the entry price is the thing a player scans for, so it
+   gets the acid block and paid/free share one shape rather than two layouts. */
+.entry-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+.entry-tag { padding: 6px 10px; border: 1px solid var(--ink); background: var(--acid); font: 850 .68rem var(--font-geist-mono), monospace; letter-spacing: .04em; white-space: nowrap; }
+.entry-tag.free { background: transparent; }
+.entry-format { font: .62rem var(--font-geist-mono), monospace; color: #62635d; text-align: right; }
+.entry-organizer { margin-top: 12px !important; font: .62rem var(--font-geist-mono), monospace; color: #8a8b84 !important; }
+.tournament-note { padding: 34px 0; margin: 0; font-size: 1rem; color: #62635d; border-top: 1px solid var(--ink); }
 
 .dark-section { background: var(--ink); color: white; padding-block: 110px; }
 .inverse .eyebrow span { border-color: var(--acid); }.inverse>p { color: rgba(255,255,255,.65); }

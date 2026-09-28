@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BrandMark } from "./brand-mark";
 
 const competitions = [
   {
@@ -27,7 +28,7 @@ const competitions = [
 const steps = [
   ["01", "Create your player card", "Claim a public profile and connect your eFootball identity."],
   ["02", "Enter a competition", "Register, check in and receive your match room instructions."],
-  ["03", "Play and prove it", "Submit the result. Both players confirm, or an admin reviews evidence."],
+  ["03", "Play and prove it", "Both sides report the score blind. Matching scores confirm instantly; a mismatch goes to screenshots and, if needed, Gamics review."],
 ] as const;
 
 export default function Home() {
@@ -35,11 +36,11 @@ export default function Home() {
     <main>
       <header className="site-header shell">
         <Link className="brand" href="/" aria-label="Gamics home">
-          <span className="brand-mark">G</span>
+          <BrandMark />
           <span>GAMICS</span>
         </Link>
         <nav aria-label="Primary navigation">
-          <a href="#competitions">Competitions</a>
+          <Link href="/tournaments">Tournaments</Link>
           <a href="#players">Players</a>
           <a href="#organizers">Organizers</a>
         </nav>
@@ -54,7 +55,7 @@ export default function Home() {
             Enter trusted eFootball Mobile competitions, prove your skill and build a record that gets noticed.
           </p>
           <div className="hero-actions">
-            <a className="button button-primary" href="#competitions">Find a competition <span>↗</span></a>
+            <Link className="button button-primary" href="/tournaments">Find a competition <span>↗</span></Link>
             <a className="text-link" href="#organizers">Run your own league <span>→</span></a>
           </div>
         </div>
@@ -92,7 +93,7 @@ export default function Home() {
             <article className="competition-card" key={competition.name}>
               <div className={`competition-number ${competition.accent}`}>0{index + 1}</div>
               <div className="competition-content">
-                <span className="game-label">eFOOTBALL™</span>
+                <span className="game-label">eFootball Mobile</span>
                 <h3>{competition.name}</h3>
                 <p>{competition.mode}</p>
                 <div className="competition-meta"><span>{competition.status}</span><strong>{competition.players}</strong></div>
@@ -124,18 +125,18 @@ export default function Home() {
           <h2>RUN THE LEAGUE.<br /><em>WE RUN THE LOGIC.</em></h2>
         </div>
         <div className="organizer-copy">
-          <p>Registration, check-in, brackets, result confirmation, evidence and disputes in one competition control room.</p>
+          <p>Registration, check-in, brackets and blind score reports in one competition control room. Contested results go to Gamics review, so you never have to settle a score.</p>
           <button className="button button-dark" type="button">Become an organizer <span>↗</span></button>
         </div>
       </section>
 
       <footer className="shell">
         <div className="footer-row">
-          <Link className="brand" href="/"><span className="brand-mark">G</span><span>GAMICS</span></Link>
+          <Link className="brand" href="/"><BrandMark /><span>GAMICS</span></Link>
           <p>Competition infrastructure for African esports.</p>
           <span>NAIROBI // 2026</span>
         </div>
-        <p className="legal-note">eFootball is a trademark of Konami Digital Entertainment. Gamics is an independent platform and is not affiliated with or endorsed by Konami.</p>
+        <p className="legal-note">eFootball™ is a trademark of Konami Digital Entertainment Co., Ltd. Gamics is an independent tournament platform and is not affiliated with, authorized by, sponsored by, or endorsed by Konami.</p>
       </footer>
     </main>
   );
