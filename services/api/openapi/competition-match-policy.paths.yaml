@@ -1,0 +1,374 @@
+# Merge fragment for the player eligibility, typed bracket and match-verification
+# slice. openapi.yaml remains the generated/assembled source of truth; this file
+# deliberately does not duplicate unrelated operations. The blind score-report
+# operations and the room's resultVerification schemas live in
+# match-score-reports.paths.yaml.
+paths:
+  /v1/competitions/{id}/eligibility:
+    get:
+      operationId: getCompetitionEligibility
+      tags: [Competitions]
+      summary: Evaluate every current registration requirement for the signed-in player.
+      description: >-
+        This is a private writer-side decision and must not be shared-cached. A paid
+        competition can be eligible while canRegisterNow is false and requiredAction
+        is start_payment. Registration/payment handlers must evaluate the same policy
+        again in their write transaction because capacity and deadlines can change.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: gameAccountId
+          in: query
+          required: false
+          description: Omit to discover that selecting a connected account is required.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: A complete eligibility decision, including every blocking/action issue.
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompetitionEligibilityResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/competitions/{id}/bracket:
+    get:
+      operationId: getCompetitionBracket
+      tags: [Competitions]
+      summary: Return the generated bracket as typed stages, rounds, matches and graph edges.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Read-only bracket projection. This operation never generates a draw.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TypedBracketResponse" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/matches/{matchId}:
+    get:
+      operationId: getMatch
+      tags: [Matches]
+      summary: Return a participant match room with an explicit verification policy.
+      description: >-
+        The room is the caller's blind view. It never contains the opponent's score before the match
+        is resolved: resultVerification says only whether the opponent reported or responded, and the
+        canonical result appears once the match is completed.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: matchId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Authorized participant match room.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MatchRoomWithVerificationResponse" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404":
+          $ref: "#/components/responses/Error"
+          description: match_not_found (missing, or the caller is not a starter or substitute of either entry).
+        "503": { $ref: "#/components/responses/Error" }
+
+components:
+  schemas:
+    CompetitionEligibilityResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/CompetitionEligibility" }
+    CompetitionEligibility:
+      type: object
+      additionalProperties: false
+      required:
+        - competitionId
+        - gameId
+        - status
+        - eligible
+        - canRegisterNow
+        - requiredAction
+        - entryFeeMinor
+        - currency
+        - requirements
+        - issues
+        - evaluatedAt
+      properties:
+        competitionId: { type: string, format: uuid }
+        gameId: { type: string }
+        status: { type: string, enum: [eligible, ineligible, registered] }
+        eligible:
+          type: boolean
+          description: False only when at least one blocking issue exists.
+        canRegisterNow:
+          type: boolean
+          description: True only for a free, eligible competition ready for the registration POST.
+        requiredAction:
+          type: string
+          enum: [none, submit_registration, start_payment, poll_payment, view_registration, view_refund]
+        entryFeeMinor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        requirements: { $ref: "#/components/schemas/CompetitionEligibilityRequirements" }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/CompetitionEligibilityIssue" }
+        evaluatedAt: { type: string, format: date-time }
+    CompetitionEligibilityRequirements:
+      type: object
+      additionalProperties: false
+      required: [minimumAge, allowedCountries, minimumRating, maximumRank, requireVerifiedGameAccount]
+      properties:
+        minimumAge: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        allowedCountries:
+          type: array
+          maxItems: 64
+          uniqueItems: true
+          items: { type: string, pattern: "^[A-Z]{2}$" }
+        minimumRating: { type: [integer, "null"], minimum: 0, maximum: 10000 }
+        maximumRank: { type: [integer, "null"], minimum: 1 }
+        rankingScope: { type: string, enum: [global, country] }
+        requireVerifiedGameAccount: { type: boolean }
+    CompetitionEligibilityIssue:
+      type: object
+      additionalProperties: false
+      required: [code, category, severity, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - profile_incomplete
+            - registration_not_reusable
+            - registration_not_open
+            - registration_closed
+            - competition_full
+            - age_required
+            - minimum_age_not_met
+            - country_not_allowed
+            - rating_unavailable
+            - minimum_rating_not_met
+            - ranking_unavailable
+            - maximum_rank_not_met
+            - game_account_required
+            - game_account_game_mismatch
+            - verified_game_account_required
+            - payment_required
+            - payment_pending
+            - payment_processing
+            - payment_retry_required
+            - conduct_suspended
+          description: >-
+            conduct_suspended blocks new registrations while the player holds at least the platform's
+            active conduct strike threshold (3 by default). Existing entries are unaffected.
+        category:
+          type: string
+          enum: [profile, registration, capacity, age, country, ranking, game_account, payment, conduct]
+        severity: { type: string, enum: [blocking, action_required] }
+        message: { type: string }
+    MatchVerificationPolicy:
+      type: object
+      additionalProperties: false
+      description: >-
+        The windows of the blind dual score report. They are snapshotted when the first report opens
+        verification, so a later rules edit never moves a live deadline; before that they are resolved
+        from the competition's matchVerification rules.
+      required: [reportWindowSeconds, reminderBeforeDeadlineSeconds, responseWindowSeconds, finalReportEvidence]
+      properties:
+        reportWindowSeconds:
+          type: integer
+          format: int64
+          minimum: 300
+          maximum: 3600
+          description: How long the other entry has to report after the first report (10 minutes by default).
+        reminderBeforeDeadlineSeconds:
+          type: integer
+          format: int64
+          minimum: 60
+          description: When the reminder push reaches a silent entry, before the report window ends (3 minutes by default). Always less than reportWindowSeconds.
+        responseWindowSeconds:
+          type: integer
+          format: int64
+          minimum: 300
+          maximum: 3600
+          description: How long each entry has to submit its final score after a mismatch (10 minutes by default).
+        finalReportEvidence:
+          type: object
+          additionalProperties: false
+          required: [minItems, maxItems, mediaTypes]
+          properties:
+            minItems: { type: integer, const: 1 }
+            maxItems: { type: integer, const: 3 }
+            mediaTypes:
+              type: array
+              items: { type: string, enum: [image/jpeg, image/png] }
+    CompetitionMatchVerificationRules:
+      type: object
+      additionalProperties: false
+      description: >-
+        rules.matchVerification on a competition. Every field is optional and whole minutes. Writes reject
+        any other key, including the retired evidenceRequirement, confirmationWindowMinutes,
+        autoConfirmEnabled and refereeMonitoring, with 400 invalid_match_verification_rules. Stored
+        values outside the bounds are ignored on read and the defaults apply.
+      properties:
+        reportWindowMinutes: { type: integer, minimum: 5, maximum: 60, default: 10 }
+        reminderBeforeDeadlineMinutes: { type: integer, minimum: 1, default: 3, description: Must be less than the report window. }
+        responseWindowMinutes: { type: integer, minimum: 5, maximum: 60, default: 10 }
+    MatchRoomWithVerificationResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          allOf:
+            - { $ref: "#/components/schemas/MatchRoom" }
+            - type: object
+              required: [verificationPolicy]
+              properties:
+                verificationPolicy: { $ref: "#/components/schemas/MatchVerificationPolicy" }
+    TypedBracketResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [competitionId, stages]
+          properties:
+            competitionId: { type: string, format: uuid }
+            stages:
+              type: array
+              items: { $ref: "#/components/schemas/BracketStage" }
+    BracketStage:
+      type: object
+      additionalProperties: false
+      required: [id, name, position, format, bestOf, status, rounds]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        position: { type: integer, minimum: 0 }
+        format: { type: string, enum: [single_elimination, double_elimination, round_robin] }
+        bestOf: { type: integer, minimum: 1 }
+        status: { type: string, enum: [pending, active, completed] }
+        rounds:
+          type: array
+          items: { $ref: "#/components/schemas/BracketRound" }
+    BracketRound:
+      type: object
+      additionalProperties: false
+      required: [number, name, bracket, matches]
+      properties:
+        number: { type: integer, minimum: 1 }
+        name: { type: string }
+        bracket: { type: string }
+        matches:
+          type: array
+          items: { $ref: "#/components/schemas/BracketMatch" }
+    BracketMatch:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - code
+        - matchNumber
+        - state
+        - home
+        - away
+        - score
+        - winnerEntryId
+        - scheduledAt
+        - resultDueAt
+        - completedAt
+        - progression
+        - version
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        matchNumber: { type: integer, minimum: 1 }
+        state: { $ref: "#/components/schemas/MatchState" }
+        home: { $ref: "#/components/schemas/BracketSlot" }
+        away: { $ref: "#/components/schemas/BracketSlot" }
+        score:
+          oneOf:
+            - { $ref: "#/components/schemas/BracketScore" }
+            - { type: "null" }
+        winnerEntryId: { type: [string, "null"], format: uuid }
+        scheduledAt: { type: [string, "null"], format: date-time }
+        resultDueAt: { type: [string, "null"], format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+        progression: { $ref: "#/components/schemas/BracketProgression" }
+        version: { type: integer, minimum: 1 }
+    BracketSlot:
+      type: object
+      additionalProperties: false
+      required: [side, participant, source]
+      properties:
+        side: { type: string, enum: [home, away] }
+        participant:
+          oneOf:
+            - { $ref: "#/components/schemas/BracketParticipant" }
+            - { type: "null" }
+        source:
+          oneOf:
+            - { $ref: "#/components/schemas/BracketSlotSource" }
+            - { type: "null" }
+    BracketParticipant:
+      type: object
+      additionalProperties: false
+      required: [entryId, displayName, seed]
+      properties:
+        entryId: { type: string, format: uuid }
+        displayName: { type: string }
+        seed: { type: [integer, "null"], minimum: 1 }
+    BracketSlotSource:
+      type: object
+      additionalProperties: false
+      required: [kind, entryId, matchId, sourceGraphRank, resolvedEntryId, resolvedAt, voidedAt]
+      properties:
+        kind: { type: string, enum: [entry, winner_of, loser_of] }
+        entryId: { type: [string, "null"], format: uuid }
+        matchId: { type: [string, "null"], format: uuid }
+        sourceGraphRank: { type: [integer, "null"], minimum: 1 }
+        resolvedEntryId: { type: [string, "null"], format: uuid }
+        resolvedAt: { type: [string, "null"], format: date-time }
+        voidedAt: { type: [string, "null"], format: date-time }
+    BracketScore:
+      type: object
+      additionalProperties: false
+      required: [submissionId, homeScore, awayScore, tiebreak, confirmedAt]
+      properties:
+        submissionId: { type: string, format: uuid }
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        tiebreak:
+          oneOf:
+            - { $ref: "#/components/schemas/TiebreakScore" }
+            - { type: "null" }
+        confirmedAt: { type: string, format: date-time }
+    BracketProgression:
+      type: object
+      additionalProperties: false
+      required: [graphRank, activationRule, activationSourceMatchId, completionReason]
+      properties:
+        graphRank: { type: integer, minimum: 1 }
+        activationRule: { type: string, enum: [unconditional, if_source_away_wins] }
+        activationSourceMatchId: { type: [string, "null"], format: uuid }
+        completionReason:
+          type: [string, "null"]
+          description: See MatchCompletionReason. referee is a legacy history value that is never written any more.
+          enum:
+            - played
+            - walkover
+            - double_no_show
+            - timeout_forfeit
+            - reset_not_required
+            - correction_voided
+            - report_timeout
+            - response_timeout
+            - no_result_reported
+            - platform_review
+            - competition_cancelled
+            - referee
+            - null

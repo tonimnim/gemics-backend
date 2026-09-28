@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +19,11 @@ import (
 )
 
 var publicCompetitionStatuses = []string{"published", "registration_open", "check_in", "running", "completed"}
+
+// competitionCacheFamily groups every cached public competition collection so an
+// organizer action that changes which competitions exist can retire all of them
+// at once.
+const competitionCacheFamily = "competitions"
 
 type competitionListFilter struct {
 	GameID    string
@@ -108,30 +114,121 @@ type registrationPage struct {
 }
 
 type bracketStage struct {
-	ID       string          `json:"id"`
-	Name     string          `json:"name"`
-	Position int             `json:"position"`
-	Format   string          `json:"format"`
-	BestOf   int             `json:"bestOf"`
-	Status   string          `json:"status"`
-	Config   json.RawMessage `json:"config"`
-	Matches  []bracketMatch  `json:"matches"`
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Position int            `json:"position"`
+	Format   string         `json:"format"`
+	BestOf   int            `json:"bestOf"`
+	Status   string         `json:"status"`
+	Rounds   []bracketRound `json:"rounds"`
+}
+
+type bracketRound struct {
+	Number  int            `json:"number"`
+	Name    string         `json:"name"`
+	Bracket string         `json:"bracket"`
+	Matches []bracketMatch `json:"matches"`
 }
 
 type bracketMatch struct {
-	ID              string     `json:"id"`
-	Bracket         string     `json:"bracket"`
-	RoundNumber     int        `json:"roundNumber"`
-	MatchNumber     int        `json:"matchNumber"`
-	State           string     `json:"state"`
-	HomeEntryID     *string    `json:"homeEntryId"`
-	HomeDisplayName *string    `json:"homeDisplayName"`
-	AwayEntryID     *string    `json:"awayEntryId"`
-	AwayDisplayName *string    `json:"awayDisplayName"`
-	WinnerEntryID   *string    `json:"winnerEntryId"`
-	ScheduledAt     *time.Time `json:"scheduledAt"`
-	CompletedAt     *time.Time `json:"completedAt"`
-	Version         int        `json:"version"`
+	ID            string             `json:"id"`
+	Code          string             `json:"code"`
+	MatchNumber   int                `json:"matchNumber"`
+	State         string             `json:"state"`
+	Home          bracketSlot        `json:"home"`
+	Away          bracketSlot        `json:"away"`
+	Score         *bracketScore      `json:"score"`
+	WinnerEntryID *string            `json:"winnerEntryId"`
+	ScheduledAt   *time.Time         `json:"scheduledAt"`
+	ResultDueAt   *time.Time         `json:"resultDueAt"`
+	CompletedAt   *time.Time         `json:"completedAt"`
+	Progression   bracketProgression `json:"progression"`
+	Version       int                `json:"version"`
+}
+
+type bracketSlot struct {
+	Side        string              `json:"side"`
+	Participant *bracketParticipant `json:"participant"`
+	Source      *bracketSlotSource  `json:"source"`
+}
+
+type bracketParticipant struct {
+	EntryID     string `json:"entryId"`
+	DisplayName string `json:"displayName"`
+	Seed        *int   `json:"seed"`
+}
+
+type bracketSlotSource struct {
+	Kind            string     `json:"kind"`
+	EntryID         *string    `json:"entryId"`
+	MatchID         *string    `json:"matchId"`
+	SourceGraphRank *int       `json:"sourceGraphRank"`
+	ResolvedEntryID *string    `json:"resolvedEntryId"`
+	ResolvedAt      *time.Time `json:"resolvedAt"`
+	VoidedAt        *time.Time `json:"voidedAt"`
+}
+
+type bracketScore struct {
+	SubmissionID string              `json:"submissionId"`
+	HomeScore    int                 `json:"homeScore"`
+	AwayScore    int                 `json:"awayScore"`
+	Tiebreak     *tiebreakScoreInput `json:"tiebreak"`
+	ConfirmedAt  time.Time           `json:"confirmedAt"`
+}
+
+type bracketProgression struct {
+	GraphRank               int     `json:"graphRank"`
+	ActivationRule          string  `json:"activationRule"`
+	ActivationSourceMatchID *string `json:"activationSourceMatchId"`
+	CompletionReason        *string `json:"completionReason"`
+}
+
+type bracketSlotRecord struct {
+	SourceKind      *string
+	SourceEntryID   *string
+	SourceMatchID   *string
+	SourceGraphRank *int
+	ResolvedEntryID *string
+	ResolvedAt      *time.Time
+	VoidedAt        *time.Time
+}
+
+type bracketQueryRow struct {
+	StageID                 string
+	StageName               string
+	StagePosition           int
+	StageFormat             string
+	StageBestOf             int
+	StageStatus             string
+	MatchID                 *string
+	Bracket                 *string
+	RoundNumber             *int
+	MatchNumber             *int
+	MatchState              *string
+	GraphRank               *int
+	ActivationRule          *string
+	ActivationSourceMatchID *string
+	CompletionReason        *string
+	HomeEntryID             *string
+	HomeDisplayName         *string
+	HomeSeed                *int
+	AwayEntryID             *string
+	AwayDisplayName         *string
+	AwaySeed                *int
+	WinnerEntryID           *string
+	ScheduledAt             *time.Time
+	ResultDueAt             *time.Time
+	CompletedAt             *time.Time
+	Version                 *int
+	ScoreSubmissionID       *string
+	HomeScore               *int
+	AwayScore               *int
+	TiebreakType            *string
+	HomeTiebreakScore       *int
+	AwayTiebreakScore       *int
+	ScoreConfirmedAt        *time.Time
+	HomeSource              bracketSlotRecord
+	AwaySource              bracketSlotRecord
 }
 
 func (s *Server) listCompetitions(w http.ResponseWriter, r *http.Request) {
@@ -142,8 +239,13 @@ func (s *Server) listCompetitions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The generation stamp is what lets publishing a competition take effect
+	// immediately. Without it a newly published event would stay invisible for
+	// the whole freshness window, because this key is a hash nobody can target.
 	keyDigest := sha256.Sum256([]byte(r.URL.Query().Encode()))
-	response, err := s.responses.GetOrLoad(r.Context(), "competition-list:"+hex.EncodeToString(keyDigest[:]), gamicscache.Policy{
+	cacheKey := "competition-list:" + s.responses.Generation(r.Context(), competitionCacheFamily) +
+		":" + hex.EncodeToString(keyDigest[:])
+	response, err := s.responses.GetOrLoad(r.Context(), cacheKey, gamicscache.Policy{
 		FreshFor: 15 * time.Second, KeepFor: 45 * time.Second, LoadTimeout: 3 * time.Second,
 		LockFor: 4 * time.Second, WaitFor: 700 * time.Millisecond, MaxBodyBytes: 2 << 20,
 	}, func(ctx context.Context) ([]byte, error) {
@@ -314,6 +416,25 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
+	// Run the same typed policy used by the player preflight while the
+	// competition row is locked. The capacity check below remains authoritative
+	// for the final insert, but age/country/ranking/account restrictions must not
+	// be a client-only promise.
+	eligibility, eligibilityErr := loadCompetitionEligibility(
+		r.Context(), tx, competitionID, userID, input.GameAccountID, now, s.config.StrikeBanThreshold,
+	)
+	if errors.Is(eligibilityErr, errInvalidEligibilityPolicy) {
+		writeError(w, http.StatusServiceUnavailable, "eligibility_policy_invalid", "This competition's eligibility policy is unavailable.")
+		return
+	}
+	if eligibilityErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "eligibility_unavailable", "Eligibility cannot be evaluated right now.")
+		return
+	}
+	if issue := eligibility.firstBlockingIssue(); issue != nil {
+		writeError(w, http.StatusConflict, issue.Code, issue.Message)
+		return
+	}
 
 	var accountGameID, displayName string
 	var onboardingComplete bool
@@ -395,13 +516,13 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_events(organization_id,actor_user_id,action,subject_type,subject_id,request_id,after_state)
-		VALUES ($1,$2,'competition.registered','competition_entry',$3,$4,jsonb_build_object('competitionId',$5,'status','registered'))`,
+		VALUES ($1,$2,'competition.registered','competition_entry',$3,$4,jsonb_build_object('competitionId',$5::text,'status','registered'))`,
 		organizationID, userID, entryID, r.Header.Get("X-Request-ID"), competitionID); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to audit the registration.")
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload)
-		VALUES ('competition_entry',$1,'competition.entry_registered',jsonb_build_object('competitionId',$2,'userId',$3))`,
+		VALUES ('competition_entry',$1,'competition.entry_registered',jsonb_build_object('competitionId',$2::text,'userId',$3::text))`,
 		entryID, competitionID, userID); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to queue the registration.")
 		return
@@ -419,6 +540,7 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to finish the registration.")
 		return
 	}
+	s.invalidateCompetitionCachesContext(r.Context(), competitionID)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	_, _ = w.Write(body)
@@ -485,6 +607,15 @@ func (s *Server) listMyRegistrations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
+// probeCompetitionEntry is the unlocked membership probe that runs before the
+// competition gate: a caller without an entry gets pgx.ErrNoRows, so spam
+// withdrawals never queue behind a competition's finalization (D28).
+func probeCompetitionEntry(ctx context.Context, tx pgx.Tx, competitionID, userID string) error {
+	var found int
+	return tx.QueryRow(ctx, `SELECT 1 FROM competition_entries
+		WHERE competition_id=$1 AND captain_user_id=$2`, competitionID, userID).Scan(&found)
+}
+
 func (s *Server) withdrawRegistration(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
 		return
@@ -501,6 +632,23 @@ func (s *Server) withdrawRegistration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context()) //nolint:errcheck
+	// Only an entrant may queue on the gate (D28); the locked read below
+	// repeats the check authoritatively.
+	err = probeCompetitionEntry(r.Context(), tx, competitionID, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "registration_not_found", "Registration not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the registration.")
+		return
+	}
+	// The entry and competition locks below would otherwise invert the gate ->
+	// entry order of a concurrent result finalizer that removes this entry.
+	if err = lockCompetitionProgressionGate(r.Context(), tx, competitionID); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to withdraw right now.")
+		return
+	}
 	var entryID, status, organizationID string
 	var feeMinor int64
 	var closesAt time.Time
@@ -540,13 +688,13 @@ func (s *Server) withdrawRegistration(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_events(organization_id,actor_user_id,action,subject_type,subject_id,request_id,
 		before_state,after_state) VALUES ($1,$2,'competition.withdrawn','competition_entry',$3,$4,
-		jsonb_build_object('status',$5),jsonb_build_object('status','withdrawn'))`,
+		jsonb_build_object('status',$5::text),jsonb_build_object('status','withdrawn'))`,
 		organizationID, userID, entryID, r.Header.Get("X-Request-ID"), status); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to audit the withdrawal.")
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload)
-		VALUES ('competition_entry',$1,'competition.entry_withdrawn',jsonb_build_object('competitionId',$2,'userId',$3))`,
+		VALUES ('competition_entry',$1,'competition.entry_withdrawn',jsonb_build_object('competitionId',$2::text,'userId',$3::text))`,
 		entryID, competitionID, userID); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to queue the withdrawal.")
 		return
@@ -555,6 +703,7 @@ func (s *Server) withdrawRegistration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to finish the withdrawal.")
 		return
 	}
+	s.invalidateCompetitionCachesContext(r.Context(), competitionID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -743,45 +892,156 @@ func queryCompetitionBracket(ctx context.Context, pool *pgxpool.Pool, id string)
 	if !public {
 		return nil, pgx.ErrNoRows
 	}
-	rows, err := pool.Query(ctx, `SELECT stage.id,stage.name,stage.position,stage.format,stage.best_of,stage.status,stage.config,
-		match.id,match.bracket,match.round_number,match.match_number,match.state,
-		match.home_entry_id,home.display_name,match.away_entry_id,away.display_name,match.winner_entry_id,
-		match.scheduled_at,match.completed_at,match.version
-		FROM competition_stages stage LEFT JOIN matches match ON match.stage_id=stage.id
-		LEFT JOIN competition_entries home ON home.id=match.home_entry_id
-		LEFT JOIN competition_entries away ON away.id=match.away_entry_id
-		WHERE stage.competition_id=$1 ORDER BY stage.position,match.bracket,match.round_number,match.match_number
-		LIMIT 1000`, id)
+	rows, err := pool.Query(ctx, `SELECT
+		stage.id::text,stage.name,stage.position,stage.format,stage.best_of,stage.status,
+		match.id::text,match.bracket,match.round_number,match.match_number,match.state,
+		match.graph_rank,match.activation_rule,match.activation_source_match_id::text,match.completion_reason,
+		home.id::text,home.display_name,home.seed,
+		away.id::text,away.display_name,away.seed,match.winner_entry_id::text,
+		match.scheduled_at,match.result_due_at,match.completed_at,match.version,
+		confirmed.id::text,confirmed.home_score,confirmed.away_score,confirmed.tiebreak_type,
+		confirmed.home_tiebreak_score,confirmed.away_tiebreak_score,confirmed.decided_at,
+		home_slot.source_kind,home_slot.source_entry_id::text,home_slot.source_match_id::text,
+		home_slot.source_rank,home_slot.resolved_entry_id::text,home_slot.resolved_at,home_slot.voided_at,
+		away_slot.source_kind,away_slot.source_entry_id::text,away_slot.source_match_id::text,
+		away_slot.source_rank,away_slot.resolved_entry_id::text,away_slot.resolved_at,away_slot.voided_at
+	FROM competition_stages stage
+	LEFT JOIN matches match ON match.stage_id=stage.id
+	LEFT JOIN match_slots home_slot ON home_slot.match_id=match.id AND home_slot.slot='home'
+	LEFT JOIN match_slots away_slot ON away_slot.match_id=match.id AND away_slot.slot='away'
+	LEFT JOIN competition_entries home ON home.id=COALESCE(match.home_entry_id,home_slot.resolved_entry_id)
+	LEFT JOIN competition_entries away ON away.id=COALESCE(match.away_entry_id,away_slot.resolved_entry_id)
+	LEFT JOIN LATERAL (
+		SELECT submission.id,submission.home_score,submission.away_score,submission.tiebreak_type,
+			submission.home_tiebreak_score,submission.away_tiebreak_score,submission.decided_at
+		FROM result_submissions submission
+		WHERE submission.match_id=match.id AND submission.status='confirmed'
+		ORDER BY submission.decided_at DESC NULLS LAST,submission.submitted_at DESC,submission.id DESC
+		LIMIT 1
+	) confirmed ON true
+	WHERE stage.competition_id=$1
+	ORDER BY stage.position,match.bracket,match.round_number,match.match_number
+	LIMIT 1000`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	stages := make([]bracketStage, 0)
-	index := make(map[string]int)
+	stageIndex := make(map[string]int)
+	roundIndex := make(map[string]int)
 	for rows.Next() {
-		var stage bracketStage
-		var matchID, bracket, matchState *string
-		var roundNumber, matchNumber, matchVersion *int
-		var match bracketMatch
-		if err := rows.Scan(&stage.ID, &stage.Name, &stage.Position, &stage.Format, &stage.BestOf, &stage.Status, &stage.Config,
-			&matchID, &bracket, &roundNumber, &matchNumber, &matchState, &match.HomeEntryID, &match.HomeDisplayName,
-			&match.AwayEntryID, &match.AwayDisplayName, &match.WinnerEntryID, &match.ScheduledAt, &match.CompletedAt, &matchVersion); err != nil {
+		var row bracketQueryRow
+		if err := rows.Scan(
+			&row.StageID, &row.StageName, &row.StagePosition, &row.StageFormat, &row.StageBestOf, &row.StageStatus,
+			&row.MatchID, &row.Bracket, &row.RoundNumber, &row.MatchNumber, &row.MatchState,
+			&row.GraphRank, &row.ActivationRule, &row.ActivationSourceMatchID, &row.CompletionReason,
+			&row.HomeEntryID, &row.HomeDisplayName, &row.HomeSeed,
+			&row.AwayEntryID, &row.AwayDisplayName, &row.AwaySeed, &row.WinnerEntryID,
+			&row.ScheduledAt, &row.ResultDueAt, &row.CompletedAt, &row.Version,
+			&row.ScoreSubmissionID, &row.HomeScore, &row.AwayScore, &row.TiebreakType,
+			&row.HomeTiebreakScore, &row.AwayTiebreakScore, &row.ScoreConfirmedAt,
+			&row.HomeSource.SourceKind, &row.HomeSource.SourceEntryID, &row.HomeSource.SourceMatchID,
+			&row.HomeSource.SourceGraphRank, &row.HomeSource.ResolvedEntryID, &row.HomeSource.ResolvedAt, &row.HomeSource.VoidedAt,
+			&row.AwaySource.SourceKind, &row.AwaySource.SourceEntryID, &row.AwaySource.SourceMatchID,
+			&row.AwaySource.SourceGraphRank, &row.AwaySource.ResolvedEntryID, &row.AwaySource.ResolvedAt, &row.AwaySource.VoidedAt,
+		); err != nil {
 			return nil, err
 		}
-		position, exists := index[stage.ID]
-		if !exists {
-			stage.Matches = make([]bracketMatch, 0)
-			stages = append(stages, stage)
-			position = len(stages) - 1
-			index[stage.ID] = position
-		}
-		if matchID != nil {
-			match.ID, match.Bracket, match.State = *matchID, *bracket, *matchState
-			match.RoundNumber, match.MatchNumber, match.Version = *roundNumber, *matchNumber, *matchVersion
-			stages[position].Matches = append(stages[position].Matches, match)
-		}
+		appendBracketRow(&stages, stageIndex, roundIndex, row)
 	}
 	return stages, rows.Err()
+}
+
+func appendBracketRow(stages *[]bracketStage, stageIndex, roundIndex map[string]int, row bracketQueryRow) {
+	stagePosition, exists := stageIndex[row.StageID]
+	if !exists {
+		*stages = append(*stages, bracketStage{
+			ID: row.StageID, Name: row.StageName, Position: row.StagePosition,
+			Format: row.StageFormat, BestOf: row.StageBestOf, Status: row.StageStatus,
+			Rounds: []bracketRound{},
+		})
+		stagePosition = len(*stages) - 1
+		stageIndex[row.StageID] = stagePosition
+	}
+	if row.MatchID == nil || row.Bracket == nil || row.RoundNumber == nil || row.MatchNumber == nil ||
+		row.MatchState == nil || row.GraphRank == nil || row.ActivationRule == nil || row.Version == nil {
+		return
+	}
+	roundKey := row.StageID + "\x00" + *row.Bracket + "\x00" + strconv.Itoa(*row.RoundNumber)
+	roundPosition, exists := roundIndex[roundKey]
+	if !exists {
+		(*stages)[stagePosition].Rounds = append((*stages)[stagePosition].Rounds, bracketRound{
+			Number: *row.RoundNumber, Name: bracketRoundName(*row.Bracket, *row.RoundNumber),
+			Bracket: *row.Bracket, Matches: []bracketMatch{},
+		})
+		roundPosition = len((*stages)[stagePosition].Rounds) - 1
+		roundIndex[roundKey] = roundPosition
+	}
+	match := bracketMatch{
+		ID: *row.MatchID, Code: fmt.Sprintf("R%02d-M%02d", *row.RoundNumber, *row.MatchNumber),
+		MatchNumber: *row.MatchNumber, State: *row.MatchState,
+		Home:          bracketSlot{Side: "home", Participant: bracketParticipantFromRow(row.HomeEntryID, row.HomeDisplayName, row.HomeSeed), Source: bracketSourceFromRecord(row.HomeSource)},
+		Away:          bracketSlot{Side: "away", Participant: bracketParticipantFromRow(row.AwayEntryID, row.AwayDisplayName, row.AwaySeed), Source: bracketSourceFromRecord(row.AwaySource)},
+		WinnerEntryID: row.WinnerEntryID, ScheduledAt: utcTime(row.ScheduledAt), ResultDueAt: utcTime(row.ResultDueAt),
+		CompletedAt: utcTime(row.CompletedAt), Version: *row.Version,
+		Progression: bracketProgression{
+			GraphRank: *row.GraphRank, ActivationRule: *row.ActivationRule,
+			ActivationSourceMatchID: row.ActivationSourceMatchID, CompletionReason: row.CompletionReason,
+		},
+	}
+	if row.ScoreSubmissionID != nil && row.HomeScore != nil && row.AwayScore != nil && row.ScoreConfirmedAt != nil {
+		match.Score = &bracketScore{
+			SubmissionID: *row.ScoreSubmissionID, HomeScore: *row.HomeScore, AwayScore: *row.AwayScore,
+			ConfirmedAt: row.ScoreConfirmedAt.UTC(),
+		}
+		if row.TiebreakType != nil && row.HomeTiebreakScore != nil && row.AwayTiebreakScore != nil {
+			match.Score.Tiebreak = &tiebreakScoreInput{
+				Type: *row.TiebreakType, HomeScore: *row.HomeTiebreakScore, AwayScore: *row.AwayTiebreakScore,
+			}
+		}
+	}
+	(*stages)[stagePosition].Rounds[roundPosition].Matches = append(
+		(*stages)[stagePosition].Rounds[roundPosition].Matches, match,
+	)
+}
+
+func bracketParticipantFromRow(entryID, displayName *string, seed *int) *bracketParticipant {
+	if entryID == nil || displayName == nil {
+		return nil
+	}
+	return &bracketParticipant{EntryID: *entryID, DisplayName: *displayName, Seed: seed}
+}
+
+func bracketSourceFromRecord(record bracketSlotRecord) *bracketSlotSource {
+	if record.SourceKind == nil {
+		return nil
+	}
+	return &bracketSlotSource{
+		Kind: *record.SourceKind, EntryID: record.SourceEntryID, MatchID: record.SourceMatchID,
+		SourceGraphRank: record.SourceGraphRank, ResolvedEntryID: record.ResolvedEntryID,
+		ResolvedAt: utcTime(record.ResolvedAt), VoidedAt: utcTime(record.VoidedAt),
+	}
+}
+
+func bracketRoundName(bracket string, number int) string {
+	switch bracket {
+	case "winners":
+		return fmt.Sprintf("Winners round %d", number)
+	case "losers":
+		return fmt.Sprintf("Losers round %d", number)
+	case "grand_final":
+		if number == 2 {
+			return "Grand final reset"
+		}
+		return "Grand final"
+	case "bronze":
+		return "Third-place match"
+	default:
+		if strings.HasPrefix(bracket, "group_") {
+			return fmt.Sprintf("Group %s matchday %d", strings.TrimPrefix(bracket, "group_"), number)
+		}
+		return fmt.Sprintf("Round %d", number)
+	}
 }
 
 func (s *Server) acquireCompetitionWriterFallback(ctx context.Context) error {
