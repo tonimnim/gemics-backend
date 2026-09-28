@@ -1,0 +1,510 @@
+# Organizer console contract. Every route below /v1/organizations/{orgId}
+# resolves the caller's organization_members row and refuses the request unless
+# that role grants the permission named in the description. A caller who is not
+# a member receives 404, never 403, so organization identifiers cannot be probed.
+# No organization role decides match results: disagreements go to the Gamics
+# review queue (result-reviews.paths.yaml), and organization members can
+# neither read players' score claims nor their screenshots.
+paths:
+  /v1/organizations:
+    post:
+      operationId: createOrganization
+      tags: [Organizer]
+      summary: Create an organization. The caller becomes its owner.
+      description: Requires an active account that has accepted the terms and privacy policy. One user may own at most five organizations.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 2, maxLength: 80 }
+                slug: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", minLength: 3, maxLength: 48, description: Derived from the name when omitted. Immutable after creation. }
+                countryCode: { type: string, pattern: "^[A-Z]{2}$", default: KE }
+      responses:
+        "201":
+          description: Organization created with the caller as owner.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Organization" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/me/organizations:
+    get:
+      operationId: listMyOrganizations
+      tags: [Organizer]
+      summary: Organizations the caller belongs to, with the permissions their role grants.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Organizer memberships.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/Organization" } } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/organizations/{orgId}:
+    get:
+      operationId: getOrganization
+      tags: [Organizer]
+      description: Requires organization.read (owner, admin, analyst).
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: orgId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200":
+          description: Organization detail.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Organization" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: patchOrganization
+      tags: [Organizer]
+      description: Requires organization.manage (owner). The slug is immutable because public competition links depend on it.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: orgId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 2, maxLength: 80 }
+                countryCode: { type: string, pattern: "^[A-Z]{2}$" }
+      responses:
+        "200":
+          description: Organization updated.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Organization" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/organizations/{orgId}/members:
+    get:
+      operationId: listOrganizationMembers
+      tags: [Organizer]
+      description: Requires member.read (owner, admin).
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: orgId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200":
+          description: Organization members.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/OrganizationMember" } } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: addOrganizationMember
+      tags: [Organizer]
+      summary: Add a member by public player handle.
+      description: >-
+        Requires member.manage (owner). Members are resolved by handle rather than
+        email so this route cannot be used to test whether an email address has a
+        Gamics account. An unknown handle returns 404.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: orgId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handle, role]
+              properties:
+                handle: { type: string }
+                role: { $ref: "#/components/schemas/OrganizationRole" }
+      responses:
+        "201":
+          description: Member added.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/OrganizationMember" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/organizations/{orgId}/members/{userId}:
+    patch:
+      operationId: patchOrganizationMember
+      tags: [Organizer]
+      description: Requires member.manage (owner). Demoting the last owner returns 409 last_owner.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: "#/components/schemas/OrganizationRole" }
+      responses:
+        "200":
+          description: Member role changed.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/OrganizationMember" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeOrganizationMember
+      tags: [Organizer]
+      description: Requires member.manage (owner). Removing the last owner returns 409 last_owner.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Member removed. }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/organizations/{orgId}/competitions:
+    get:
+      operationId: listOrganizerCompetitions
+      tags: [Organizer]
+      summary: Every competition the organization owns, including drafts and cancelled events.
+      description: Requires competition.read. Keyset paginated by start time.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/CompetitionStatus" } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+      responses:
+        "200":
+          description: Organizer competition page.
+          content: { application/json: { schema: { $ref: "#/components/schemas/OrganizerCompetitionPage" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createOrganizerCompetition
+      tags: [Organizer]
+      summary: Create a competition in draft status.
+      description: >-
+        Requires competition.write (owner, admin). The competition is created as a
+        draft and is invisible to players until a transition publishes it.
+        feePurpose is derived from entryFeeMinor and must not be sent. A retry with
+        the same body produces the same slug and is rejected as slug_taken rather
+        than creating a duplicate.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: orgId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompetitionInput" }
+      responses:
+        "201":
+          description: Draft competition created.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/OrganizerCompetition" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/organizations/{orgId}/competitions/{competitionId}:
+    get:
+      operationId: getOrganizerCompetition
+      tags: [Organizer]
+      description: Requires competition.read.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: competitionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Organizer competition detail.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/OrganizerCompetition" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: patchOrganizerCompetition
+      tags: [Organizer]
+      summary: Edit a competition within the limits of its current status.
+      description: >-
+        Requires competition.write. Draft and published competitions are fully
+        editable. Once registration opens, format, game, slug, entry fee, currency,
+        prize and the registration opening time are frozen (409 field_locked);
+        capacity may only grow, and registration may only be extended. From check-in
+        onward the competition is locked entirely (409 competition_locked). Changing
+        the rules of a non-draft competition increments rulesVersion.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: competitionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompetitionPatch" }
+      responses:
+        "200":
+          description: Competition updated.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/OrganizerCompetition" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/organizations/{orgId}/competitions/{competitionId}/transitions:
+    post:
+      operationId: transitionOrganizerCompetition
+      tags: [Organizer]
+      summary: Move a competition to the next lifecycle status.
+      description: >-
+        Requires competition.publish (owner, admin). Legal targets for the current
+        status are published in the allowedTransitions field. Additional guards:
+        publishing requires a future start time; opening registration requires a
+        future closing time; check-in requires at least two active entries; running
+        requires a generated bracket (409 bracket_not_generated); completing
+        requires every match to be finished, forfeited or cancelled. Cancelling
+        a competition also cancels every match that is not finished yet
+        (completionReason competition_cancelled), settles open result
+        verifications and closes queued Gamics reviews, in the same transaction.
+        Nobody is removed from the tournament, no rating changes and no strike
+        is recorded.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: competitionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: "#/components/schemas/CompetitionStatus" }
+                reason: { type: string, maxLength: 500, description: Recorded in the audit event. Expected when cancelling. }
+      responses:
+        "200":
+          description: Status changed. The response carries the competition's new allowed transitions.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/OrganizerCompetition" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/organizations/{orgId}/competitions/{competitionId}/entries:
+    get:
+      operationId: listOrganizerCompetitionEntries
+      tags: [Organizer]
+      summary: The registration desk for one competition.
+      description: Requires entry.read. paymentStatus reflects the entrant's most recent payment intent and is null for free events.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: competitionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [registered, checked_in, accepted, withdrawn, disqualified] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+      responses:
+        "200":
+          description: Entry page.
+          content: { application/json: { schema: { $ref: "#/components/schemas/OrganizerEntryPage" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+components:
+  schemas:
+    OrganizationRole:
+      type: string
+      enum: [owner, admin, analyst]
+      description: >-
+        owner manages membership and everything below it; admin runs competitions
+        and entries; analyst reads only. No role decides match results.
+    OrganizationPermission:
+      type: string
+      enum:
+        - organization.read
+        - organization.manage
+        - member.read
+        - member.manage
+        - competition.read
+        - competition.write
+        - competition.publish
+        - entry.read
+        - entry.manage
+    Organization:
+      type: object
+      required: [id, name, slug, countryCode, status, role, permissions, competitionCount, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        countryCode: { type: string }
+        status: { type: string, enum: [pending, active, suspended] }
+        role: { $ref: "#/components/schemas/OrganizationRole" }
+        permissions:
+          type: array
+          description: What the caller's role allows. Clients disable controls from this instead of hardcoding the matrix.
+          items: { $ref: "#/components/schemas/OrganizationPermission" }
+        competitionCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+    OrganizationMember:
+      type: object
+      required: [userId, displayName, countryCode, role, joinedAt]
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        handle: { type: string, nullable: true }
+        countryCode: { type: string }
+        role: { $ref: "#/components/schemas/OrganizationRole" }
+        joinedAt: { type: string, format: date-time }
+    CompetitionStatus:
+      type: string
+      enum: [draft, published, registration_open, check_in, running, completed, cancelled]
+    CompetitionInput:
+      type: object
+      required: [name, gameId, format, maxEntries, registrationOpensAt, registrationClosesAt, startsAt]
+      properties:
+        name: { type: string, minLength: 3, maxLength: 120 }
+        slug: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", minLength: 3, maxLength: 48, description: Derived from the name when omitted. Unique per organization. }
+        description: { type: string, maxLength: 4000 }
+        gameId: { type: string }
+        format: { type: string, enum: [single_elimination, double_elimination, round_robin] }
+        maxEntries: { type: integer, minimum: 2, maximum: 1024 }
+        entryFeeMinor: { type: integer, format: int64, minimum: 0, maximum: 5000000, description: "Minor units. Above zero requires KES, the only wired collection rail." }
+        currency: { type: string, pattern: "^[A-Z]{3}$", default: KES }
+        prizeAmountMinor: { type: integer, format: int64, minimum: 0, maximum: 500000000 }
+        prizeFunding: { type: string, enum: [none, organizer, sponsor], default: none, description: A prize above zero must name its funder. Entry fees are an administration fee and never fund prizes. }
+        registrationOpensAt: { type: string, format: date-time }
+        registrationClosesAt: { type: string, format: date-time }
+        checkInOpensAt: { type: string, format: date-time, nullable: true, description: Must fall between registration closing and the start time. }
+        startsAt: { type: string, format: date-time }
+        rules:
+          type: object
+          description: >-
+            Immutable rules snapshot, at most 32 KiB. Changing it on a published competition increments
+            rulesVersion. rules.matchVerification accepts only the keys of CompetitionMatchVerificationRules;
+            anything else is refused with 400 invalid_match_verification_rules.
+          properties:
+            matchVerification: { $ref: "#/components/schemas/CompetitionMatchVerificationRules" }
+    CompetitionPatch:
+      type: object
+      minProperties: 1
+      description: >-
+        Every field is optional; omitted fields keep their stored value. Which
+        fields may change depends on the competition's status, so a syntactically
+        valid patch can still be refused with 409 field_locked.
+      properties:
+        name: { type: string, minLength: 3, maxLength: 120 }
+        slug: { type: string, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", minLength: 3, maxLength: 48 }
+        description: { type: string, maxLength: 4000 }
+        gameId: { type: string }
+        format: { type: string, enum: [single_elimination, double_elimination, round_robin] }
+        maxEntries: { type: integer, minimum: 2, maximum: 1024 }
+        entryFeeMinor: { type: integer, format: int64, minimum: 0, maximum: 5000000 }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        prizeAmountMinor: { type: integer, format: int64, minimum: 0, maximum: 500000000 }
+        prizeFunding: { type: string, enum: [none, organizer, sponsor] }
+        registrationOpensAt: { type: string, format: date-time }
+        registrationClosesAt: { type: string, format: date-time }
+        checkInOpensAt: { type: string, format: date-time, nullable: true }
+        startsAt: { type: string, format: date-time }
+        rules:
+          type: object
+          properties:
+            matchVerification: { $ref: "#/components/schemas/CompetitionMatchVerificationRules" }
+    OrganizerCompetition:
+      type: object
+      required: [id, organizationId, gameId, name, slug, format, status, maxEntries, entryCount, allowedTransitions, rulesVersion]
+      properties:
+        id: { type: string, format: uuid }
+        organizationId: { type: string, format: uuid }
+        gameId: { type: string }
+        gameName: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        format: { type: string, enum: [single_elimination, double_elimination, round_robin] }
+        status: { $ref: "#/components/schemas/CompetitionStatus" }
+        maxEntries: { type: integer }
+        entryCount: { type: integer }
+        availableSlots: { type: integer }
+        entryFeeMinor: { type: integer, format: int64 }
+        feePurpose: { type: string, enum: [none, administration] }
+        currency: { type: string }
+        prizeAmountMinor: { type: integer, format: int64 }
+        prizeFunding: { type: string, enum: [none, organizer, sponsor] }
+        registrationOpensAt: { type: string, format: date-time }
+        registrationClosesAt: { type: string, format: date-time }
+        checkInOpensAt: { type: string, format: date-time, nullable: true }
+        startsAt: { type: string, format: date-time }
+        rulesVersion: { type: integer }
+        rules: { type: object }
+        allowedTransitions:
+          type: array
+          description: Statuses reachable from the current one, from the domain state machine.
+          items: { $ref: "#/components/schemas/CompetitionStatus" }
+        matchCount: { type: integer, description: Zero until a bracket is generated. Running requires this to be above zero. }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    OrganizerCompetitionPage:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/OrganizerCompetition" } }
+        page:
+          type: object
+          required: [nextCursor, hasMore]
+          properties:
+            nextCursor: { type: string, nullable: true }
+            hasMore: { type: boolean }
+    OrganizerEntry:
+      type: object
+      required: [id, displayName, status, createdAt, playerId, playerName]
+      properties:
+        id: { type: string, format: uuid }
+        displayName: { type: string }
+        status: { type: string, enum: [registered, checked_in, accepted, withdrawn, disqualified] }
+        seed: { type: integer, nullable: true }
+        checkedInAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        playerId: { type: string, format: uuid }
+        playerName: { type: string }
+        handle: { type: string, nullable: true }
+        inGameName: { type: string, nullable: true }
+        platform: { type: string, nullable: true }
+        paymentStatus:
+          type: string
+          nullable: true
+          enum: [initiating, pending, callback_received, succeeded, failed, review]
+    OrganizerEntryPage:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/OrganizerEntry" } }
+        page:
+          type: object
+          required: [nextCursor, hasMore]
+          properties:
+            nextCursor: { type: string, nullable: true }
+            hasMore: { type: boolean }

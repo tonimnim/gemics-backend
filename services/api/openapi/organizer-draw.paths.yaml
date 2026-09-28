@@ -1,0 +1,160 @@
+# Launch-critical organizer draw persistence. Merge this fragment into the main
+# OpenAPI document before publishing the contract; openapi.yaml remains the only
+# mobile source of truth once assembled.
+paths:
+  /v1/organizations/{orgId}/competitions/{competitionId}/draws:
+    post:
+      operationId: createOrganizerCompetitionDraw
+      tags: [Organizer]
+      summary: Freeze the active field and generate the competition draw exactly once.
+      description: >-
+        Requires competition.write (owner or admin) and an Idempotency-Key. The
+        competition must still be in check_in. The operation row-locks the
+        competition, freezes registered/checked-in/accepted entries, creates a
+        materialized bracket graph, stage, matches, dependency slots and any
+        round-robin standings atomically. A persisted draw cannot be regenerated;
+        an exact retry with the same idempotency key returns the original 201
+        response with Idempotency-Replayed: true. Random seeding uses a new
+        cryptographically random 32-byte seed which is disclosed after generation
+        so the ordered vector and graph can be audited.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: competitionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 128, pattern: "^[!-~]+$" }
+          description: Printable ASCII without spaces. Scoped to this organization and competition for 24 hours.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizerDrawRequest" }
+      responses:
+        "201":
+          description: The durable draw. The same successful idempotent replay also returns 201.
+          headers:
+            Idempotency-Replayed:
+              description: Present and true only when this is the stored response to an exact retry.
+              schema: { type: string, enum: ["true"] }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/OrganizerDraw" }
+                additionalProperties: false
+        "400":
+          $ref: "#/components/responses/Error"
+          description: >-
+            idempotency_key_required, invalid_idempotency_key, invalid_request,
+            draw_config_required, format_config_mismatch, invalid_seeding_policy,
+            invalid_expected_status, invalid_best_of, invalid_group_count,
+            invalid_check_in_lead, invalid_check_in_grace, invalid_result_window
+            (outside 15..1440, or less than checkInGraceMinutes + 15),
+            invalid_round_interval, invalid_draw_seed.
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409":
+          description: >-
+            The state changed, the draw already exists, fewer than two active
+            entries remain, the group count no longer fits the field, or the
+            idempotency key belongs to another request.
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "503": { $ref: "#/components/responses/Error" }
+
+components:
+  schemas:
+    OrganizerDrawRequest:
+      type: object
+      required: [seedingPolicy, expectedStatus, config]
+      additionalProperties: false
+      properties:
+        seedingPolicy:
+          type: string
+          enum: [seeded, rating, random, registration_order]
+          description: >-
+            seeded orders organizer seeds first then unseeded entries by
+            registration; rating orders the frozen game rating descending;
+            registration_order uses registration time; random sorts keyed hashes
+            made from the disclosed draw seed and entry IDs.
+        expectedStatus:
+          type: string
+          enum: [check_in]
+          description: Optimistic state guard. A stale organizer screen receives 409 instead of generating against a changed competition.
+        config: { $ref: "#/components/schemas/OrganizerDrawConfig" }
+    OrganizerDrawConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        bestOf: { type: integer, minimum: 1, maximum: 9, default: 1, description: Must be odd. }
+        thirdPlace: { type: boolean, default: false, description: Single elimination only. }
+        groupCount: { type: integer, minimum: 1, maximum: 64, default: 1, description: Round robin only; every group needs at least two active entries. }
+        doubleRoundRobin: { type: boolean, default: false, description: Round robin only. }
+        checkInLeadMinutes: { type: integer, minimum: 5, maximum: 180, default: 15 }
+        checkInGraceMinutes: { type: integer, minimum: 0, maximum: 60, default: 10 }
+        resultWindowMinutes: { type: integer, minimum: 15, maximum: 1440, default: 60, description: "Must be at least checkInGraceMinutes + 15, so a late but valid check-in still leaves time to play. When nobody reports a score by the result deadline, both entries are removed from the tournament." }
+        roundIntervalMinutes: { type: integer, minimum: 15, maximum: 1440, default: 90, description: Must be at least resultWindowMinutes. }
+    OrganizerDraw:
+      type: object
+      required:
+        - competitionId
+        - stageId
+        - algorithm
+        - algorithmVersion
+        - seedingPolicy
+        - drawSeed
+        - entryCount
+        - matchCount
+        - entryFingerprint
+        - graphFingerprint
+        - config
+        - entries
+        - generatedBy
+        - generatedAt
+      additionalProperties: false
+      properties:
+        competitionId: { type: string, format: uuid }
+        stageId: { type: string, format: uuid }
+        algorithm: { type: string, enum: [materialized_bracket_graph] }
+        algorithmVersion: { type: integer, enum: [1] }
+        seedingPolicy: { type: string, enum: [seeded, rating, random, registration_order] }
+        drawSeed: { type: string, pattern: "^[0-9a-f]{64}$", description: 32-byte seed as lowercase hexadecimal. Random only for random policy; a deterministic commitment otherwise. }
+        entryCount: { type: integer, minimum: 2, maximum: 1024 }
+        matchCount: { type: integer, minimum: 1, maximum: 10000 }
+        entryFingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+        graphFingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+        config: { $ref: "#/components/schemas/OrganizerDrawConfigResolved" }
+        entries:
+          type: array
+          minItems: 2
+          maxItems: 1024
+          items: { $ref: "#/components/schemas/OrganizerDrawEntry" }
+        generatedBy: { type: string, format: uuid }
+        generatedAt: { type: string, format: date-time }
+    OrganizerDrawConfigResolved:
+      type: object
+      required: [bestOf, thirdPlace, groupCount, doubleRoundRobin, checkInLeadMinutes, checkInGraceMinutes, resultWindowMinutes, roundIntervalMinutes]
+      additionalProperties: false
+      properties:
+        bestOf: { type: integer, minimum: 1, maximum: 9 }
+        thirdPlace: { type: boolean }
+        groupCount: { type: integer, minimum: 1, maximum: 64 }
+        doubleRoundRobin: { type: boolean }
+        checkInLeadMinutes: { type: integer, minimum: 5, maximum: 180 }
+        checkInGraceMinutes: { type: integer, minimum: 0, maximum: 60 }
+        resultWindowMinutes: { type: integer, minimum: 15, maximum: 1440 }
+        roundIntervalMinutes: { type: integer, minimum: 15, maximum: 1440 }
+    OrganizerDrawEntry:
+      type: object
+      required: [position, entryId, seedKey, ratingSnapshot, groupKey]
+      additionalProperties: false
+      properties:
+        position: { type: integer, minimum: 1, maximum: 1024 }
+        entryId: { type: string, format: uuid }
+        seedKey: { type: integer, description: Frozen policy input or canonical position used to explain the order. }
+        ratingSnapshot: { type: integer, minimum: 0, maximum: 10000, nullable: true }
+        groupKey: { type: string, nullable: true, pattern: "^group_[a-z]+$" }
