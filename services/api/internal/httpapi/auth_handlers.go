@@ -194,11 +194,14 @@ func (s *Server) refreshSession(w http.ResponseWriter, r *http.Request) {
 	var sessionID, userID string
 	var currentHash, previousHash []byte
 	var previousValidUntil *time.Time
+	// Only the session row is locked. Locking the player too would invert the
+	// player-then-session order that push token registration and account
+	// deletion use, and a deadlock here would sign the player out.
 	err = tx.QueryRow(r.Context(), `SELECT s.id,s.user_id,s.token_hash,s.previous_token_hash,s.previous_token_valid_until
 		FROM refresh_sessions s
 		JOIN users u ON u.id=s.user_id
 		WHERE (s.token_hash=$1 OR (s.previous_token_hash=$1 AND s.previous_token_valid_until>now()))
-		AND s.revoked_at IS NULL AND u.status='active' FOR UPDATE`, presentedHash).
+		AND s.revoked_at IS NULL AND u.status='active' FOR UPDATE OF s`, presentedHash).
 		Scan(&sessionID, &userID, &currentHash, &previousHash, &previousValidUntil)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_session", "The session is no longer valid.")
@@ -233,8 +236,17 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	current := identityFromContext(r.Context())
-	if _, err := s.db.Writer.Exec(r.Context(), `UPDATE refresh_sessions SET revoked_at=COALESCE(revoked_at,now())
-        WHERE id=$1 AND user_id=$2`, current.SessionID, current.UserID); err != nil {
+	tx, err := s.db.Writer.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to log out.")
+		return
+	}
+	defer tx.Rollback(r.Context()) //nolint:errcheck
+	if _, err = tx.Exec(r.Context(), `UPDATE refresh_sessions SET revoked_at=COALESCE(revoked_at,now())
+        WHERE id=$1 AND user_id=$2`, current.SessionID, current.UserID); err == nil {
+		err = revokeSessionPushTokens(r.Context(), tx, []string{current.SessionID})
+	}
+	if err != nil || tx.Commit(r.Context()) != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to log out.")
 		return
 	}

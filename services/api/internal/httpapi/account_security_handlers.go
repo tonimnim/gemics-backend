@@ -79,7 +79,13 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	current := identityFromContext(r.Context())
-	command, err := s.db.Writer.Exec(r.Context(), `UPDATE refresh_sessions
+	tx, err := s.db.Writer.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to revoke this session.")
+		return
+	}
+	defer tx.Rollback(r.Context()) //nolint:errcheck
+	command, err := tx.Exec(r.Context(), `UPDATE refresh_sessions
 		SET revoked_at=COALESCE(revoked_at,now()) WHERE id=$1 AND user_id=$2`, sessionID, current.UserID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to revoke this session.")
@@ -87,6 +93,11 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if command.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "session_not_found", "Session not found.")
+		return
+	}
+	// A lost phone signed out from another device stops receiving pushes too.
+	if err = revokeSessionPushTokens(r.Context(), tx, []string{sessionID}); err != nil || tx.Commit(r.Context()) != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to revoke this session.")
 		return
 	}
 	if err := s.propagateSessionRevocations(r.Context(), []string{sessionID}); err != nil {
@@ -270,7 +281,6 @@ func (s *Server) executeAccountDeletion(w http.ResponseWriter, r *http.Request) 
 		query string
 		args  []any
 	}{
-		{`DELETE FROM push_tokens WHERE user_id=$1`, []any{current.UserID}},
 		{`DELETE FROM notifications WHERE user_id=$1`, []any{current.UserID}},
 		{`DELETE FROM notification_preferences WHERE user_id=$1`, []any{current.UserID}},
 		{`DELETE FROM organization_members WHERE user_id=$1`, []any{current.UserID}},
@@ -316,6 +326,13 @@ func (s *Server) executeAccountDeletion(w http.ResponseWriter, r *http.Request) 
 	}
 	err = rows.Err()
 	rows.Close()
+	if err == nil {
+		// Installations are deleted once every session has ended. A registration
+		// locks the player row before its session row, so one that started first
+		// has committed by now and one that started later waits for this
+		// transaction and then finds no active player: none outlives the account.
+		_, err = tx.Exec(r.Context(), `DELETE FROM push_tokens WHERE user_id=$1`, current.UserID)
+	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `UPDATE account_deletion_requests
 			SET status='completed',completed_at=now() WHERE id=$1`, input.RequestID)

@@ -81,31 +81,52 @@ func (s *Server) upsertPushToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := identityFromContext(r.Context()).UserID
+	current := identityFromContext(r.Context())
 	tx, err := s.db.Writer.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to register this device.")
 		return
 	}
 	defer tx.Rollback(r.Context()) //nolint:errcheck
+	// The installation is bound to the caller's session. Holding the session row
+	// makes a concurrent logout or remote revoke wait for this registration and
+	// then revoke it; a session that already ended cannot register. The player
+	// row is locked first, the order account deletion takes them in, so a
+	// registration racing a deletion waits for it and then finds no active
+	// player instead of deadlocking. Token refresh locks only the session row,
+	// so it cannot deadlock with this order either.
+	var playerID, sessionID string
+	err = tx.QueryRow(r.Context(), `SELECT id::text FROM users
+		WHERE id=$1 AND status='active' FOR KEY SHARE`, current.UserID).Scan(&playerID)
+	if err == nil {
+		err = tx.QueryRow(r.Context(), `SELECT id::text FROM refresh_sessions
+		WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL FOR SHARE`, current.SessionID, current.UserID).Scan(&sessionID)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusUnauthorized, "invalid_session", "The session has been logged out.")
+		return
+	}
 	// A provider token represents one app installation. Serialize token moves and
 	// device rotations so a stale login cannot continue receiving another user's
 	// notifications.
-	if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1, 910310))`, input.Token); err == nil {
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1, 910310))`, input.Token)
+	}
+	if err == nil {
 		_, err = tx.Exec(r.Context(), `UPDATE push_tokens SET revoked_at=COALESCE(revoked_at,now()),updated_at=now()
-			WHERE expo_push_token=$1 AND (user_id<>$2 OR device_id<>$3) AND revoked_at IS NULL`, input.Token, userID, input.DeviceID)
+			WHERE expo_push_token=$1 AND (user_id<>$2 OR device_id<>$3) AND revoked_at IS NULL`, input.Token, current.UserID, input.DeviceID)
 	}
 	var result pushTokenView
 	if err == nil {
 		err = tx.QueryRow(r.Context(), `INSERT INTO push_tokens
-			(user_id,device_id,expo_push_token,platform,app_version,user_agent)
-			VALUES ($1,$2,$3,$4,$5,$6)
+			(user_id,device_id,expo_push_token,platform,app_version,user_agent,session_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
 			ON CONFLICT (user_id,device_id) DO UPDATE SET
 				expo_push_token=EXCLUDED.expo_push_token,platform=EXCLUDED.platform,
 				app_version=EXCLUDED.app_version,user_agent=EXCLUDED.user_agent,
-				last_seen_at=now(),revoked_at=NULL,updated_at=now()
+				session_id=EXCLUDED.session_id,last_seen_at=now(),revoked_at=NULL,updated_at=now()
 			RETURNING id,device_id,platform,app_version,last_seen_at,created_at,updated_at`,
-			userID, input.DeviceID, input.Token, input.Platform, input.AppVersion, r.UserAgent()).
+			current.UserID, input.DeviceID, input.Token, input.Platform, input.AppVersion, r.UserAgent(), sessionID).
 			Scan(&result.ID, &result.DeviceID, &result.Platform, &result.AppVersion, &result.LastSeenAt, &result.CreatedAt, &result.UpdatedAt)
 	}
 	if err != nil || tx.Commit(r.Context()) != nil {
@@ -136,6 +157,15 @@ func (s *Server) revokePushToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// revokeSessionPushTokens revokes the push installations registered with the
+// given sessions, in the transaction that ends them, so a signed-out device
+// stops receiving pushes. Account deletion deletes every installation instead.
+func revokeSessionPushTokens(ctx context.Context, tx pgx.Tx, sessionIDs []string) error {
+	_, err := tx.Exec(ctx, `UPDATE push_tokens SET revoked_at=now(),updated_at=now()
+		WHERE session_id=ANY($1::text[]::uuid[]) AND revoked_at IS NULL`, sessionIDs)
+	return err
 }
 
 func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {

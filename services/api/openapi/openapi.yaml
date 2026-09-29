@@ -158,12 +158,18 @@ paths:
       operationId: logout
       tags:
         - Authentication
+      description: >-
+        Revokes the current session and every push installation registered with it, so the device stops receiving
+        the player's pushes. The app should still call DELETE /v1/me/push-tokens/{id} for its installation first:
+        an installation registered with an earlier session of the same device is not bound to this one.
       security:
         - bearerAuth: []
       responses:
         '204':
-          description: Current refresh session revoked.
+          description: Current refresh session and its push installations revoked.
         '401':
+          $ref: '#/components/responses/Error'
+        '503':
           $ref: '#/components/responses/Error'
   /v1/me:
     get:
@@ -2064,8 +2070,12 @@ paths:
       summary: Register or rotate the current installation's Expo push token.
       description: >-
         deviceId is the stable app-installation identifier. Repeating this call is idempotent for that player/device
-        pair. A new token replaces the old one, and a provider token previously assigned to another installation is
-        revoked. Each push's data object is PushNotificationData.
+        pair. A new token replaces the old one, and a provider token previously assigned to another installation or
+        player is revoked. The installation is bound to the caller's session: logout, revoking that session with
+        DELETE /v1/me/sessions/{id} and account deletion stop its pushes, so register again after every sign-in and on
+        each app launch. Installations registered before sessions were linked were revoked and must be registered
+        again. Returns 401 invalid_session when the session has already ended. Each push's data object is
+        PushNotificationData.
       security:
         - bearerAuth: []
       requestBody:
@@ -2117,6 +2127,9 @@ paths:
       tags:
         - Devices
       summary: Revoke one of the player's push-enabled installations.
+      description: >-
+        Call this for the device's own installation before POST /v1/auth/logout. If the installation ID was not
+        kept, POST /v1/me/push-tokens with the same deviceId and token returns it.
       security:
         - bearerAuth: []
       parameters:
@@ -2450,7 +2463,10 @@ paths:
       tags:
         - Sessions
       summary: Revoke one owned session, including the current session.
-      description: Database revocation is propagated through Redis to invalidate outstanding access tokens.
+      description: >-
+        Database revocation is propagated through Redis to invalidate outstanding access tokens. Every push
+        installation registered with the session is revoked too, so a lost or signed-out phone stops receiving the
+        player's pushes.
       security:
         - bearerAuth: []
       parameters:
@@ -2462,7 +2478,7 @@ paths:
             format: uuid
       responses:
         '204':
-          description: Session revoked.
+          description: Session and its push installations revoked.
         '400':
           $ref: '#/components/responses/Error'
         '401':

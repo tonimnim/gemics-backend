@@ -56,6 +56,13 @@ const notificationAwaitingEntryReportSQL = `SELECT EXISTS (
 	  AND NOT EXISTS (SELECT 1 FROM match_result_reports report
 		WHERE report.match_id=$1 AND report.entry_id=$2))`
 
+// notificationLivePushTokenSQL matches the push installations that may still
+// receive a push: not revoked, and bound to a live session of their player.
+// Logout, a remote session revoke and account deletion end that session, so a
+// delivery queued before the session ended is never sent to the device.
+const notificationLivePushTokenSQL = `token.revoked_at IS NULL AND EXISTS (SELECT 1 FROM refresh_sessions session
+	WHERE session.id=token.session_id AND session.user_id=token.user_id AND session.revoked_at IS NULL)`
+
 type notificationOutboxEvent struct {
 	ID          string
 	AggregateID string
@@ -304,7 +311,7 @@ func (s *Server) projectNotificationBatch(ctx context.Context) (int, error) {
 						(notification_id,push_token_id,preference_key)
 						SELECT $1,token.id,$3 FROM push_tokens token
 						LEFT JOIN notification_preferences preference ON preference.user_id=token.user_id
-						WHERE token.user_id=$2 AND token.revoked_at IS NULL AND CASE $3
+						WHERE token.user_id=$2 AND `+notificationLivePushTokenSQL+` AND CASE $3
 							WHEN 'competition_push' THEN COALESCE(preference.competition_push,true)
 							WHEN 'match_push' THEN COALESCE(preference.match_push,true)
 							WHEN 'result_push' THEN COALESCE(preference.result_push,true)
@@ -779,14 +786,14 @@ func (s *Server) claimNotificationPushBatch(ctx context.Context) ([]notification
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 	// Re-evaluate preferences at claim time so a queued delivery cannot race a
-	// later opt-out indefinitely. Revoked installations and inactive accounts
-	// are terminally suppressed as well.
+	// later opt-out indefinitely. Revoked installations, installations whose
+	// session ended and inactive accounts are terminally suppressed as well.
 	if _, err = tx.Exec(ctx, `UPDATE notification_push_deliveries delivery SET
 		state='suppressed',lease_until=NULL,last_error_code='delivery_disabled',updated_at=now()
 		WHERE ((delivery.state IN ('pending','retry') AND delivery.next_attempt_at<=now()) OR
 			(delivery.state='submitting' AND delivery.lease_until<=now()))
-		AND (EXISTS (SELECT 1 FROM push_tokens token WHERE token.id=delivery.push_token_id
-			AND token.revoked_at IS NOT NULL)
+		AND (NOT EXISTS (SELECT 1 FROM push_tokens token WHERE token.id=delivery.push_token_id
+			AND `+notificationLivePushTokenSQL+`)
 		OR EXISTS (SELECT 1 FROM notifications notification JOIN users player ON player.id=notification.user_id
 			WHERE notification.id=delivery.notification_id AND player.status<>'active')
 		OR NOT COALESCE((SELECT CASE delivery.preference_key
@@ -803,7 +810,7 @@ func (s *Server) claimNotificationPushBatch(ctx context.Context) ([]notification
 		SELECT delivery.id FROM notification_push_deliveries delivery
 		JOIN notifications notification ON notification.id=delivery.notification_id
 		JOIN users player ON player.id=notification.user_id AND player.status='active'
-		JOIN push_tokens token ON token.id=delivery.push_token_id AND token.revoked_at IS NULL
+		JOIN push_tokens token ON token.id=delivery.push_token_id AND `+notificationLivePushTokenSQL+`
 		LEFT JOIN notification_preferences preference ON preference.user_id=notification.user_id
 		WHERE ((delivery.state IN ('pending','retry') AND delivery.next_attempt_at<=now())
 			OR (delivery.state='submitting' AND delivery.lease_until<=now()))
