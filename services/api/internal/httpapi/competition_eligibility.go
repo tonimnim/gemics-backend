@@ -143,7 +143,8 @@ func queryCompetitionEligibilityFacts(ctx context.Context, queryer eligibilityQu
 		competition.registration_closes_at,competition.starts_at,competition.rules_snapshot,
 		player.country_code,player.birth_date,
 		(profile.user_id IS NOT NULL AND player.birth_date IS NOT NULL
-		 AND player.terms_accepted_at IS NOT NULL AND player.privacy_accepted_at IS NOT NULL),
+		 AND player.terms_accepted_at IS NOT NULL AND player.privacy_accepted_at IS NOT NULL
+		 AND player.display_name_set_at IS NOT NULL),
 		rating.rating,global_board.rank,country_board.rank,
 		account.id::text,account.game_id,account.verification_status,
 		entry.id::text,entry.status,payment.id::text,payment.status,
@@ -276,7 +277,7 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 		blocking("conduct_suspended", "conduct", "Your account has too many active conduct strikes to register for new competitions. Contact Gamics support.")
 	}
 	if !facts.ProfileComplete {
-		blocking("profile_incomplete", "profile", "Complete your profile and accept the current terms and privacy notice.")
+		blocking("profile_incomplete", "profile", "Complete your profile, choose a display name and accept the current terms and privacy notice.")
 	}
 	if facts.EntryStatus != nil && (*facts.EntryStatus == "withdrawn" || *facts.EntryStatus == "disqualified") {
 		blocking("registration_not_reusable", "registration", "This player cannot create another entry for this competition.")

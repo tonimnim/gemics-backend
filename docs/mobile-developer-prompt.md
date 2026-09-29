@@ -17,8 +17,8 @@ in a WebView.
 
 Build these player journeys:
 
-1. Email OTP onboarding, profile creation, age/country eligibility and
-   consent choices.
+1. Email OTP onboarding, a required display-name step, profile creation,
+   age/country eligibility and consent choices.
 2. Add an eFootball Mobile game account and public player handle.
 3. Discover/search competitions; view format, schedule, rules, capacity,
    organizer, entry type and prize source.

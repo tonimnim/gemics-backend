@@ -440,13 +440,13 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 	var onboardingComplete bool
 	err = tx.QueryRow(r.Context(), `SELECT account.game_id,COALESCE(NULLIF(profile.handle,''),account.in_game_name),
 		(player.birth_date IS NOT NULL AND player.terms_accepted_at IS NOT NULL
-		 AND player.privacy_accepted_at IS NOT NULL AND profile.user_id IS NOT NULL)
+		 AND player.privacy_accepted_at IS NOT NULL AND profile.user_id IS NOT NULL AND player.display_name_set_at IS NOT NULL)
 		FROM users player JOIN game_accounts account ON account.id=$2 AND account.user_id=player.id
 		LEFT JOIN player_profiles profile ON profile.user_id=player.id
 		WHERE player.id=$1 AND player.status='active'`, userID, input.GameAccountID).
 		Scan(&accountGameID, &displayName, &onboardingComplete)
 	if errors.Is(err, pgx.ErrNoRows) || !onboardingComplete {
-		writeError(w, http.StatusConflict, "onboarding_required", "Complete your profile and connect the correct game account before registering.")
+		writeError(w, http.StatusConflict, "onboarding_required", "Complete your profile, choose a display name and connect the correct game account before registering.")
 		return
 	}
 	if err != nil {

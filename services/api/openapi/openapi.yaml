@@ -99,6 +99,10 @@ paths:
       tags:
         - Authentication
       summary: Verify an email code and create or sign in the player.
+      description: >-
+        A new account gets a generated handle such as Swift_Falcon_4821 and a private profile. The handle is also
+        its display name until the player chooses one, so player.onboarding.displayName starts false. No name is
+        ever derived from the email address.
       requestBody:
         required: true
         content:
@@ -127,6 +131,11 @@ paths:
                 $ref: '#/components/schemas/AuthSession'
         '401':
           $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+          description: >-
+            database_unavailable, or handle_unavailable when no generated handle could be claimed for a new
+            account; retry the same code.
   /v1/auth/refresh:
     post:
       operationId: refreshSession
@@ -191,6 +200,7 @@ paths:
       operationId: updateCurrentPlayer
       tags:
         - Players
+      description: Setting displayName completes the display-name onboarding step.
       security:
         - bearerAuth: []
       requestBody:
@@ -206,6 +216,7 @@ paths:
                   type: string
                   minLength: 2
                   maxLength: 80
+                  description: The name opponents and public profiles show. Setting it marks onboarding.displayName true.
                 countryCode:
                   type: string
                   pattern: ^[A-Z]{2}$
@@ -221,11 +232,15 @@ paths:
                 $ref: '#/components/schemas/Player'
         '400':
           $ref: '#/components/responses/Error'
+          description: >-
+            invalid_display_name (2-80 characters), invalid_country, invalid_birth_date, empty_update,
+            versioned_legal_acceptance_required.
   /v1/me/profile:
     put:
       operationId: putPlayerProfile
       tags:
         - Players
+      description: While onboarding.displayName is false, the display name follows the handle set here.
       security:
         - bearerAuth: []
       requestBody:
@@ -4411,6 +4426,10 @@ components:
           format: email
         displayName:
           type: string
+          description: >-
+            The name opponents, match rooms and public profiles show. Until the player chooses one
+            (onboarding.displayName false) it is their handle, or Player when they have no handle yet. It is never
+            derived from the email address.
         countryCode:
           type: string
         birthDate:
@@ -4428,18 +4447,30 @@ components:
           type: object
           required:
             - personalDetails
+            - displayName
             - profile
             - gameAccount
             - complete
           properties:
             personalDetails:
               type: boolean
+            displayName:
+              type: boolean
+              description: >-
+                True once the player chose a display name with PATCH /v1/me. While false, show the display-name
+                screen; the display name is still the handle.
             profile:
               type: boolean
             gameAccount:
               type: boolean
             complete:
               type: boolean
+              description: >-
+                All four steps are done. Until it is true, GET /v1/competitions/{id}/eligibility reports a blocking
+                issue (profile_incomplete while the display name is pending) and free registration and paid entry are
+                refused with 409 for the same reason: error profile_incomplete on free registration, issue.code
+                profile_incomplete of competition_ineligible on paid entry. onboarding_required is the fallback when
+                onboarding changed after that check or gameAccountId is not one of the player's accounts.
     ProfileInput:
       type: object
       required:
@@ -6945,6 +6976,7 @@ components:
             - payment_retry_required
             - conduct_suspended
           description: >-
+            profile_incomplete means onboarding is unfinished (see Player.onboarding), including a pending display name.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
         category:

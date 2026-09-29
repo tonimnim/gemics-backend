@@ -160,6 +160,7 @@ components:
             - payment_retry_required
             - conduct_suspended
           description: >-
+            profile_incomplete means onboarding is unfinished (see Player.onboarding), including a pending display name.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
         category:

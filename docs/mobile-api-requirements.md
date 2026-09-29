@@ -38,13 +38,29 @@ when a player chooses M-Pesa.
 
 ### 2. Onboarding, legal consent, profile, and avatar
 
-- `GET /v1/me` returns the player and onboarding status.
+- `GET /v1/me` returns the player and `onboarding`: `personalDetails`, `displayName`,
+  `profile`, `gameAccount` and `complete`. Show the next unfinished step. Until
+  `complete` is true, `GET /v1/competitions/{id}/eligibility` reports a blocking issue
+  (`profile_incomplete` while the display name is pending) and free registration and
+  paid entry are refused with `409` for the same reason: `error` is
+  `profile_incomplete` on free registration, and paid entry answers
+  `competition_ineligible` with `issue.code` `profile_incomplete`. Route both to the
+  unfinished step. `409 onboarding_required` is the fallback when onboarding changed
+  after that check or `gameAccountId` is not one of the player's accounts.
+- A new account starts with a generated handle such as `Swift_Falcon_4821` and a
+  private profile, so `onboarding.profile` is already true. That handle is also the
+  display name until the player chooses one. While `onboarding.displayName` is false,
+  show the display-name screen and save the answer with `PATCH /v1/me`
+  (`displayName`, 2-80 characters). Opponents, match rooms and public profiles show
+  `displayName`; it is never taken from the email address, so never prefill the screen
+  with the email.
 - `GET /v1/legal/documents/current` returns the exact current terms/privacy versions.
 - `POST /v1/me/legal-acceptances` records those exact versions; `GET` lists accepted
   versions.
-- `PATCH /v1/me` updates personal details. It does not accept legal-consent booleans.
+- `PATCH /v1/me` updates personal details and the display name. It does not accept
+  legal-consent booleans.
 - `PUT /v1/me/profile` creates or updates handle, bio, discoverability, and profile
-  preferences.
+  preferences. While the display name is still pending it follows the handle.
 - `POST /v1/me/avatar/uploads`, direct object upload, then
   `POST /v1/me/avatar/uploads/{id}/complete` uploads an avatar.
 - `PATCH /v1/me/avatar` selects the completed avatar; `GET /v1/me/avatar` returns

@@ -96,6 +96,8 @@ func (s *Server) patchMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		appendValue("display_name", value)
+		// An explicit choice completes the display-name onboarding step.
+		assignments = append(assignments, "display_name_set_at=now()")
 	}
 	if input.CountryCode != nil {
 		value := strings.ToUpper(strings.TrimSpace(*input.CountryCode))
@@ -143,19 +145,45 @@ func (s *Server) putProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_bio", "Bio cannot exceed 280 characters.")
 		return
 	}
-	_, err := s.db.Writer.Exec(r.Context(), `INSERT INTO player_profiles
+	userID := identityFromContext(r.Context()).UserID
+	tx, err := s.db.Writer.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to save the player profile.")
+		return
+	}
+	defer tx.Rollback(r.Context()) //nolint:errcheck
+	// The player row is locked before the profile row, the order account
+	// deletion takes them in, so a save racing a deletion waits for it and then
+	// finds no active player instead of deadlocking.
+	var active bool
+	err = tx.QueryRow(r.Context(), `SELECT true FROM users WHERE id=$1 AND status='active' FOR NO KEY UPDATE`, userID).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusUnauthorized, "invalid_session", "The session is no longer valid.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to save the player profile.")
+		return
+	}
+	_, err = tx.Exec(r.Context(), `INSERT INTO player_profiles
         (user_id,handle,bio,discoverable,analytics_consent_at,scouting_consent_at)
         VALUES ($1,$2,$3,$4,CASE WHEN $5 THEN now() END,CASE WHEN $6 THEN now() END)
         ON CONFLICT (user_id) DO UPDATE SET
           handle=EXCLUDED.handle,bio=EXCLUDED.bio,discoverable=EXCLUDED.discoverable,
           analytics_consent_at=CASE WHEN $5 THEN COALESCE(player_profiles.analytics_consent_at,now()) END,
           scouting_consent_at=CASE WHEN $6 THEN COALESCE(player_profiles.scouting_consent_at,now()) END,
-          updated_at=now()`, identityFromContext(r.Context()).UserID, input.Handle, input.Bio, input.Discoverable, input.AnalyticsConsent, input.ScoutingConsent)
+          updated_at=now()`, userID, input.Handle, input.Bio, input.Discoverable, input.AnalyticsConsent, input.ScoutingConsent)
 	if err != nil {
 		if strings.Contains(err.Error(), "player_profiles_handle_unique") {
 			writeError(w, http.StatusConflict, "handle_taken", "That player handle is already taken.")
 			return
 		}
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to save the player profile.")
+		return
+	}
+	// Until the player chooses a display name, every surface shows the handle.
+	if _, err = tx.Exec(r.Context(), `UPDATE users SET display_name=$2,updated_at=now()
+		WHERE id=$1 AND display_name_set_at IS NULL`, userID, input.Handle); err != nil || tx.Commit(r.Context()) != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to save the player profile.")
 		return
 	}
@@ -289,14 +317,14 @@ func (s *Server) loadMe(ctx context.Context, pool *pgxpool.Pool, userID string) 
 	var handle, bio *string
 	var discoverable *bool
 	var analyticsAt, scoutingAt *time.Time
-	var hasGameAccount bool
-	err := pool.QueryRow(ctx, `SELECT u.id,u.email,u.display_name,u.country_code,
+	var displayNameSet, hasGameAccount bool
+	err := pool.QueryRow(ctx, `SELECT u.id,u.email,u.display_name,u.display_name_set_at IS NOT NULL,u.country_code,
         to_char(u.birth_date,'YYYY-MM-DD'),u.status,u.terms_accepted_at,u.privacy_accepted_at,u.created_at,u.updated_at,
         p.handle,p.bio,p.discoverable,p.analytics_consent_at,p.scouting_consent_at,
         EXISTS(SELECT 1 FROM game_accounts ga WHERE ga.user_id=u.id)
         FROM users u LEFT JOIN player_profiles p ON p.user_id=u.id WHERE u.id=$1`, userID).
-		Scan(&id, &email, &displayName, &countryCode, &birthDate, &status, &termsAt, &privacyAt, &createdAt, &updatedAt,
-			&handle, &bio, &discoverable, &analyticsAt, &scoutingAt, &hasGameAccount)
+		Scan(&id, &email, &displayName, &displayNameSet, &countryCode, &birthDate, &status, &termsAt, &privacyAt,
+			&createdAt, &updatedAt, &handle, &bio, &discoverable, &analyticsAt, &scoutingAt, &hasGameAccount)
 	if err != nil {
 		return nil, err
 	}
@@ -305,14 +333,28 @@ func (s *Server) loadMe(ctx context.Context, pool *pgxpool.Pool, userID string) 
 		profile = map[string]any{"handle": *handle, "bio": valueOrEmpty(bio), "discoverable": boolOrFalse(discoverable),
 			"analyticsConsent": analyticsAt != nil, "scoutingConsent": scoutingAt != nil}
 	}
-	personalComplete := birthDate != nil && termsAt != nil && privacyAt != nil
-	profileComplete := handle != nil
 	return map[string]any{
 		"id": id, "email": email, "displayName": displayName, "countryCode": countryCode, "birthDate": birthDate,
 		"status": status, "createdAt": createdAt, "updatedAt": updatedAt, "profile": profile,
-		"onboarding": map[string]any{"personalDetails": personalComplete, "profile": profileComplete,
-			"gameAccount": hasGameAccount, "complete": personalComplete && profileComplete && hasGameAccount},
+		"onboarding": newOnboardingStatus(birthDate != nil && termsAt != nil && privacyAt != nil,
+			displayNameSet, handle != nil, hasGameAccount),
 	}, nil
+}
+
+// onboardingStatus reports the onboarding steps a player has finished. The
+// display name counts only once the player chose it: until then it mirrors
+// the handle, and registration and paid entry stay closed.
+type onboardingStatus struct {
+	PersonalDetails bool `json:"personalDetails"`
+	DisplayName     bool `json:"displayName"`
+	Profile         bool `json:"profile"`
+	GameAccount     bool `json:"gameAccount"`
+	Complete        bool `json:"complete"`
+}
+
+func newOnboardingStatus(personalDetails, displayName, profile, gameAccount bool) onboardingStatus {
+	return onboardingStatus{PersonalDetails: personalDetails, DisplayName: displayName, Profile: profile,
+		GameAccount: gameAccount, Complete: personalDetails && displayName && profile && gameAccount}
 }
 
 func (s *Server) queryGameAccounts(ctx context.Context, pool *pgxpool.Pool, userID string) ([]gameAccount, error) {

@@ -2,16 +2,19 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	stdmail "net/mail"
 	"strings"
 	"time"
 
 	gamicsauth "github.com/gamics-io/gamics/services/api/internal/auth"
+	"github.com/gamics-io/gamics/services/api/internal/username"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -38,6 +41,12 @@ type refreshRequest struct {
 }
 
 const refreshTokenRetryGrace = 5 * time.Minute
+
+// signupHandleAttempts bounds how many generated handles a new account tries
+// against the unique handle index before signup fails closed.
+const signupHandleAttempts = 5
+
+var errHandleUnavailable = errors.New("no generated handle is available")
 
 func (s *Server) requestOTP(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
@@ -144,9 +153,12 @@ func (s *Server) verifyOTP(w http.ResponseWriter, r *http.Request) {
 	var userID, userStatus string
 	err = tx.QueryRow(r.Context(), "SELECT id,status FROM users WHERE lower(email)=lower($1)", email).Scan(&userID, &userStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
-		displayName := provisionalDisplayName(email)
-		err = tx.QueryRow(r.Context(), `INSERT INTO users(email, display_name, status)
-            VALUES ($1,$2,'active') RETURNING id,status`, email, displayName).Scan(&userID, &userStatus)
+		userStatus = "active"
+		userID, err = createPlayerAccount(r.Context(), tx, email, rand.Reader)
+	}
+	if errors.Is(err, errHandleUnavailable) {
+		writeError(w, http.StatusServiceUnavailable, "handle_unavailable", "Unable to create the player account. Try again.")
+		return
 	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to create the player account.")
@@ -329,15 +341,35 @@ func normalizeEmail(raw string) (string, bool) {
 	return raw, true
 }
 
-func provisionalDisplayName(email string) string {
-	value := strings.TrimSpace(strings.SplitN(email, "@", 2)[0])
-	if value == "" {
-		return "Player"
+// createPlayerAccount inserts a new player with a generated handle such as
+// Swift_Falcon_4821. The handle is also the display name until the player
+// chooses one during onboarding, so no name is ever derived from the email.
+func createPlayerAccount(ctx context.Context, tx pgx.Tx, email string, entropy io.Reader) (string, error) {
+	handles, err := username.Candidates(entropy, signupHandleAttempts)
+	if err != nil {
+		return "", err
 	}
-	if len(value) > 64 {
-		value = value[:64]
+	var userID string
+	if err = tx.QueryRow(ctx, `INSERT INTO users(email,display_name,status) VALUES ($1,$2,'active') RETURNING id`,
+		email, handles[0]).Scan(&userID); err != nil {
+		return "", err
 	}
-	return value
+	for _, handle := range handles {
+		var claimed string
+		err = tx.QueryRow(ctx, `INSERT INTO player_profiles(user_id,handle) VALUES ($1,$2)
+			ON CONFLICT ((lower(handle))) DO NOTHING RETURNING handle`, userID, handle).Scan(&claimed)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if claimed != handles[0] {
+			_, err = tx.Exec(ctx, `UPDATE users SET display_name=$2 WHERE id=$1`, userID, claimed)
+		}
+		return userID, err
+	}
+	return "", errHandleUnavailable
 }
 
 func (s *Server) allowOTPRate(ctx context.Context, kind, value string, limit int) bool {
