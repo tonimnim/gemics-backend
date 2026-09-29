@@ -750,7 +750,7 @@ func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transa
 			subject_id,after_state) VALUES ($1,$2,'payment.refund_requested','payment_refund',$3,
 			jsonb_build_object('paymentId',$4::text,'entryId',$5::text,'status','requested',
 			'reasonCode',$6::text,'mandatory',true,
-			'amountMinor',(SELECT amount_minor FROM payment_intents WHERE id=$4)))`,
+			'amountMinor',(SELECT amount_minor FROM payment_intents WHERE id=$4::uuid)))`,
 			organizationID, userID, *refundID, paymentID, entryID, plan.RefundReason)
 		if err != nil {
 			return err
