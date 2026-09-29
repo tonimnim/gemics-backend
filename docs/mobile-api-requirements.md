@@ -114,7 +114,7 @@ Route and render on `kind` and the ids in `data`; never parse the title or body.
 |---|---|---|---|---|---|---|---|
 | `competition.check_in` | `competition` | push | `competitionPush` | Competition check-in is open | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
 | `competition.running` | `competition` | push | `competitionPush` | Competition started | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
-| `competition.cancelled` | `competition` | push | `competitionPush` | Competition cancelled | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
+| `competition.cancelled` | `competition` | push | `competitionPush` | Competition cancelled | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail, which reads `status: cancelled` |
 | `competition.completed` | `competition` | push | `competitionPush` | Competition complete | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
 | `competition.draw_generated` | `competition` | push | `competitionPush` | Tournament draw is ready | `/competitions/{competitionId}/bracket` | `kind`, `competitionId` | Competition bracket |
 | `match.ready` | `match` | push | `matchPush` | Your match is ready | `/matches/{matchId}` | `kind`, `matchId` | Match room |
@@ -193,6 +193,18 @@ returned as `404`; the app must not try to distinguish those states.
 - `POST /v1/competitions/{id}/registrations` enters a free competition.
 - `DELETE /v1/competitions/{id}/registrations/me` withdraws a free entry.
 - `GET /v1/me/registrations` lists the player's entries.
+
+A cancelled competition leaves `GET /v1/competitions` but stays readable by id: the
+detail and bracket return `status: cancelled`, so the `competition.cancelled` push and
+saved links still open, and matches that were still live read `state: cancelled` with
+`completionReason: competition_cancelled`. Cancelling leaves free entries `registered`
+(paid entries move to `withdrawal_pending` for their refund), so show an entry as
+cancelled whenever its registration's `competitionStatus` is `cancelled`. New entries
+are refused: the eligibility preflight answers `200` with the blocking issue
+`competition_cancelled` (an entrant still gets `status: registered`), and free or paid
+registration returns `409 competition_cancelled`. Drafts, including a draft cancelled
+before it was published, and competitions of an inactive game or organizer return
+`404 competition_not_found` on the detail, bracket, eligibility and both entry paths.
 
 For paid entry, call `POST /v1/payments/mpesa/stk-push` with an `Idempotency-Key`, then
 poll `GET /v1/payments/{id}` until `status` is `succeeded`, `failed` or `review`. Never

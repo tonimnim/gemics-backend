@@ -131,6 +131,21 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the competition fee.")
 		return
 	}
+	// Entry resolves the competitions the detail returns; a draft, even a
+	// cancelled one, is not found rather than refused.
+	readable, err := competitionIsReadable(r.Context(), tx, input.CompetitionID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the competition fee.")
+		return
+	}
+	if !readable {
+		writeError(w, http.StatusNotFound, "competition_not_found", "Competition not found.")
+		return
+	}
+	if competitionStatus == "cancelled" {
+		writeError(w, http.StatusConflict, "competition_cancelled", "This competition has been cancelled.")
+		return
+	}
 	now := time.Now()
 	if competitionStatus != "registration_open" || now.Before(registrationOpens) || !now.Before(registrationCloses) || amountMinor <= 0 || feePurpose != "administration" {
 		writeError(w, http.StatusConflict, "payment_not_available", "This competition is not accepting paid registrations.")

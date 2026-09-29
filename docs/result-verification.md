@@ -135,6 +135,12 @@ no rating changes and no strike is recorded; refunds follow the competition's
 cancellation policy. Reports and review decisions on a cancelled or completed
 competition are refused with `409 competition_closed`.
 
+A competition cancelled after it was published stays readable to players: its
+detail and bracket return `status: cancelled`, although it leaves the discovery
+list. Free entries stay `registered` and `GET /v1/me/registrations` reports
+`competitionStatus: cancelled`; new entries are refused with `competition_cancelled`.
+A draft cancelled before publication was never public and stays `404`.
+
 ## The Gamics review queue
 
 Reviews are decided by Gamics platform staff with the `reviewer` or `admin`

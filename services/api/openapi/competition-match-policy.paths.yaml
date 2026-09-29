@@ -14,6 +14,8 @@ paths:
         competition can be eligible while canRegisterNow is false and requiredAction
         is start_payment. Registration/payment handlers must evaluate the same policy
         again in their write transaction because capacity and deadlines can change.
+        A cancelled competition answers 200 with the blocking issue competition_cancelled, while a player who is
+        already entered keeps status registered; 404 is returned only where GET /v1/competitions/{id} returns it.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -39,6 +41,10 @@ paths:
       operationId: getCompetitionBracket
       tags: [Competitions]
       summary: Return the generated bracket as typed stages, rounds, matches and graph edges.
+      description: >-
+        Readable for exactly the competitions GET /v1/competitions/{id} returns. A cancelled competition keeps its
+        bracket: every match still live at the cancellation reads state cancelled with completionReason
+        competition_cancelled, and a competition cancelled before its draw has no stages.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -47,7 +53,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TypedBracketResponse" }
-        "404": { $ref: "#/components/responses/Error" }
+        "404":
+          $ref: "#/components/responses/Error"
+          description: >-
+            competition_not_found (missing, a draft, cancelled before it was published, or of an inactive game or
+            organizer).
         "503": { $ref: "#/components/responses/Error" }
   /v1/matches/{matchId}:
     get:
@@ -169,10 +179,12 @@ components:
             - payment_processing
             - payment_retry_required
             - conduct_suspended
+            - competition_cancelled
           description: >-
             profile_incomplete means onboarding is unfinished (see Player.onboarding), including a pending display name.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
+            competition_cancelled (category registration) blocks every new entry once the competition is cancelled.
         category:
           type: string
           enum: [profile, registration, capacity, age, country, ranking, game_account, payment, conduct]

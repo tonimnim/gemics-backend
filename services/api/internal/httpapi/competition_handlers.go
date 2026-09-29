@@ -20,6 +20,19 @@ import (
 
 var publicCompetitionStatuses = []string{"published", "registration_open", "check_in", "running", "completed"}
 
+// readableCompetitionSQL is the visibility rule of the addressable public reads
+// (detail, bracket, eligibility and entry) for a row aliased "competition": a
+// discovery status, or a cancellation of a competition that was published
+// first, of an active game and an active organizer. Entrants keep their
+// registrations and a cancellation push that link to it, so it must not turn
+// into a 404; discovery lists still leave it out. A draft cancelled before
+// publication was never public and stays hidden.
+const readableCompetitionSQL = `(competition.status IN ('published','registration_open','check_in','running','completed')
+	OR (competition.status='cancelled' AND competition.published_at IS NOT NULL))
+	AND EXISTS(SELECT 1 FROM games readable_game WHERE readable_game.id=competition.game_id AND readable_game.active)
+	AND EXISTS(SELECT 1 FROM organizations readable_organization
+		WHERE readable_organization.id=competition.organization_id AND readable_organization.status='active')`
+
 // competitionCacheFamily groups every cached public competition collection so an
 // organizer action that changes which competitions exist can retire all of them
 // at once.
@@ -103,6 +116,9 @@ type registrationItem struct {
 	Currency        string    `json:"currency"`
 	StartsAt        time.Time `json:"startsAt"`
 	CreatedAt       time.Time `json:"createdAt"`
+	// CompetitionStatus tells an entry that stays registered that its
+	// competition was cancelled.
+	CompetitionStatus string `json:"competitionStatus"`
 }
 
 type registrationPage struct {
@@ -404,6 +420,21 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the competition.")
 		return
 	}
+	// Entry resolves the competitions the detail returns; a draft, even a
+	// cancelled one, is not found rather than refused.
+	readable, err := competitionIsReadable(r.Context(), tx, competitionID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the competition.")
+		return
+	}
+	if !readable {
+		writeError(w, http.StatusNotFound, "competition_not_found", "Competition not found.")
+		return
+	}
+	if competitionStatus == "cancelled" {
+		writeError(w, http.StatusConflict, "competition_cancelled", "This competition has been cancelled.")
+		return
+	}
 	now := time.Now().UTC()
 	if competitionStatus != "registration_open" || now.Before(opensAt) || !now.Before(closesAt) {
 		writeError(w, http.StatusConflict, "registration_closed", "This competition is not accepting registrations.")
@@ -460,15 +491,16 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 
 	var existing registrationItem
 	err = tx.QueryRow(r.Context(), `SELECT entry.id,entry.competition_id,competition.name,competition.slug,
-		competition.game_id,game.name,entry.display_name,member.game_account_id,entry.status,
+		competition.status,competition.game_id,game.name,entry.display_name,member.game_account_id,entry.status,
 		competition.entry_fee_minor,competition.currency,competition.starts_at,entry.created_at
 		FROM competition_entries entry JOIN competitions competition ON competition.id=entry.competition_id
 		JOIN games game ON game.id=competition.game_id
 		JOIN entry_members member ON member.entry_id=entry.id AND member.user_id=$2
 		WHERE entry.competition_id=$1 AND entry.captain_user_id=$2`, competitionID, userID).
 		Scan(&existing.ID, &existing.CompetitionID, &existing.CompetitionName, &existing.CompetitionSlug,
-			&existing.GameID, &existing.GameName, &existing.DisplayName, &existing.GameAccountID, &existing.Status,
-			&existing.EntryFeeMinor, &existing.Currency, &existing.StartsAt, &existing.CreatedAt)
+			&existing.CompetitionStatus, &existing.GameID, &existing.GameName, &existing.DisplayName,
+			&existing.GameAccountID, &existing.Status, &existing.EntryFeeMinor, &existing.Currency,
+			&existing.StartsAt, &existing.CreatedAt)
 	if err == nil {
 		if existing.Status == "withdrawn" || existing.Status == "disqualified" {
 			writeError(w, http.StatusConflict, "registration_closed_for_player", "A previous registration exists. Contact the organizer before registering again.")
@@ -528,9 +560,9 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	item := registrationItem{ID: entryID, CompetitionID: competitionID, CompetitionName: competitionName,
-		CompetitionSlug: competitionSlug, GameID: competitionGameID, GameName: gameName, DisplayName: displayName,
-		GameAccountID: input.GameAccountID, Status: "registered", EntryFeeMinor: 0, Currency: currency,
-		StartsAt: startsAt, CreatedAt: createdAt}
+		CompetitionSlug: competitionSlug, CompetitionStatus: competitionStatus, GameID: competitionGameID,
+		GameName: gameName, DisplayName: displayName, GameAccountID: input.GameAccountID, Status: "registered",
+		EntryFeeMinor: 0, Currency: currency, StartsAt: startsAt, CreatedAt: createdAt}
 	body, _ := json.Marshal(map[string]any{"data": item})
 	if err = recordRegistrationIdempotency(r.Context(), tx, scope, idempotencyKey, requestHash, http.StatusCreated, body); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to save the registration response.")
@@ -569,7 +601,7 @@ func (s *Server) listMyRegistrations(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := identityFromContext(r.Context()).UserID
 	rows, err := s.db.Writer.Query(r.Context(), `SELECT entry.id,entry.competition_id,competition.name,competition.slug,
-		competition.game_id,game.name,entry.display_name,member.game_account_id,entry.status,
+		competition.status,competition.game_id,game.name,entry.display_name,member.game_account_id,entry.status,
 		competition.entry_fee_minor,competition.currency,competition.starts_at,entry.created_at
 		FROM competition_entries entry JOIN competitions competition ON competition.id=entry.competition_id
 		JOIN games game ON game.id=competition.game_id
@@ -585,7 +617,7 @@ func (s *Server) listMyRegistrations(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item registrationItem
 		if err := rows.Scan(&item.ID, &item.CompetitionID, &item.CompetitionName, &item.CompetitionSlug,
-			&item.GameID, &item.GameName, &item.DisplayName, &item.GameAccountID, &item.Status,
+			&item.CompetitionStatus, &item.GameID, &item.GameName, &item.DisplayName, &item.GameAccountID, &item.Status,
 			&item.EntryFeeMinor, &item.Currency, &item.StartsAt, &item.CreatedAt); err != nil {
 			writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load registrations.")
 			return
@@ -841,7 +873,7 @@ func (s *Server) loadCompetitionDetail(ctx context.Context, id string) (competit
 			competition.rules_version,competition.rules_snapshot
 			FROM competitions competition JOIN games game ON game.id=competition.game_id AND game.active=true
 			JOIN organizations organization ON organization.id=competition.organization_id AND organization.status='active'
-			WHERE competition.id=$1 AND competition.status=ANY($2::text[])`, id, publicCompetitionStatuses).
+			WHERE competition.id=$1 AND `+readableCompetitionSQL, id).
 			Scan(&detail.ID, &detail.Slug, &detail.Name, &detail.Description, &detail.GameID, &detail.GameName,
 				&detail.OrganizerID, &detail.OrganizerName, &detail.OrganizerSlug, &detail.Format, &detail.Status,
 				&detail.MaxEntries, &detail.EntryCount, &detail.EntryFeeMinor, &detail.FeePurpose, &detail.Currency,
@@ -883,13 +915,21 @@ func (s *Server) loadCompetitionBracket(ctx context.Context, id string) ([]brack
 	return queryCompetitionBracket(ctx, s.db.Writer, id)
 }
 
+// competitionIsReadable applies readableCompetitionSQL, so every public read
+// below the detail, and entry, resolve the same competitions as the detail.
+func competitionIsReadable(ctx context.Context, queryer eligibilityQueryer, id string) (bool, error) {
+	var readable bool
+	err := queryer.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM competitions competition
+		WHERE competition.id=$1 AND `+readableCompetitionSQL+`)`, id).Scan(&readable)
+	return readable, err
+}
+
 func queryCompetitionBracket(ctx context.Context, pool *pgxpool.Pool, id string) ([]bracketStage, error) {
-	var public bool
-	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM competitions
-		WHERE id=$1 AND status=ANY($2::text[]))`, id, publicCompetitionStatuses).Scan(&public); err != nil {
+	readable, err := competitionIsReadable(ctx, pool, id)
+	if err != nil {
 		return nil, err
 	}
-	if !public {
+	if !readable {
 		return nil, pgx.ErrNoRows
 	}
 	rows, err := pool.Query(ctx, `SELECT

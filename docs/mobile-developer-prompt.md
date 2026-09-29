@@ -21,7 +21,8 @@ Build these player journeys:
    age/country eligibility and consent choices.
 2. Add an eFootball Mobile game account and public player handle.
 3. Discover/search competitions; view format, schedule, rules, capacity,
-   organizer, entry type and prize source.
+   organizer, entry type and prize source. A cancelled competition still opens by id
+   and must show its cancelled state.
 4. Register or withdraw, complete any eligibility step and see registration status.
    For a paid event, choose the connected game account and M-Pesa number, generate a
    new Idempotency-Key once, start STK Push, then poll the returned payment ID until

@@ -21,30 +21,49 @@ paths:
     get:
       operationId: getCompetition
       tags: [Competitions]
+      description: >-
+        A cancelled competition stays readable here with status cancelled, so its entrants' registrations and the
+        competition.cancelled push keep resolving, but it leaves GET /v1/competitions. A draft, including one
+        cancelled before it was published, returns 404.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "200":
           description: Public competition detail and immutable rules snapshot.
           content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/CompetitionDetail" } } } } }
-        "404": { $ref: "#/components/responses/Error" }
+        "404":
+          $ref: "#/components/responses/Error"
+          description: >-
+            competition_not_found (missing, a draft, cancelled before it was published, or of an inactive game or
+            organizer).
         "503": { $ref: "#/components/responses/Error" }
   /v1/competitions/{id}/bracket:
     get:
       operationId: getCompetitionBracket
       tags: [Competitions]
+      description: >-
+        Readable for exactly the competitions GET /v1/competitions/{id} returns. A cancelled competition keeps its
+        bracket: every match still live at the cancellation reads state cancelled with completionReason
+        competition_cancelled, and a competition cancelled before its draw has no stages.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "200":
           description: Generated stages and matches. This endpoint never generates a bracket.
           content: { application/json: { schema: { $ref: "#/components/schemas/BracketResponse" } } }
-        "404": { $ref: "#/components/responses/Error" }
+        "404":
+          $ref: "#/components/responses/Error"
+          description: >-
+            competition_not_found (missing, a draft, cancelled before it was published, or of an inactive game or
+            organizer).
         "503": { $ref: "#/components/responses/Error" }
   /v1/competitions/{id}/registrations:
     post:
       operationId: createFreeRegistration
       tags: [Registrations]
+      description: >-
+        A competition GET /v1/competitions/{id} does not return answers 404 competition_not_found. A cancelled
+        competition is refused with 409 competition_cancelled before any other registration check.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -104,7 +123,12 @@ components:
         organizerName: { type: string }
         organizerSlug: { type: string }
         format: { type: string, enum: [single_elimination, double_elimination, round_robin] }
-        status: { type: string, enum: [published, registration_open, check_in, running, completed] }
+        status:
+          type: string
+          description: >-
+            cancelled is returned only when a competition is read by id: a cancelled competition leaves GET
+            /v1/competitions, but its detail and bracket stay readable.
+          enum: [published, registration_open, check_in, running, completed, cancelled]
         maxEntries: { type: integer, minimum: 2 }
         entryCount: { type: integer, minimum: 0 }
         availableSlots: { type: integer, minimum: 0 }
@@ -131,7 +155,7 @@ components:
         page: { $ref: "#/components/schemas/CursorPage" }
     Registration:
       type: object
-      required: [id, competitionId, competitionName, gameId, gameName, displayName, gameAccountId, status, entryFeeMinor, currency, startsAt, createdAt]
+      required: [id, competitionId, competitionName, gameId, gameName, displayName, gameAccountId, status, entryFeeMinor, currency, startsAt, createdAt, competitionStatus]
       properties:
         id: { type: string, format: uuid }
         competitionId: { type: string, format: uuid }
@@ -141,11 +165,18 @@ components:
         gameName: { type: string }
         displayName: { type: string }
         gameAccountId: { type: string, format: uuid }
-        status: { type: string, enum: [registered, checked_in, accepted, withdrawn, disqualified] }
+        status: { type: string, enum: [registered, checked_in, accepted, withdrawal_pending, withdrawn, disqualified] }
         entryFeeMinor: { type: integer, format: int64, minimum: 0 }
         currency: { type: string }
         startsAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
+        competitionStatus:
+          type: string
+          description: >-
+            The competition's current status. Cancelling a competition leaves its free entries registered (paid
+            entries move to withdrawal_pending for their refund), so show the entry as cancelled whenever this is
+            cancelled.
+          enum: [published, registration_open, check_in, running, completed, cancelled]
     RegistrationPage:
       type: object
       required: [data, page]

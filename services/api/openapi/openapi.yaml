@@ -352,6 +352,8 @@ paths:
         retrying the same request. Poll GET /v1/payments/{id} until status is succeeded, failed or review, then read
         registrationStatus: a verified payment that completes after its place is gone reads succeeded with
         registrationStatus refund_pending and a mandatory refund.
+        A competition GET /v1/competitions/{id} does not return answers 404 competition_not_found. A cancelled
+        competition is refused with 409 competition_cancelled before any payment is created.
       security:
         - bearerAuth: []
       parameters:
@@ -1141,6 +1143,10 @@ paths:
       operationId: getCompetition
       tags:
         - Competitions
+      description: >-
+        A cancelled competition stays readable here with status cancelled, so its entrants' registrations and the
+        competition.cancelled push keep resolving, but it leaves GET /v1/competitions. A draft, including one
+        cancelled before it was published, returns 404.
       parameters:
         - name: id
           in: path
@@ -1162,6 +1168,9 @@ paths:
                     $ref: '#/components/schemas/CompetitionDetail'
         '404':
           $ref: '#/components/responses/Error'
+          description: >-
+            competition_not_found (missing, a draft, cancelled before it was published, or of an inactive game or
+            organizer).
         '503':
           $ref: '#/components/responses/Error'
   /v1/competitions/{id}/bracket:
@@ -1170,6 +1179,10 @@ paths:
       tags:
         - Competitions
       summary: Return the generated bracket as typed stages, rounds, matches and graph edges.
+      description: >-
+        Readable for exactly the competitions GET /v1/competitions/{id} returns. A cancelled competition keeps its
+        bracket: every match still live at the cancellation reads state cancelled with completionReason
+        competition_cancelled, and a competition cancelled before its draw has no stages.
       parameters:
         - name: id
           in: path
@@ -1186,6 +1199,9 @@ paths:
                 $ref: '#/components/schemas/TypedBracketResponse'
         '404':
           $ref: '#/components/responses/Error'
+          description: >-
+            competition_not_found (missing, a draft, cancelled before it was published, or of an inactive game or
+            organizer).
         '503':
           $ref: '#/components/responses/Error'
   /v1/competitions/{id}/registrations:
@@ -1193,6 +1209,9 @@ paths:
       operationId: createFreeRegistration
       tags:
         - Registrations
+      description: >-
+        A competition GET /v1/competitions/{id} does not return answers 404 competition_not_found. A cancelled
+        competition is refused with 409 competition_cancelled before any other registration check.
       security:
         - bearerAuth: []
       parameters:
@@ -3344,6 +3363,8 @@ paths:
         This is a private writer-side decision and must not be shared-cached. A paid competition can be eligible while
         canRegisterNow is false and requiredAction is start_payment. Registration/payment handlers must evaluate the
         same policy again in their write transaction because capacity and deadlines can change.
+        A cancelled competition answers 200 with the blocking issue competition_cancelled, while a player who is
+        already entered keeps status registered; 404 is returned only where GET /v1/competitions/{id} returns it.
       security:
         - bearerAuth: []
       parameters:
@@ -5810,12 +5831,16 @@ components:
             - round_robin
         status:
           type: string
+          description: >-
+            cancelled is returned only when a competition is read by id: a cancelled competition leaves GET
+            /v1/competitions, but its detail and bracket stay readable.
           enum:
             - published
             - registration_open
             - check_in
             - running
             - completed
+            - cancelled
         maxEntries:
           type: integer
           minimum: 2
@@ -5906,6 +5931,7 @@ components:
         - currency
         - startsAt
         - createdAt
+        - competitionStatus
       properties:
         id:
           type: string
@@ -5947,6 +5973,19 @@ components:
         createdAt:
           type: string
           format: date-time
+        competitionStatus:
+          type: string
+          description: >-
+            The competition's current status. Cancelling a competition leaves its free entries registered (paid
+            entries move to withdrawal_pending for their refund), so show the entry as cancelled whenever this is
+            cancelled.
+          enum:
+            - published
+            - registration_open
+            - check_in
+            - running
+            - completed
+            - cancelled
     RegistrationPage:
       type: object
       required:
@@ -7011,10 +7050,12 @@ components:
             - payment_processing
             - payment_retry_required
             - conduct_suspended
+            - competition_cancelled
           description: >-
             profile_incomplete means onboarding is unfinished (see Player.onboarding), including a pending display name.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
+            competition_cancelled (category registration) blocks every new entry once the competition is cancelled.
         category:
           type: string
           enum:

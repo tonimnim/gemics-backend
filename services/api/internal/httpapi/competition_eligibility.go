@@ -188,8 +188,8 @@ func queryCompetitionEligibilityFacts(ctx context.Context, queryer eligibilityQu
 		WHERE intent.competition_id=competition.id AND intent.user_id=player.id
 		ORDER BY intent.created_at DESC,intent.id DESC LIMIT 1
 	) payment ON true
-	WHERE competition.id=$1::uuid AND competition.status=ANY($4::text[])`,
-		competitionID, userID, accountID, publicCompetitionStatuses).Scan(
+	WHERE competition.id=$1::uuid AND `+readableCompetitionSQL,
+		competitionID, userID, accountID).Scan(
 		&facts.CompetitionID, &facts.GameID, &facts.Status, &facts.MaxEntries,
 		&facts.EntryFeeMinor, &facts.Currency, &facts.RegistrationOpensAt,
 		&facts.RegistrationClosesAt, &facts.StartsAt, &facts.Rules,
@@ -285,7 +285,9 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 	if facts.EntryStatus != nil && (*facts.EntryStatus == "withdrawn" || *facts.EntryStatus == "disqualified") {
 		blocking("registration_not_reusable", "registration", "This player cannot create another entry for this competition.")
 	}
-	if facts.Status != "registration_open" || now.Before(facts.RegistrationOpensAt) {
+	if facts.Status == "cancelled" {
+		blocking("competition_cancelled", "registration", "This competition has been cancelled.")
+	} else if facts.Status != "registration_open" || now.Before(facts.RegistrationOpensAt) {
 		blocking("registration_not_open", "registration", "Registration is not open yet.")
 	} else if !now.Before(facts.RegistrationClosesAt) {
 		blocking("registration_closed", "registration", "Registration has closed.")
