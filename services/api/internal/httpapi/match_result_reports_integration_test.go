@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -366,7 +367,16 @@ func TestIntegrationScoreReportIdempotentReplay(t *testing.T) {
 	server, pool, _, sides := resultReportsSetup(t)
 	first := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(2, 0), false)
 	replay := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(2, 0), false)
-	if first.Code != http.StatusCreated || replay.Code != http.StatusCreated || replay.Body.String() != first.Body.String() ||
+	// The stored response is jsonb, which normalizes whitespace and key order,
+	// so the replay is compared as JSON rather than byte for byte.
+	var firstBody, replayBody any
+	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(replay.Body.Bytes(), &replayBody); err != nil {
+		t.Fatal(err)
+	}
+	if first.Code != http.StatusCreated || replay.Code != http.StatusCreated || !reflect.DeepEqual(replayBody, firstBody) ||
 		replay.Header().Get("Idempotency-Replayed") != "true" {
 		t.Fatalf("replay differs: %d %s / %d %s", first.Code, first.Body.String(), replay.Code, replay.Body.String())
 	}
@@ -542,8 +552,8 @@ func TestIntegrationStuckScreenshotEscalatesInsteadOfRemoving(t *testing.T) {
 	// Processing catches up after the escalation. The reviewer must still find
 	// the screenshot the review exists for, and be able to open it; the
 	// opponent must not.
-	if _, err := pool.Exec(t.Context(), `UPDATE evidence_uploads SET status='completed',updated_at=now() WHERE id=$1`,
-		evidenceID); err != nil {
+	if _, err := pool.Exec(t.Context(), `UPDATE evidence_uploads SET status='completed',processed_at=now(),updated_at=now()
+		WHERE id=$1`, evidenceID); err != nil {
 		t.Fatal(err)
 	}
 	reviewer := resultReportsInsertUser(t, pool, "reviewer")
