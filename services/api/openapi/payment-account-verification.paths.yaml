@@ -76,11 +76,28 @@ paths:
         "202":
           description: Refund review requested.
           content: { application/json: { schema: { $ref: "#/components/schemas/RefundResponse" } } }
-        "400": { $ref: "#/components/responses/Error" }
-        "401": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
-        "503": { $ref: "#/components/responses/Error" }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: >-
+            idempotency_key_required, invalid_idempotency_key; invalid_request (malformed body or unknown field);
+            invalid_withdrawal (reasonCode is not player_withdrawal, or note exceeds 500 characters).
+        "401":
+          $ref: "#/components/responses/Error"
+          description: authentication_required, invalid_access_token, invalid_session.
+        "404":
+          $ref: "#/components/responses/Error"
+          description: >-
+            registration_not_found (malformed competition id); paid_registration_not_found (the caller has no paid
+            entry in this competition).
+        "409":
+          $ref: "#/components/responses/Error"
+          description: >-
+            idempotency_conflict; withdrawal_closed (the entry is withdrawn or removed, or registration has closed
+            and the competition is not cancelled); refund_request_exists (a refund for this payment is already under
+            way).
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable, session_check_unavailable.
 
   /v1/admin/refunds:
     get:

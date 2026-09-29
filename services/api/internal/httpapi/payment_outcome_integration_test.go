@@ -317,9 +317,9 @@ func TestIntegrationPaymentSTKPushHoldsPlacesForUnfinishedPayments(t *testing.T)
 		paymentFlowStart(t, h, userID, gameAccountID, competitionID)
 	}
 	late, lateAccount := paymentFlowInsertPlayer(t, h, "late")
-	refused := paymentFlowSTKPush(t, h, late, "stk-push-late", competitionID, lateAccount)
-	if refused.Code != http.StatusConflict || !strings.Contains(refused.Body.String(), `"competition_full"`) {
-		t.Fatalf("a payment beyond capacity was accepted: %d %s", refused.Code, refused.Body.String())
+	refused, _ := entryFlowIneligible(t, paymentFlowSTKPush(t, h, late, "stk-push-late", competitionID, lateAccount))
+	if refused.Issue != entryIssueCompetitionFull || refused.Eligibility.firstBlockingIssue() == nil {
+		t.Fatalf("a payment beyond capacity was refused as %+v", refused)
 	}
 	if prompts := len(h.MPesa.prompts()); prompts != 2 {
 		t.Fatalf("%d Daraja prompts, want 2", prompts)

@@ -148,7 +148,8 @@ func competitionVisibilityRegistration(t *testing.T, server *Server, userID, com
 
 // A cancelled competition stays addressable with status cancelled, leaves
 // discovery, keeps its entrants' registrations and refuses new entries with
-// competition_cancelled, whether it had a draw or was still registering.
+// the competition_cancelled issue, whether it had a draw or was still
+// registering.
 func TestIntegrationCancelledCompetitionStaysReadable(t *testing.T) {
 	pool := openMigratedIntegrationDatabase(t)
 	server := competitionVisibilityServer(pool)
@@ -199,12 +200,18 @@ func TestIntegrationCancelledCompetitionStaysReadable(t *testing.T) {
 			func(issue eligibilityIssue) bool { return issue.Code == "competition_cancelled" }) {
 			t.Fatalf("eligibility of cancelled %s = %+v", competitionID, eligibility.Data)
 		}
-		competitionVisibilityRefused(t, competitionVisibilityCall(t, server.createFreeRegistration, http.MethodPost, "/",
-			outsider, competitionID, `{"gameAccountId":"11111111-1111-4111-8111-111111111111"}`),
-			http.StatusConflict, "competition_cancelled")
-		competitionVisibilityRefused(t, competitionVisibilityCall(t, server.initiateMPesa, http.MethodPost, "/", outsider, "",
-			`{"competitionId":"`+competitionID+`","gameAccountId":"11111111-1111-4111-8111-111111111111","phoneNumber":"0712345678"}`),
-			http.StatusConflict, "competition_cancelled")
+		// Both entry paths refuse it with the eligibility decision, whose first
+		// issue is the cancellation.
+		for _, refused := range []*httptest.ResponseRecorder{
+			competitionVisibilityCall(t, server.createFreeRegistration, http.MethodPost, "/",
+				outsider, competitionID, `{"gameAccountId":"11111111-1111-4111-8111-111111111111"}`),
+			competitionVisibilityCall(t, server.initiateMPesa, http.MethodPost, "/", outsider, "",
+				`{"competitionId":"`+competitionID+`","gameAccountId":"11111111-1111-4111-8111-111111111111","phoneNumber":"0712345678"}`),
+		} {
+			if body, _ := entryFlowIneligible(t, refused); body.Issue.Code != "competition_cancelled" {
+				t.Fatalf("entry to cancelled %s is refused with %+v", competitionID, body.Issue)
+			}
+		}
 	}
 	competitionVisibilityRefused(t, competitionVisibilityCall(t, server.listCompetitions, http.MethodGet,
 		"/v1/competitions?status=cancelled", "", "", ""), http.StatusBadRequest, "invalid_status")

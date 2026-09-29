@@ -32,10 +32,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CompetitionEligibilityResponse" }
-        "400": { $ref: "#/components/responses/Error" }
-        "401": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
-        "503": { $ref: "#/components/responses/Error" }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: invalid_game_account (gameAccountId is not a UUID).
+        "401":
+          $ref: "#/components/responses/Error"
+          description: authentication_required, invalid_access_token, invalid_session.
+        "404":
+          $ref: "#/components/responses/Error"
+          description: competition_not_found (unknown, or not open to players).
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable, session_check_unavailable, eligibility_policy_invalid, eligibility_unavailable.
   /v1/competitions/{id}/bracket:
     get:
       operationId: getCompetitionBracket
@@ -211,7 +219,9 @@ components:
             profile_incomplete means onboarding is unfinished (see Player.onboarding), including a pending display name.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
-            competition_cancelled (category registration) blocks every new entry once the competition is cancelled.
+            competition_cancelled (category registration) blocks every new entry once the competition is cancelled
+            and is listed before any other issue. registration_not_open means registration has not opened yet;
+            registration_closed means its deadline passed or the competition is in check-in, running or completed.
         category:
           type: string
           enum: [profile, registration, capacity, age, country, ranking, game_account, payment, conduct]

@@ -42,11 +42,8 @@ when a player chooses M-Pesa.
   `profile`, `gameAccount` and `complete`. Show the next unfinished step. Until
   `complete` is true, `GET /v1/competitions/{id}/eligibility` reports a blocking issue
   (`profile_incomplete` while the display name is pending) and free registration and
-  paid entry are refused with `409` for the same reason: `error` is
-  `profile_incomplete` on free registration, and paid entry answers
-  `competition_ineligible` with `issue.code` `profile_incomplete`. Route both to the
-  unfinished step. `409 onboarding_required` is the fallback when onboarding changed
-  after that check or `gameAccountId` is not one of the player's accounts.
+  paid entry are refused with `409 competition_ineligible` for the same reason
+  (`issue.code` `profile_incomplete`). Route it to the unfinished step.
 - A new account starts with a generated handle such as `Swift_Falcon_4821` and a
   private profile, so `onboarding.profile` is already true. That handle is also the
   display name until the player chooses one. While `onboarding.displayName` is false,
@@ -218,9 +215,11 @@ saved links still open, and matches that were still live read `state: cancelled`
 cancelled whenever its registration's `competitionStatus` is `cancelled`. New entries
 are refused: the eligibility preflight answers `200` with the blocking issue
 `competition_cancelled` (an entrant still gets `status: registered`), and free or paid
-registration returns `409 competition_cancelled`. Drafts, including a draft cancelled
-before it was published, and competitions of an inactive game or organizer return
-`404 competition_not_found` on the detail, bracket, eligibility and both entry paths.
+registration returns `409 competition_ineligible` whose `issue.code` is
+`competition_cancelled`, listed before any other issue. Drafts, including a draft
+cancelled before it was published, and competitions of an inactive game or organizer
+return `404 competition_not_found` on the detail, bracket, eligibility and both entry
+paths.
 
 For paid entry, call `POST /v1/payments/mpesa/stk-push` with an `Idempotency-Key`, then
 poll `GET /v1/payments/{id}` until `status` is `succeeded`, `failed` or `review`. Never
@@ -260,6 +259,40 @@ register the player or be refunded.
 - `GET /v1/me/refunds` lists refund state.
 - `POST /v1/competitions/{id}/registrations/me/withdrawal-requests` requests a paid
   withdrawal/refund.
+
+#### Entry errors
+
+Free registration and M-Pesa checkout report a blocked entry the same way:
+`409 competition_ineligible` with `message`, `issue` (the `code`, `category` and
+`message` the eligibility preflight uses, for example `conduct_suspended`,
+`registration_closed` or `competition_full`) and the full `eligibility` decision. Show
+`message`, switch on `issue.code`, and refresh the entry screen from `eligibility`. Never
+look for an eligibility reason in `error`.
+
+| `error` | Status | Returned by | What to do |
+|---|---|---|---|
+| `competition_ineligible` | 409 | free registration, STK push | Show `message`; handle `issue.code` as the preflight does |
+| `payment_required` | 409 | free registration | The competition is paid; start the M-Pesa flow (`nextAction`) |
+| `payment_in_progress` | 409 | STK push | Poll `GET /v1/payments/{paymentId}`; never start another charge |
+| `already_registered` | 409 | STK push | Show the registration from `GET /v1/me/registrations` |
+| `payment_not_available`, `unsupported_fee` | 409 | STK push | Paid entry is not possible for this competition; show `message` |
+| `idempotency_conflict` | 409 | free registration, STK push, paid withdrawal | The key was used for a different request; use a new key for a new intent |
+| `competition_not_found` | 404 | preflight, free registration, STK push | The competition is unknown or not open to players |
+| `payment_rate_limited` | 429 | STK push | Wait for `Retry-After` before another attempt |
+| `mpesa_request_failed` | 502 | STK push | Retry only with the same key, or poll the preflight's `paymentId` |
+| `payment_record_failed` | 503 | STK push | As for `mpesa_request_failed` |
+| `invalid_payment_id`, `payment_not_found` | 400, 404 | payment status | Stop polling that ID |
+| `refund_review_required` | 409 | free withdrawal | The entry is paid; use the withdrawal-request endpoint |
+| `withdrawal_closed` | 409 | free and paid withdrawal | Withdrawal is no longer possible |
+| `registration_not_found`, `paid_registration_not_found` | 404 | free and paid withdrawal | There is nothing to withdraw |
+| `refund_request_exists` | 409 | paid withdrawal | Show the refund from `GET /v1/me/refunds` |
+
+Any other `400` (`invalid_request`, `invalid_game_account`, `invalid_payment_request`,
+`invalid_phone`, `invalid_withdrawal`, `idempotency_key_required`,
+`invalid_idempotency_key`) is a client bug. The `503` codes (`database_unavailable`,
+`session_check_unavailable`, `eligibility_unavailable`, `eligibility_policy_invalid`,
+`mpesa_unavailable`) are service problems: show a retry state and retry later with the
+same key. OpenAPI lists the codes of every entry operation per status.
 
 ### 7. Match room, evidence, and result verification
 

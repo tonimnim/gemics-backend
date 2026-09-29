@@ -352,8 +352,9 @@ paths:
         retrying the same request. Poll GET /v1/payments/{id} until status is succeeded, failed or review, then read
         registrationStatus: a verified payment that completes after its place is gone reads succeeded with
         registrationStatus refund_pending and a mandatory refund.
-        A competition GET /v1/competitions/{id} does not return answers 404 competition_not_found. A cancelled
-        competition is refused with 409 competition_cancelled before any payment is created.
+        A competition GET /v1/competitions/{id} does not return answers 404 competition_not_found. A blocked entry,
+        a cancelled or closed competition included, is refused with 409 competition_ineligible before the fee is
+        judged and before any payment is created.
       security:
         - bearerAuth: []
       parameters:
@@ -399,16 +400,45 @@ paths:
                 $ref: '#/components/schemas/PaymentIntent'
         '400':
           $ref: '#/components/responses/Error'
+          description: >-
+            idempotency_key_required; invalid_request (malformed body or unknown field); invalid_payment_request
+            (competitionId or gameAccountId is not a UUID); invalid_phone (not a Kenyan Safaricom number).
         '401':
           $ref: '#/components/responses/Error'
-        '409':
+          description: authentication_required, invalid_access_token, invalid_session.
+        '404':
           $ref: '#/components/responses/Error'
+          description: competition_not_found (unknown, or not open to players).
+        '409':
+          description: >-
+            competition_ineligible (CompetitionIneligibleError: the blocking issue the eligibility preflight reports,
+            and competition_full when unfinished payments already hold the remaining places); payment_in_progress
+            (PaymentInProgressError: poll paymentId instead of paying again); already_registered (the player
+            already holds an entry); payment_not_available (the competition takes no administration fee);
+            unsupported_fee (M-Pesa cannot collect this fee); idempotency_conflict (the key was used for a
+            different request).
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/CompetitionIneligibleError'
+                  - $ref: '#/components/schemas/PaymentInProgressError'
+                  - $ref: '#/components/schemas/Error'
         '429':
           $ref: '#/components/responses/Error'
+          description: payment_rate_limited (too many prompts for this player, phone or network), with Retry-After.
         '502':
           $ref: '#/components/responses/Error'
+          description: >-
+            mpesa_request_failed: Daraja's answer was lost, so the prompt may have reached the phone and the payment
+            is held for review. Retry only with the same Idempotency-Key, which returns the payment, or poll the
+            paymentId of GET /v1/competitions/{id}/eligibility.
         '503':
           $ref: '#/components/responses/Error'
+          description: >-
+            database_unavailable, session_check_unavailable, mpesa_unavailable (M-Pesa is not configured),
+            eligibility_policy_invalid, eligibility_unavailable; payment_record_failed (the prompt started but its
+            checkout could not be saved; the payment is held for review, so retry only with the same key).
   /v1/payments/{id}:
     get:
       operationId: getPayment
@@ -432,12 +462,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaymentIntent'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_payment_id (not a UUID).
         '401':
           $ref: '#/components/responses/Error'
+          description: authentication_required, invalid_access_token, invalid_session.
         '404':
           $ref: '#/components/responses/Error'
+          description: payment_not_found (unknown, or another player's payment).
         '503':
           $ref: '#/components/responses/Error'
+          description: database_unavailable, session_check_unavailable.
   /v1/payments/mpesa/callback/{token}:
     post:
       operationId: receiveMPesaCallback
@@ -1245,7 +1281,8 @@ paths:
         - Registrations
       description: >-
         A competition GET /v1/competitions/{id} does not return answers 404 competition_not_found. A cancelled
-        competition is refused with 409 competition_cancelled before any other registration check.
+        competition is refused with 409 competition_ineligible whose issue.code is competition_cancelled, the first
+        issue of any entry to it.
       security:
         - bearerAuth: []
       parameters:
@@ -1276,6 +1313,17 @@ paths:
                   type: string
                   format: uuid
       responses:
+        '200':
+          description: The player already holds this registration; the existing entry is returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Registration'
         '201':
           description: Free registration created atomically.
           content:
@@ -1289,14 +1337,30 @@ paths:
                     $ref: '#/components/schemas/Registration'
         '400':
           $ref: '#/components/responses/Error'
+          description: >-
+            idempotency_key_required; invalid_request (malformed body or unknown field); invalid_game_account
+            (gameAccountId is not a UUID).
         '401':
           $ref: '#/components/responses/Error'
+          description: authentication_required, invalid_access_token, invalid_session.
         '404':
           $ref: '#/components/responses/Error'
+          description: competition_not_found (unknown, or not open to players).
         '409':
-          $ref: '#/components/responses/Error'
+          description: >-
+            competition_ineligible (CompetitionIneligibleError: the blocking issue the eligibility preflight reports,
+            the same body M-Pesa checkout returns); payment_required (PaymentRequiredError: the competition is paid,
+            use POST /v1/payments/mpesa/stk-push); idempotency_conflict (the key was used for a different request).
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/CompetitionIneligibleError'
+                  - $ref: '#/components/schemas/PaymentRequiredError'
+                  - $ref: '#/components/schemas/Error'
         '503':
           $ref: '#/components/responses/Error'
+          description: database_unavailable, session_check_unavailable, eligibility_policy_invalid, eligibility_unavailable.
   /v1/me/registrations:
     get:
       operationId: listMyRegistrations
@@ -1347,12 +1411,18 @@ paths:
           description: Free registration withdrawn.
         '401':
           $ref: '#/components/responses/Error'
+          description: authentication_required, invalid_access_token, invalid_session.
         '404':
           $ref: '#/components/responses/Error'
+          description: registration_not_found (the caller has no entry, or the id is malformed).
         '409':
           $ref: '#/components/responses/Error'
+          description: >-
+            refund_review_required (a paid entry; use POST /v1/competitions/{id}/registrations/me/withdrawal-requests);
+            withdrawal_closed (the entry is checked in or removed, or registration has closed).
         '503':
           $ref: '#/components/responses/Error'
+          description: database_unavailable, session_check_unavailable.
   /v1/organizations:
     post:
       operationId: createOrganization
@@ -2809,14 +2879,26 @@ paths:
                 $ref: '#/components/schemas/RefundResponse'
         '400':
           $ref: '#/components/responses/Error'
+          description: >-
+            idempotency_key_required, invalid_idempotency_key; invalid_request (malformed body or unknown field);
+            invalid_withdrawal (reasonCode is not player_withdrawal, or note exceeds 500 characters).
         '401':
           $ref: '#/components/responses/Error'
+          description: authentication_required, invalid_access_token, invalid_session.
         '404':
           $ref: '#/components/responses/Error'
+          description: >-
+            registration_not_found (malformed competition id); paid_registration_not_found (the caller has no paid
+            entry in this competition).
         '409':
           $ref: '#/components/responses/Error'
+          description: >-
+            idempotency_conflict; withdrawal_closed (the entry is withdrawn or removed, or registration has closed
+            and the competition is not cancelled); refund_request_exists (a refund for this payment is already under
+            way).
         '503':
           $ref: '#/components/responses/Error'
+          description: database_unavailable, session_check_unavailable.
   /v1/admin/refunds:
     get:
       operationId: listRefundQueue
@@ -3429,12 +3511,16 @@ paths:
                 $ref: '#/components/schemas/CompetitionEligibilityResponse'
         '400':
           $ref: '#/components/responses/Error'
+          description: invalid_game_account (gameAccountId is not a UUID).
         '401':
           $ref: '#/components/responses/Error'
+          description: authentication_required, invalid_access_token, invalid_session.
         '404':
           $ref: '#/components/responses/Error'
+          description: competition_not_found (unknown, or not open to players).
         '503':
           $ref: '#/components/responses/Error'
+          description: database_unavailable, session_check_unavailable, eligibility_policy_invalid, eligibility_unavailable.
   /v1/admin/payment-reviews:
     get:
       operationId: listPaymentReviews
@@ -4416,6 +4502,72 @@ components:
           type: string
         message:
           type: string
+    CompetitionIneligibleError:
+      type: object
+      description: >-
+        409 competition_ineligible, the one body free registration and M-Pesa checkout use for a blocked entry.
+        issue is the blocking issue, with the code, category and message the eligibility preflight uses (for
+        example conduct_suspended, registration_closed or competition_full); eligibility is the decision taken in
+        the write transaction. Switch on issue.code and show message.
+      required:
+        - error
+        - message
+        - issue
+        - eligibility
+      properties:
+        error:
+          type: string
+          const: competition_ineligible
+        message:
+          type: string
+          description: The blocking issue's message, ready to show.
+        issue:
+          $ref: '#/components/schemas/CompetitionEligibilityIssue'
+        eligibility:
+          $ref: '#/components/schemas/CompetitionEligibility'
+    PaymentInProgressError:
+      type: object
+      description: >-
+        409 payment_in_progress: the player already has an unfinished or successful payment for this competition.
+        Poll GET /v1/payments/{paymentId} instead of starting another payment.
+      required:
+        - error
+        - message
+        - paymentId
+        - paymentStatus
+      properties:
+        error:
+          type: string
+          const: payment_in_progress
+        message:
+          type: string
+        paymentId:
+          type: string
+          format: uuid
+        paymentStatus:
+          type: string
+          enum:
+            - initiating
+            - pending
+            - callback_received
+            - review
+            - succeeded
+    PaymentRequiredError:
+      type: object
+      description: 409 payment_required from free registration of a paid competition.
+      required:
+        - error
+        - message
+        - nextAction
+      properties:
+        error:
+          type: string
+          const: payment_required
+        message:
+          type: string
+        nextAction:
+          type: string
+          const: POST /v1/payments/mpesa/stk-push
     Game:
       type: object
       required:
@@ -4527,9 +4679,7 @@ components:
               description: >-
                 All four steps are done. Until it is true, GET /v1/competitions/{id}/eligibility reports a blocking
                 issue (profile_incomplete while the display name is pending) and free registration and paid entry are
-                refused with 409 for the same reason: error profile_incomplete on free registration, issue.code
-                profile_incomplete of competition_ineligible on paid entry. onboarding_required is the fallback when
-                onboarding changed after that check or gameAccountId is not one of the player's accounts.
+                refused with 409 competition_ineligible for the same reason, issue.code profile_incomplete.
     ProfileInput:
       type: object
       required:
@@ -7089,7 +7239,9 @@ components:
             profile_incomplete means onboarding is unfinished (see Player.onboarding), including a pending display name.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
-            competition_cancelled (category registration) blocks every new entry once the competition is cancelled.
+            competition_cancelled (category registration) blocks every new entry once the competition is cancelled
+            and is listed before any other issue. registration_not_open means registration has not opened yet;
+            registration_closed means its deadline passed or the competition is in check-in, running or completed.
         category:
           type: string
           enum:

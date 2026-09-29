@@ -28,7 +28,9 @@ Build these player journeys:
    new Idempotency-Key once, start STK Push, then poll the returned payment ID until
    it is `succeeded`, `failed` or `review`. Reuse the same key after network retries.
    A `succeeded` payment is a registration only when its `registrationStatus` is
-   `registered`; `refund_pending` means the money is being returned.
+   `registered`; `refund_pending` means the money is being returned. Free and paid
+   entry both refuse a blocked player with `409 competition_ineligible`: show its
+   `message` and switch on `issue.code`, as for the eligibility preflight.
 5. Receive match reminders, check in, view opponent and Friend Match instructions.
 6. Report the score blind (score and declaration only, no screenshot) without ever
    seeing what the opponent reported.

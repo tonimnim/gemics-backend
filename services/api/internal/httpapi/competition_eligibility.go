@@ -276,6 +276,11 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 		}
 		return result
 	}
+	// Nothing makes a cancelled competition enterable, so its cancellation is
+	// the first issue a refused entry reports.
+	if facts.Status == "cancelled" {
+		blocking("competition_cancelled", "registration", "This competition has been cancelled.")
+	}
 	if facts.conductSuspended() {
 		blocking("conduct_suspended", "conduct", "Your account has too many active conduct strikes to register for new competitions. Contact Gamics support.")
 	}
@@ -285,12 +290,13 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 	if facts.EntryStatus != nil && (*facts.EntryStatus == "withdrawn" || *facts.EntryStatus == "disqualified") {
 		blocking("registration_not_reusable", "registration", "This player cannot create another entry for this competition.")
 	}
-	if facts.Status == "cancelled" {
-		blocking("competition_cancelled", "registration", "This competition has been cancelled.")
-	} else if facts.Status != "registration_open" || now.Before(facts.RegistrationOpensAt) {
-		blocking("registration_not_open", "registration", "Registration is not open yet.")
-	} else if !now.Before(facts.RegistrationClosesAt) {
+	switch {
+	case facts.Status == "cancelled":
+		// Reported first, above.
+	case competitionRegistrationEnded(facts.Status) || !now.Before(facts.RegistrationClosesAt):
 		blocking("registration_closed", "registration", "Registration has closed.")
+	case facts.Status != "registration_open" || now.Before(facts.RegistrationOpensAt):
+		blocking("registration_not_open", "registration", "Registration is not open yet.")
 	}
 	if facts.OccupiedEntries >= facts.MaxEntries {
 		blocking("competition_full", "capacity", "This competition has no available entries.")
@@ -386,6 +392,12 @@ func eligibilityString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// competitionRegistrationEnded reports whether a competition has moved past
+// registration: check-in, play and completion all come after it.
+func competitionRegistrationEnded(status string) bool {
+	return status == "check_in" || status == "running" || status == "completed"
 }
 
 // paymentUnfinished reports whether a payment has yet to settle, so the app

@@ -63,7 +63,8 @@ paths:
       tags: [Registrations]
       description: >-
         A competition GET /v1/competitions/{id} does not return answers 404 competition_not_found. A cancelled
-        competition is refused with 409 competition_cancelled before any other registration check.
+        competition is refused with 409 competition_ineligible whose issue.code is competition_cancelled, the first
+        issue of any entry to it.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -72,14 +73,38 @@ paths:
         required: true
         content: { application/json: { schema: { type: object, additionalProperties: false, required: [gameAccountId], properties: { gameAccountId: { type: string, format: uuid } } } } }
       responses:
+        "200":
+          description: The player already holds this registration; the existing entry is returned.
+          content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Registration" } } } } }
         "201":
           description: Free registration created atomically.
           content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Registration" } } } } }
-        "400": { $ref: "#/components/responses/Error" }
-        "401": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
-        "503": { $ref: "#/components/responses/Error" }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: >-
+            idempotency_key_required; invalid_request (malformed body or unknown field); invalid_game_account
+            (gameAccountId is not a UUID).
+        "401":
+          $ref: "#/components/responses/Error"
+          description: authentication_required, invalid_access_token, invalid_session.
+        "404":
+          $ref: "#/components/responses/Error"
+          description: competition_not_found (unknown, or not open to players).
+        "409":
+          description: >-
+            competition_ineligible (CompetitionIneligibleError: the blocking issue the eligibility preflight reports,
+            the same body M-Pesa checkout returns); payment_required (PaymentRequiredError: the competition is paid,
+            use POST /v1/payments/mpesa/stk-push); idempotency_conflict (the key was used for a different request).
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/CompetitionIneligibleError" }
+                  - { $ref: "#/components/schemas/PaymentRequiredError" }
+                  - { $ref: "#/components/schemas/Error" }
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable, session_check_unavailable, eligibility_policy_invalid, eligibility_unavailable.
   /v1/me/registrations:
     get:
       operationId: listMyRegistrations
@@ -103,10 +128,20 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "204": { description: Free registration withdrawn. }
-        "401": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
-        "503": { $ref: "#/components/responses/Error" }
+        "401":
+          $ref: "#/components/responses/Error"
+          description: authentication_required, invalid_access_token, invalid_session.
+        "404":
+          $ref: "#/components/responses/Error"
+          description: registration_not_found (the caller has no entry, or the id is malformed).
+        "409":
+          $ref: "#/components/responses/Error"
+          description: >-
+            refund_review_required (a paid entry; use POST /v1/competitions/{id}/registrations/me/withdrawal-requests);
+            withdrawal_closed (the entry is checked in or removed, or registration has closed).
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable, session_check_unavailable.
 components:
   schemas:
     Competition:
@@ -183,6 +218,27 @@ components:
       properties:
         data: { type: array, items: { $ref: "#/components/schemas/Registration" } }
         page: { $ref: "#/components/schemas/CursorPage" }
+    CompetitionIneligibleError:
+      type: object
+      description: >-
+        409 competition_ineligible, the one body free registration and M-Pesa checkout use for a blocked entry.
+        issue is the blocking issue, with the code, category and message the eligibility preflight uses (for
+        example conduct_suspended, registration_closed or competition_full); eligibility is the decision taken in
+        the write transaction. Switch on issue.code and show message.
+      required: [error, message, issue, eligibility]
+      properties:
+        error: { type: string, const: competition_ineligible }
+        message: { type: string, description: "The blocking issue's message, ready to show." }
+        issue: { $ref: "#/components/schemas/CompetitionEligibilityIssue" }
+        eligibility: { $ref: "#/components/schemas/CompetitionEligibility" }
+    PaymentRequiredError:
+      type: object
+      description: 409 payment_required from free registration of a paid competition.
+      required: [error, message, nextAction]
+      properties:
+        error: { type: string, const: payment_required }
+        message: { type: string }
+        nextAction: { type: string, const: POST /v1/payments/mpesa/stk-push }
     BracketResponse:
       type: object
       required: [data]

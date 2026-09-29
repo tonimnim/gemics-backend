@@ -49,8 +49,9 @@ func TestReadableCompetitionSQLExtendsDiscoveryWithPublishedCancellations(t *tes
 }
 
 // Detail, bracket and eligibility share the readable rule while the list keeps
-// the discovery statuses, and the paid and free entry answer 404 for what the
-// detail hides and refuse a cancelled competition before any other check.
+// the discovery statuses. Free and paid entry answer 404 for what the detail
+// hides and refuse a cancelled competition through the eligibility decision,
+// whose first issue is the cancellation.
 func TestCompetitionReadsShareTheVisibilityRule(t *testing.T) {
 	for _, read := range []struct{ path, declaration string }{
 		{"competition_handlers.go", "func (s *Server) loadCompetitionDetail("},
@@ -69,14 +70,23 @@ func TestCompetitionReadsShareTheVisibilityRule(t *testing.T) {
 	if !strings.Contains(list, "statuses := publicCompetitionStatuses") || strings.Contains(list, "readableCompetitionSQL") {
 		t.Error("the discovery list must keep excluding cancelled competitions")
 	}
-	for _, entry := range []struct{ path, declaration, next string }{
-		{"competition_handlers.go", "func (s *Server) createFreeRegistration(", `"registration_closed"`},
-		{"payment_handlers.go", "func (s *Server) initiateMPesa(", `"payment_not_available"`},
+	notFound := `writeError(w, http.StatusNotFound, "competition_not_found"`
+	for _, entry := range []struct {
+		path, declaration string
+		fragments         []string
+	}{
+		{"competition_handlers.go", "func (s *Server) createFreeRegistration(", []string{"FOR UPDATE",
+			"loadCompetitionEligibility(", "errors.Is(eligibilityErr, pgx.ErrNoRows)", notFound,
+			"writeCompetitionIneligible(w, eligibility, *issue)"}},
+		{"payment_handlers.go", "func (s *Server) initiateMPesa(", []string{"FOR UPDATE",
+			"loadCompetitionEligibility(", "errors.Is(eligibilityErr, pgx.ErrNoRows)", notFound,
+			"writeCompetitionIneligible(w, eligibility, *issue)", `"payment_not_available"`}},
 	} {
-		assertOrder(t, entry.declaration, resultReportsFunctionSource(t, entry.path, entry.declaration),
-			"FOR UPDATE", "competitionIsReadable(r.Context(), tx, ", `writeError(w, http.StatusNotFound, "competition_not_found"`,
-			`if competitionStatus == "cancelled" {`, `"competition_cancelled"`, entry.next,
-			"loadCompetitionEligibility(")
+		source := resultReportsFunctionSource(t, entry.path, entry.declaration)
+		assertOrder(t, entry.declaration, source, entry.fragments...)
+		if strings.Contains(source, `"competition_cancelled"`) {
+			t.Errorf("%s refuses a cancellation itself instead of through the eligibility issue", entry.declaration)
+		}
 	}
 }
 
@@ -88,6 +98,8 @@ func TestCompetitionEligibilityReportsCancellation(t *testing.T) {
 		facts.Status, facts.EntryStatus = "cancelled", entryStatus
 		return facts
 	}
+	unfinished := cancelled(nil)
+	unfinished.ProfileComplete, unfinished.ActiveStrikes = false, 3
 	tests := []struct {
 		name       string
 		facts      competitionEligibilityFacts
@@ -97,8 +109,10 @@ func TestCompetitionEligibilityReportsCancellation(t *testing.T) {
 	}{
 		{"a new player is blocked by the cancellation", cancelled(nil),
 			eligibilityStatusIneligible, "none", []string{"competition_cancelled"}},
-		{"a withdrawn player is blocked by both rules", cancelled(&withdrawn),
-			eligibilityStatusIneligible, "none", []string{"registration_not_reusable", "competition_cancelled"}},
+		{"a withdrawn player is blocked by both rules, the cancellation first", cancelled(&withdrawn),
+			eligibilityStatusIneligible, "none", []string{"competition_cancelled", "registration_not_reusable"}},
+		{"the cancellation comes before the player's own issues", unfinished, eligibilityStatusIneligible, "none",
+			[]string{"competition_cancelled", "conduct_suspended", "profile_incomplete"}},
 		{"a registered player still sees the registration", cancelled(&registered),
 			eligibilityStatusRegistered, "view_registration", []string{}},
 		{"a paid entrant still sees the refund", cancelled(&pendingRefund),

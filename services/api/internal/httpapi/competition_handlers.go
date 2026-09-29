@@ -406,12 +406,11 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 	var competitionName, competitionSlug, gameName string
 	var feeMinor int64
 	var maxEntries int
-	var opensAt, closesAt, startsAt time.Time
-	err = tx.QueryRow(r.Context(), `SELECT status,game_id,entry_fee_minor,currency,max_entries,
-		registration_opens_at,registration_closes_at,organization_id,name,slug,starts_at,
-		(SELECT name FROM games WHERE id=competitions.game_id) FROM competitions WHERE id=$1 FOR UPDATE`, competitionID).
-		Scan(&competitionStatus, &competitionGameID, &feeMinor, &currency, &maxEntries, &opensAt, &closesAt,
-			&organizationID, &competitionName, &competitionSlug, &startsAt, &gameName)
+	var startsAt time.Time
+	err = tx.QueryRow(r.Context(), `SELECT status,game_id,entry_fee_minor,currency,max_entries,organization_id,name,slug,
+		starts_at,(SELECT name FROM games WHERE id=competitions.game_id) FROM competitions WHERE id=$1 FOR UPDATE`, competitionID).
+		Scan(&competitionStatus, &competitionGameID, &feeMinor, &currency, &maxEntries, &organizationID, &competitionName,
+			&competitionSlug, &startsAt, &gameName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "competition_not_found", "Competition not found.")
 		return
@@ -420,40 +419,21 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the competition.")
 		return
 	}
-	// Entry resolves the competitions the detail returns; a draft, even a
-	// cancelled one, is not found rather than refused.
-	readable, err := competitionIsReadable(r.Context(), tx, competitionID)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the competition.")
-		return
-	}
-	if !readable {
-		writeError(w, http.StatusNotFound, "competition_not_found", "Competition not found.")
-		return
-	}
-	if competitionStatus == "cancelled" {
-		writeError(w, http.StatusConflict, "competition_cancelled", "This competition has been cancelled.")
-		return
-	}
 	now := time.Now().UTC()
-	if competitionStatus != "registration_open" || now.Before(opensAt) || !now.Before(closesAt) {
-		writeError(w, http.StatusConflict, "registration_closed", "This competition is not accepting registrations.")
-		return
-	}
-	if feeMinor > 0 {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "payment_required", "message": "Start M-Pesa payment to register for this competition.",
-			"nextAction": "POST /v1/payments/mpesa/stk-push",
-		})
-		return
-	}
 	// Run the same typed policy used by the player preflight while the
 	// competition row is locked. The capacity check below remains authoritative
 	// for the final insert, but age/country/ranking/account restrictions must not
-	// be a client-only promise.
+	// be a client-only promise. Visibility, cancellation, registration status
+	// and deadlines are part of the policy, so a hidden competition is not
+	// found and a blocked entry is reported exactly as M-Pesa checkout reports
+	// it.
 	eligibility, eligibilityErr := loadCompetitionEligibility(
 		r.Context(), tx, competitionID, userID, input.GameAccountID, now, s.config.StrikeBanThreshold,
 	)
+	if errors.Is(eligibilityErr, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "competition_not_found", "Competition not found.")
+		return
+	}
 	if errors.Is(eligibilityErr, errInvalidEligibilityPolicy) {
 		writeError(w, http.StatusServiceUnavailable, "eligibility_policy_invalid", "This competition's eligibility policy is unavailable.")
 		return
@@ -463,7 +443,14 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if issue := eligibility.firstBlockingIssue(); issue != nil {
-		writeError(w, http.StatusConflict, issue.Code, issue.Message)
+		writeCompetitionIneligible(w, eligibility, *issue)
+		return
+	}
+	if feeMinor > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "payment_required", "message": "Start M-Pesa payment to register for this competition.",
+			"nextAction": "POST /v1/payments/mpesa/stk-push",
+		})
 		return
 	}
 
@@ -476,16 +463,20 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 		LEFT JOIN player_profiles profile ON profile.user_id=player.id
 		WHERE player.id=$1 AND player.status='active'`, userID, input.GameAccountID).
 		Scan(&accountGameID, &displayName, &onboardingComplete)
-	if errors.Is(err, pgx.ErrNoRows) || !onboardingComplete {
-		writeError(w, http.StatusConflict, "onboarding_required", "Complete your profile, choose a display name and connect the correct game account before registering.")
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeBlockedEntry(w, eligibility, entryIssueGameAccountRequired)
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify the player account.")
 		return
 	}
+	if !onboardingComplete {
+		writeBlockedEntry(w, eligibility, entryIssueProfileIncomplete)
+		return
+	}
 	if accountGameID != competitionGameID {
-		writeError(w, http.StatusConflict, "wrong_game_account", "Choose a game account for this competition's game.")
+		writeBlockedEntry(w, eligibility, entryIssueGameAccountMismatch)
 		return
 	}
 
@@ -503,7 +494,7 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 			&existing.StartsAt, &existing.CreatedAt)
 	if err == nil {
 		if existing.Status == "withdrawn" || existing.Status == "disqualified" {
-			writeError(w, http.StatusConflict, "registration_closed_for_player", "A previous registration exists. Contact the organizer before registering again.")
+			writeBlockedEntry(w, eligibility, entryIssueRegistrationNotReusable)
 			return
 		}
 		body, _ := json.Marshal(map[string]any{"data": existing})
@@ -525,13 +516,12 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var occupied int
-	if err = tx.QueryRow(r.Context(), `SELECT count(*) FROM competition_entries WHERE competition_id=$1
-		AND status NOT IN ('withdrawn','disqualified')`, competitionID).Scan(&occupied); err != nil {
+	if err = tx.QueryRow(r.Context(), competitionCapacityEntriesSQL, competitionID).Scan(&occupied); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify capacity.")
 		return
 	}
 	if occupied >= maxEntries {
-		writeError(w, http.StatusConflict, "competition_full", "This competition is full.")
+		writeBlockedEntry(w, eligibility, entryIssueCompetitionFull)
 		return
 	}
 
@@ -915,7 +905,7 @@ func readPublicCompetition[T any](ctx context.Context, s *Server, query func(*pg
 }
 
 // competitionIsReadable applies readableCompetitionSQL, so every public read
-// below the detail, and entry, resolve the same competitions as the detail.
+// below the detail resolves the same competitions as the detail itself.
 func competitionIsReadable(ctx context.Context, queryer eligibilityQueryer, id string) (bool, error) {
 	var readable bool
 	err := queryer.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM competitions competition

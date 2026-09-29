@@ -117,12 +117,11 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var amountMinor int64
-	var currency, competitionStatus, feePurpose, competitionGameID string
+	var currency, feePurpose, competitionGameID string
 	var maxEntries int
-	var registrationOpens, registrationCloses time.Time
-	err = tx.QueryRow(r.Context(), `SELECT entry_fee_minor,currency,status,fee_purpose,game_id,max_entries,
-		registration_opens_at,registration_closes_at FROM competitions WHERE id=$1 FOR UPDATE`, input.CompetitionID).
-		Scan(&amountMinor, &currency, &competitionStatus, &feePurpose, &competitionGameID, &maxEntries, &registrationOpens, &registrationCloses)
+	err = tx.QueryRow(r.Context(), `SELECT entry_fee_minor,currency,fee_purpose,game_id,max_entries
+		FROM competitions WHERE id=$1 FOR UPDATE`, input.CompetitionID).
+		Scan(&amountMinor, &currency, &feePurpose, &competitionGameID, &maxEntries)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "competition_not_found", "Competition not found.")
 		return
@@ -131,71 +130,9 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the competition fee.")
 		return
 	}
-	// Entry resolves the competitions the detail returns; a draft, even a
-	// cancelled one, is not found rather than refused.
-	readable, err := competitionIsReadable(r.Context(), tx, input.CompetitionID)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the competition fee.")
-		return
-	}
-	if !readable {
-		writeError(w, http.StatusNotFound, "competition_not_found", "Competition not found.")
-		return
-	}
-	if competitionStatus == "cancelled" {
-		writeError(w, http.StatusConflict, "competition_cancelled", "This competition has been cancelled.")
-		return
-	}
-	now := time.Now()
-	if competitionStatus != "registration_open" || now.Before(registrationOpens) || !now.Before(registrationCloses) || amountMinor <= 0 || feePurpose != "administration" {
-		writeError(w, http.StatusConflict, "payment_not_available", "This competition is not accepting paid registrations.")
-		return
-	}
-	if currency != "KES" || amountMinor%100 != 0 || amountMinor > s.config.MPesaMaxAmountMinor {
-		writeError(w, http.StatusConflict, "unsupported_fee", "This competition fee cannot be collected through M-Pesa.")
-		return
-	}
-	eligibility, eligibilityErr := loadCompetitionEligibility(r.Context(), tx, input.CompetitionID, userID,
-		input.GameAccountID, now.UTC(), s.config.StrikeBanThreshold)
-	if errors.Is(eligibilityErr, errInvalidEligibilityPolicy) {
-		s.logger.Error("invalid competition eligibility policy", "competition_id", input.CompetitionID, "error", eligibilityErr)
-		writeError(w, http.StatusServiceUnavailable, "eligibility_policy_invalid", "This competition's eligibility policy is unavailable.")
-		return
-	}
-	if eligibilityErr != nil {
-		writeError(w, http.StatusServiceUnavailable, "eligibility_unavailable", "Eligibility cannot be evaluated right now.")
-		return
-	}
-	if issue := eligibility.firstBlockingIssue(); issue != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "competition_ineligible", "message": issue.Message, "issue": issue, "eligibility": eligibility,
-		})
-		return
-	}
 
-	var accountGameID, entryDisplayName string
-	var onboardingComplete bool
-	err = tx.QueryRow(r.Context(), `SELECT account.game_id,COALESCE(profile.handle,account.in_game_name),
-		(player.birth_date IS NOT NULL AND player.terms_accepted_at IS NOT NULL
-		 AND player.privacy_accepted_at IS NOT NULL AND profile.user_id IS NOT NULL AND player.display_name_set_at IS NOT NULL)
-		FROM users player
-		JOIN game_accounts account ON account.id=$2 AND account.user_id=player.id
-		LEFT JOIN player_profiles profile ON profile.user_id=player.id
-		WHERE player.id=$1 AND player.status='active'`, userID, input.GameAccountID).
-		Scan(&accountGameID, &entryDisplayName, &onboardingComplete)
-	if errors.Is(err, pgx.ErrNoRows) || !onboardingComplete {
-		writeError(w, http.StatusConflict, "onboarding_required", "Complete your profile, choose a display name and connect the correct game account before paying.")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify the player account.")
-		return
-	}
-	if accountGameID != competitionGameID {
-		writeError(w, http.StatusConflict, "wrong_game_account", "Choose a game account for this competition's game.")
-		return
-	}
-
+	// A retry with the same key replays the stored payment before anything
+	// that may have changed since, as free registration does.
 	requestHashBytes := sha256.Sum256([]byte(strings.Join([]string{
 		userID, input.CompetitionID, input.GameAccountID, phone, strconv.FormatInt(amountMinor, 10),
 	}, "|")))
@@ -225,6 +162,67 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Visibility, cancellation, registration status and deadlines are part of
+	// the eligibility decision, so a hidden competition is not found and a
+	// blocked entry is reported exactly as free registration reports it.
+	now := time.Now()
+	eligibility, eligibilityErr := loadCompetitionEligibility(r.Context(), tx, input.CompetitionID, userID,
+		input.GameAccountID, now.UTC(), s.config.StrikeBanThreshold)
+	if errors.Is(eligibilityErr, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "competition_not_found", "Competition not found.")
+		return
+	}
+	if errors.Is(eligibilityErr, errInvalidEligibilityPolicy) {
+		s.logger.Error("invalid competition eligibility policy", "competition_id", input.CompetitionID, "error", eligibilityErr)
+		writeError(w, http.StatusServiceUnavailable, "eligibility_policy_invalid", "This competition's eligibility policy is unavailable.")
+		return
+	}
+	if eligibilityErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "eligibility_unavailable", "Eligibility cannot be evaluated right now.")
+		return
+	}
+	if issue := eligibility.firstBlockingIssue(); issue != nil {
+		writeCompetitionIneligible(w, eligibility, *issue)
+		return
+	}
+	// Only a competition without an administration fee, or one M-Pesa cannot
+	// collect, is refused here.
+	if amountMinor <= 0 || feePurpose != "administration" {
+		writeError(w, http.StatusConflict, "payment_not_available", "This competition is not accepting paid registrations.")
+		return
+	}
+	if currency != "KES" || amountMinor%100 != 0 || amountMinor > s.config.MPesaMaxAmountMinor {
+		writeError(w, http.StatusConflict, "unsupported_fee", "This competition fee cannot be collected through M-Pesa.")
+		return
+	}
+
+	var accountGameID, entryDisplayName string
+	var onboardingComplete bool
+	err = tx.QueryRow(r.Context(), `SELECT account.game_id,COALESCE(profile.handle,account.in_game_name),
+		(player.birth_date IS NOT NULL AND player.terms_accepted_at IS NOT NULL
+		 AND player.privacy_accepted_at IS NOT NULL AND profile.user_id IS NOT NULL AND player.display_name_set_at IS NOT NULL)
+		FROM users player
+		JOIN game_accounts account ON account.id=$2 AND account.user_id=player.id
+		LEFT JOIN player_profiles profile ON profile.user_id=player.id
+		WHERE player.id=$1 AND player.status='active'`, userID, input.GameAccountID).
+		Scan(&accountGameID, &entryDisplayName, &onboardingComplete)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeBlockedEntry(w, eligibility, entryIssueGameAccountRequired)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify the player account.")
+		return
+	}
+	if !onboardingComplete {
+		writeBlockedEntry(w, eligibility, entryIssueProfileIncomplete)
+		return
+	}
+	if accountGameID != competitionGameID {
+		writeBlockedEntry(w, eligibility, entryIssueGameAccountMismatch)
+		return
+	}
+
 	var existingEntryStatus string
 	err = tx.QueryRow(r.Context(), `SELECT status FROM competition_entries
 		WHERE competition_id=$1 AND captain_user_id=$2`, input.CompetitionID, userID).Scan(&existingEntryStatus)
@@ -234,25 +232,19 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil {
 		if existingEntryStatus == "withdrawn" || existingEntryStatus == "disqualified" {
-			writeError(w, http.StatusConflict, "registration_closed_for_player", "A previous registration exists. Contact the organizer before attempting another payment.")
+			writeBlockedEntry(w, eligibility, entryIssueRegistrationNotReusable)
 		} else {
 			writeError(w, http.StatusConflict, "already_registered", "You are already registered for this competition.")
 		}
 		return
 	}
-	var activePaymentID, activePaymentStatus string
-	err = tx.QueryRow(r.Context(), `SELECT id,status FROM payment_intents WHERE user_id=$1 AND competition_id=$2
-		AND status IN ('initiating','pending','callback_received','review','succeeded') LIMIT 1`, userID, input.CompetitionID).
-		Scan(&activePaymentID, &activePaymentStatus)
+	activePaymentID, activePaymentStatus, err := loadActiveCompetitionPayment(r.Context(), tx, userID, input.CompetitionID)
 	if err == nil {
 		if commitErr := tx.Commit(r.Context()); commitErr != nil {
 			writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the payment request.")
 			return
 		}
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "payment_in_progress", "message": "A payment already exists for this competition.",
-			"paymentId": activePaymentID, "paymentStatus": activePaymentStatus,
-		})
+		writePaymentInProgress(w, activePaymentID, activePaymentStatus)
 		return
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -265,7 +257,8 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if occupied >= maxEntries {
-		writeError(w, http.StatusConflict, "competition_full", "This competition is full.")
+		// Unfinished payments hold places the preflight does not count.
+		writeBlockedEntry(w, eligibility, entryIssueCompetitionFull)
 		return
 	}
 
@@ -276,7 +269,9 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 		ON CONFLICT DO NOTHING RETURNING id`, userID, input.CompetitionID, input.GameAccountID, entryDisplayName,
 		amountMinor, currency, phone, requestIP, idempotencyKey, requestHash).Scan(&intentID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusConflict, "payment_in_progress", "A payment already exists for this competition.")
+		// The payer's advisory lock makes a conflict unreachable; one is still
+		// reported with the payment that holds the place.
+		writePaymentConflict(r.Context(), w, tx, userID, input.CompetitionID)
 		return
 	}
 	if err != nil || tx.Commit(r.Context()) != nil {
@@ -320,6 +315,28 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, intent)
+}
+
+// loadActiveCompetitionPayment returns the payer's unfinished or successful
+// payment for the competition; a partial unique index allows only one.
+func loadActiveCompetitionPayment(ctx context.Context, tx pgx.Tx, userID, competitionID string) (string, string, error) {
+	var paymentID, status string
+	err := tx.QueryRow(ctx, `SELECT id,status FROM payment_intents WHERE user_id=$1 AND competition_id=$2
+		AND status IN ('initiating','pending','callback_received','review','succeeded') LIMIT 1`, userID, competitionID).
+		Scan(&paymentID, &status)
+	return paymentID, status, err
+}
+
+func writePaymentConflict(ctx context.Context, w http.ResponseWriter, tx pgx.Tx, userID, competitionID string) {
+	paymentID, status, err := loadActiveCompetitionPayment(ctx, tx, userID, competitionID)
+	switch {
+	case err == nil:
+		writePaymentInProgress(w, paymentID, status)
+	case errors.Is(err, pgx.ErrNoRows):
+		writeError(w, http.StatusConflict, "idempotency_conflict", "That Idempotency-Key was used for another payment request.")
+	default:
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify the payment request.")
+	}
 }
 
 func (s *Server) getPayment(w http.ResponseWriter, r *http.Request) {

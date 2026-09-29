@@ -141,7 +141,8 @@ competition are refused with `409 competition_closed`.
 A competition cancelled after it was published stays readable to players: its
 detail and bracket return `status: cancelled`, although it leaves the discovery
 list. Free entries stay `registered` and `GET /v1/me/registrations` reports
-`competitionStatus: cancelled`; new entries are refused with `competition_cancelled`.
+`competitionStatus: cancelled`; new entries are refused with the eligibility issue
+`competition_cancelled`.
 A draft cancelled before publication was never public and stays `404`.
 
 ## The Gamics review queue
@@ -192,8 +193,9 @@ in, captains in or organizes, since a strike carries the decider's note. For
 the same reason an admin can never revoke such a strike
 (`403 result_review_conflict`). A player with
 `RESULT_STRIKE_BAN_THRESHOLD` active strikes (3 by default, 0 disables the ban)
-cannot register for new competitions: the eligibility check, free registration
-and M-Pesa checkout report the blocking issue `conduct_suspended`. An M-Pesa
+cannot register for new competitions: the eligibility check reports the
+blocking issue `conduct_suspended`, and free registration and M-Pesa checkout
+both answer `409 competition_ineligible` with `issue.code` `conduct_suspended`. An M-Pesa
 payment that completes after the player reached the limit creates a
 `withdrawal_pending` entry that never plays, together with a mandatory full
 refund (the payment reads `succeeded` with `registrationStatus`

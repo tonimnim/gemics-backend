@@ -46,7 +46,11 @@ documentation.
 1. The signed-in, fully onboarded player chooses a competition, their matching game
    account and a Safaricom number.
 2. The app creates one random `Idempotency-Key` and calls
-   `POST /v1/payments/mpesa/stk-push`. Network retries reuse that same key.
+   `POST /v1/payments/mpesa/stk-push`. Network retries reuse that same key, and a retry
+   with it always returns the stored payment. An ineligible player gets
+   `409 competition_ineligible` with the blocking `issue`, the same body free
+   registration returns; a second attempt while a payment is open gets
+   `409 payment_in_progress` with its `paymentId`.
 3. The writer transaction locks competition capacity and creates one active payment
    reservation per player/competition before Daraja is contacted.
 4. The app shows “check your phone” and polls `GET /v1/payments/{id}`. Backend query
