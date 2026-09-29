@@ -335,8 +335,10 @@ func resultFlowReview(t *testing.T, h resultFlowHarness, sides resultReportsSide
 		t.Fatalf("unexpected decided review %+v", decided)
 	}
 	replay := resultFlowDecide(t, h, h.StaffID, reviewID, "review-decision-1", body)
-	if replay.Header().Get("Idempotency-Replayed") != "true" || replay.Body.String() != recorder.Body.String() {
-		t.Fatalf("the decision replay differs: %d %s", replay.Code, replay.Body.String())
+	if replay.Code != recorder.Code || replay.Header().Get("Idempotency-Replayed") != "true" ||
+		!sameJSON(t, recorder.Body.Bytes(), replay.Body.Bytes()) {
+		t.Fatalf("the decision replay differs: %d %s / %d %s", recorder.Code, recorder.Body.String(),
+			replay.Code, replay.Body.String())
 	}
 	return expected
 }
@@ -705,9 +707,9 @@ func resultFlowCheckStrikeBan(t *testing.T, h resultFlowHarness, run resultFlowR
 	if revoked.Code != http.StatusOK || !strings.Contains(revoked.Body.String(), `"revokedBy":"`+admin+`"`) {
 		t.Fatalf("revocation: %d %s", revoked.Code, revoked.Body.String())
 	}
-	if replay := resultFlowRevoke(t, h, admin, feed[0].ID, "revoke-strike-1", reason); replay.Body.String() != revoked.Body.String() ||
-		replay.Header().Get("Idempotency-Replayed") != "true" {
-		t.Fatalf("revocation replay differs: %s", replay.Body.String())
+	if replay := resultFlowRevoke(t, h, admin, feed[0].ID, "revoke-strike-1", reason); replay.Code != revoked.Code ||
+		!sameJSON(t, revoked.Body.Bytes(), replay.Body.Bytes()) || replay.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("revocation replay differs: %s / %s", revoked.Body.String(), replay.Body.String())
 	}
 	if again := resultFlowRevoke(t, h, admin, feed[0].ID, "revoke-strike-2", reason); again.Code != http.StatusConflict ||
 		!strings.Contains(again.Body.String(), "strike_already_revoked") {

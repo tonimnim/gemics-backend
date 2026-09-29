@@ -3,10 +3,12 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -152,6 +154,22 @@ func applyEmbeddedMigrationsBefore(t *testing.T, pool *pgxpool.Pool, stop string
 			t.Fatalf("apply %s: %v", name, err)
 		}
 	}
+}
+
+// sameJSON reports whether two response bodies hold the same JSON value. An
+// idempotent replay is served from the stored jsonb response, which PostgreSQL
+// re-serializes with its own whitespace and key order, so replays are compared
+// as values rather than byte for byte.
+func sameJSON(t *testing.T, left, right []byte) bool {
+	t.Helper()
+	var leftValue, rightValue any
+	if err := json.Unmarshal(left, &leftValue); err != nil {
+		t.Fatalf("decode JSON body: %v", err)
+	}
+	if err := json.Unmarshal(right, &rightValue); err != nil {
+		t.Fatalf("decode JSON body: %v", err)
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
 }
 
 // execMigrationSQL runs one migration file the way database.Migrate does: the

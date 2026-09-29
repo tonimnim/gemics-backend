@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -367,17 +366,8 @@ func TestIntegrationScoreReportIdempotentReplay(t *testing.T) {
 	server, pool, _, sides := resultReportsSetup(t)
 	first := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(2, 0), false)
 	replay := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(2, 0), false)
-	// The stored response is jsonb, which normalizes whitespace and key order,
-	// so the replay is compared as JSON rather than byte for byte.
-	var firstBody, replayBody any
-	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(replay.Body.Bytes(), &replayBody); err != nil {
-		t.Fatal(err)
-	}
-	if first.Code != http.StatusCreated || replay.Code != http.StatusCreated || !reflect.DeepEqual(replayBody, firstBody) ||
-		replay.Header().Get("Idempotency-Replayed") != "true" {
+	if first.Code != http.StatusCreated || replay.Code != http.StatusCreated ||
+		!sameJSON(t, first.Body.Bytes(), replay.Body.Bytes()) || replay.Header().Get("Idempotency-Replayed") != "true" {
 		t.Fatalf("replay differs: %d %s / %d %s", first.Code, first.Body.String(), replay.Code, replay.Body.String())
 	}
 	if conflict := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(0, 2), false); conflict.Code != http.StatusConflict ||
