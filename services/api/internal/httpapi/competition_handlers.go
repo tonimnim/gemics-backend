@@ -884,35 +884,34 @@ func (s *Server) loadCompetitionDetail(ctx context.Context, id string) (competit
 		}
 		return detail, err
 	}
-	if time.Now().UnixNano() >= s.readerUnavailableUntil.Load() {
-		if lag, err := s.db.ReaderLag(ctx); err == nil && lag <= s.config.DatabaseMaxReplicaLag {
-			if detail, err := query(s.db.Reader); err == nil || errors.Is(err, pgx.ErrNoRows) {
-				return detail, err
-			}
-		}
-		s.readerUnavailableUntil.Store(time.Now().Add(5 * time.Second).UnixNano())
-	}
-	if err := s.acquireCompetitionWriterFallback(ctx); err != nil {
-		return competitionDetail{}, err
-	}
-	defer func() { <-s.writerFallback }()
-	return query(s.db.Writer)
+	return readPublicCompetition(ctx, s, query)
 }
 
 func (s *Server) loadCompetitionBracket(ctx context.Context, id string) ([]bracketStage, error) {
+	return readPublicCompetition(ctx, s, func(pool *pgxpool.Pool) ([]bracketStage, error) {
+		return queryCompetitionBracket(ctx, pool, id)
+	})
+}
+
+// readPublicCompetition runs an addressable public read on the replica while
+// its lag is within budget, and otherwise on the writer behind the bounded
+// fallback. pgx.ErrNoRows is an answer, not a replica fault, so it is returned
+// as it is rather than retried on the writer.
+func readPublicCompetition[T any](ctx context.Context, s *Server, query func(*pgxpool.Pool) (T, error)) (T, error) {
 	if time.Now().UnixNano() >= s.readerUnavailableUntil.Load() {
 		if lag, err := s.db.ReaderLag(ctx); err == nil && lag <= s.config.DatabaseMaxReplicaLag {
-			if stages, err := queryCompetitionBracket(ctx, s.db.Reader, id); err == nil || errors.Is(err, pgx.ErrNoRows) {
-				return stages, err
+			if value, err := query(s.db.Reader); err == nil || errors.Is(err, pgx.ErrNoRows) {
+				return value, err
 			}
 		}
 		s.readerUnavailableUntil.Store(time.Now().Add(5 * time.Second).UnixNano())
 	}
 	if err := s.acquireCompetitionWriterFallback(ctx); err != nil {
-		return nil, err
+		var zero T
+		return zero, err
 	}
 	defer func() { <-s.writerFallback }()
-	return queryCompetitionBracket(ctx, s.db.Writer, id)
+	return query(s.db.Writer)
 }
 
 // competitionIsReadable applies readableCompetitionSQL, so every public read

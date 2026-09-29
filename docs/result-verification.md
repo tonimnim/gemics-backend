@@ -124,7 +124,10 @@ time to finish the match before both entries could be removed.
 - **Placements.** Removed entries receive no placement. Round-robin tables rank
   live entries only. Knockout placements rank everyone as before and then leave
   removed entries out, without promoting anyone into the gap; there is no
-  champion when the final was cancelled.
+  champion when the final was cancelled. `GET /v1/competitions/{id}/standings`
+  publishes both: each group table is ranked with the placement rule itself,
+  with removed entries listed last, unranked, and the final placements appear
+  once the last result completes the stage.
 
 ## Cancelled competitions
 

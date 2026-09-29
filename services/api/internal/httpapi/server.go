@@ -80,6 +80,7 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	mux.HandleFunc("GET /v1/competitions", s.listCompetitions)
 	mux.HandleFunc("GET /v1/competitions/{id}", s.getCompetition)
 	mux.HandleFunc("GET /v1/competitions/{id}/bracket", s.getCompetitionBracket)
+	mux.HandleFunc("GET /v1/competitions/{id}/standings", s.getCompetitionStandings)
 	mux.HandleFunc("POST /v1/auth/otp/request", s.requestOTP)
 	mux.HandleFunc("POST /v1/auth/otp/verify", s.verifyOTP)
 	mux.HandleFunc("POST /v1/auth/refresh", s.refreshSession)

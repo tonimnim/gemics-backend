@@ -1204,6 +1204,40 @@ paths:
             organizer).
         '503':
           $ref: '#/components/responses/Error'
+  /v1/competitions/{id}/standings:
+    get:
+      operationId: getCompetitionStandings
+      tags:
+        - Competitions
+      summary: Return the round-robin tables and the final placements.
+      description: >-
+        Readable for exactly the competitions the bracket is, cancelled ones included. stages holds one table per
+        round-robin group, ranked by points (3 for a win, walkovers included, 1 for a draw), then goal difference,
+        then goals scored; rows level on all three share a rank (1, 1, 3). A removed entry keeps the results it
+        already played but is unranked (rank null, removed true) and listed after the ranked rows, and the table
+        re-ranks around it, exactly as its final placement is decided. placements is empty until the stage
+        completes, then lists the final placements for every format, written once in the same transaction as the
+        last result. The response is cached for about two seconds and refreshed after every result.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Round-robin tables and final placements. A knockout competition has no stages.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetitionStandingsResponse'
+        '404':
+          $ref: '#/components/responses/Error'
+          description: competition_not_found (missing, a draft, or cancelled before it was published).
+        '503':
+          $ref: '#/components/responses/Error'
+          description: standings_unavailable or database_unavailable; retry with backoff.
   /v1/competitions/{id}/registrations:
     post:
       operationId: createFreeRegistration
@@ -7465,6 +7499,167 @@ components:
             - competition_cancelled
             - referee
             - null
+    CompetitionStandingsResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          $ref: '#/components/schemas/CompetitionStandings'
+    CompetitionStandings:
+      type: object
+      additionalProperties: false
+      required:
+        - competitionId
+        - stages
+        - placements
+      properties:
+        competitionId:
+          type: string
+          format: uuid
+        stages:
+          type: array
+          description: >-
+            One entry per round-robin stage, in stage order. Empty for a knockout competition and before the draw.
+          items:
+            $ref: '#/components/schemas/StandingsStage'
+        placements:
+          type: array
+          description: >-
+            Final placements ordered by placement, then entryId. Empty until the stage completes; then written once,
+            for every format. Tied entries share a placement. A removed entry has no placement, and nobody is
+            promoted into its place in a knockout. A cancelled competition has none. A stage with groups is placed
+            as one table across all its groups, by the same order, so an entry's placement can differ from its
+            rank in its group table.
+          items:
+            $ref: '#/components/schemas/CompetitionPlacement'
+    StandingsStage:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - position
+        - status
+        - groups
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        position:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          description: The stage's own status; completed once its last result is in and the placements are written.
+          enum:
+            - pending
+            - active
+            - completed
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandingsGroup'
+    StandingsGroup:
+      type: object
+      additionalProperties: false
+      required:
+        - key
+        - rows
+      properties:
+        key:
+          type: string
+          description: >-
+            main for a single table, otherwise group_a, group_b and so on: the bracket value of the group's rounds
+            in the bracket response.
+        rows:
+          type: array
+          description: The ranked rows in table order, then the removed rows in the same order.
+          items:
+            $ref: '#/components/schemas/StandingRow'
+    StandingRow:
+      type: object
+      additionalProperties: false
+      required:
+        - rank
+        - entryId
+        - displayName
+        - played
+        - wins
+        - draws
+        - losses
+        - goalsFor
+        - goalsAgainst
+        - goalDifference
+        - points
+        - walkovers
+        - removed
+      properties:
+        rank:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          description: >-
+            Competition rank within the group; entries level on points, goal difference and goals scored share it.
+            null exactly when removed is true.
+        entryId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        played:
+          type: integer
+          minimum: 0
+        wins:
+          type: integer
+          minimum: 0
+        draws:
+          type: integer
+          minimum: 0
+        losses:
+          type: integer
+          minimum: 0
+        goalsFor:
+          type: integer
+          minimum: 0
+        goalsAgainst:
+          type: integer
+          minimum: 0
+        goalDifference:
+          type: integer
+        points:
+          type: integer
+          minimum: 0
+        walkovers:
+          type: integer
+          minimum: 0
+          description: Wins by forfeit, already counted in wins and points.
+        removed:
+          type: boolean
+          description: >-
+            The entry was disqualified or withdrew after the draw. Its played results stand but it is unranked and
+            receives no placement. On a cancelled competition only a disqualification counts: cancelling moves paid
+            entries to withdrawal_pending solely to refund them.
+    CompetitionPlacement:
+      type: object
+      additionalProperties: false
+      required:
+        - placement
+        - entryId
+        - displayName
+      properties:
+        placement:
+          type: integer
+          minimum: 1
+        entryId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
     PaymentReviewQueueEnvelope:
       type: object
       additionalProperties: false

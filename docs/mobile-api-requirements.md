@@ -115,7 +115,7 @@ Route and render on `kind` and the ids in `data`; never parse the title or body.
 | `competition.check_in` | `competition` | push | `competitionPush` | Competition check-in is open | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
 | `competition.running` | `competition` | push | `competitionPush` | Competition started | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
 | `competition.cancelled` | `competition` | push | `competitionPush` | Competition cancelled | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail, which reads `status: cancelled` |
-| `competition.completed` | `competition` | push | `competitionPush` | Competition complete | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
+| `competition.completed` | `competition` | push | `competitionPush` | Competition complete | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail with final standings (`GET /v1/competitions/{competitionId}/standings`) |
 | `competition.draw_generated` | `competition` | push | `competitionPush` | Tournament draw is ready | `/competitions/{competitionId}/bracket` | `kind`, `competitionId` | Competition bracket |
 | `match.ready` | `match` | push | `matchPush` | Your match is ready | `/matches/{matchId}` | `kind`, `matchId` | Match room |
 | `match.forfeited` | `match` | push | `matchPush` | Match decided by forfeit | `/matches/{matchId}` | `kind`, `matchId` | Match room |
@@ -189,7 +189,23 @@ returned as `404`; the app must not try to distinguish those states.
   country, ranking, game account, capacity, existing registration, payment action, and
   the conduct-strike ban (`conduct_suspended`).
 - `GET /v1/competitions/{id}/bracket` returns typed stages, rounds, slots, matches,
-  standings, and progression.
+  and progression.
+- `GET /v1/competitions/{id}/standings` returns one table per round-robin group
+  (`stages[].groups[]`, keyed `main` or `group_a`, `group_b`, ... like the bracket's
+  rounds) and the final `placements` of every format. Rows are ranked by points (3 for
+  a win, walkovers included, 1 for a draw), then goal difference, then goals scored;
+  exact ties share a rank (1, 1, 3). A removed entry keeps its played results but
+  reads `rank: null` and `removed: true`, is listed after the ranked rows, and the
+  table re-ranks around it exactly as the final placements do. `placements` is empty
+  until the last result completes the stage, then lists `placement`, `entryId` and
+  `displayName` once (tied entries share a placement; removed entries have none). A
+  stage with groups is placed as one table across all its groups, so a group winner's
+  placement can differ from its group rank; show the group tables for the group phase
+  and `placements` for the final result.
+  Knockout competitions have no tables, only placements. It is readable wherever the
+  bracket is, cancelled competitions included, and is refreshed after every result:
+  open it from the `competition.completed` push ("Final standings are now available")
+  and refetch it after a match of the competition finishes.
 - `POST /v1/competitions/{id}/registrations` enters a free competition.
 - `DELETE /v1/competitions/{id}/registrations/me` withdraws a free entry.
 - `GET /v1/me/registrations` lists the player's entries.

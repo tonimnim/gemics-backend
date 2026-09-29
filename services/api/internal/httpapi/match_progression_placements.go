@@ -41,7 +41,11 @@ type progressionMatchForPlacement struct {
 
 // rankRoundRobinPlacements requires standings for the whole frozen field, then
 // ranks live entries only, so the table re-ranks around removed entries. With
-// no live entry left it returns no placement.
+// no live entry left it returns no placement. Placements come back in table
+// order. The public standings rank each group table with this function, so a
+// single-table stage's ranks equal its placements; a stage with groups is
+// placed across all its groups, so it shares only the order and the removal
+// rule with its group tables.
 func rankRoundRobinPlacements(entries []progressionPlacementEntry,
 	standings []progressionStandingForPlacement) ([]progressionPlacement, error) {
 	if len(entries) == 0 || len(entries) != len(standings) {
@@ -65,8 +69,23 @@ func rankRoundRobinPlacements(entries []progressionPlacementEntry,
 	if len(known) != 0 {
 		return nil, errMatchProgressionConflict
 	}
-	sort.Slice(ordered, func(i, j int) bool {
-		left, right := ordered[i], ordered[j]
+	sortRoundRobinStandings(ordered)
+	result := make([]progressionPlacement, len(ordered))
+	placement := 1
+	for index, row := range ordered {
+		if index > 0 && !sameRoundRobinPlacementScore(row, ordered[index-1]) {
+			placement = index + 1
+		}
+		result[index] = progressionPlacement{EntryID: row.EntryID, Placement: placement}
+	}
+	return result, nil
+}
+
+// sortRoundRobinStandings puts rows in table order: points, goal difference and
+// goals scored, then the entry id, which keeps exact ties in a stable order.
+func sortRoundRobinStandings(rows []progressionStandingForPlacement) {
+	sort.Slice(rows, func(i, j int) bool {
+		left, right := rows[i], rows[j]
 		if left.Points != right.Points {
 			return left.Points > right.Points
 		}
@@ -80,15 +99,6 @@ func rankRoundRobinPlacements(entries []progressionPlacementEntry,
 		}
 		return left.EntryID < right.EntryID
 	})
-	result := make([]progressionPlacement, len(ordered))
-	placement := 1
-	for index, row := range ordered {
-		if index > 0 && !sameRoundRobinPlacementScore(row, ordered[index-1]) {
-			placement = index + 1
-		}
-		result[index] = progressionPlacement{EntryID: row.EntryID, Placement: placement}
-	}
-	return result, nil
 }
 
 func sameRoundRobinPlacementScore(left, right progressionStandingForPlacement) bool {

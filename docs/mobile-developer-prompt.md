@@ -35,7 +35,8 @@ Build these player journeys:
 7. When the reports don't match, submit one final score with one to three
    screenshots before the response deadline, then follow the match through Gamics
    review if the scores still differ.
-8. Follow bracket progress, match history, notifications, ranking and public player card.
+8. Follow bracket progress, round-robin tables and final placements, match history,
+   notifications, ranking and public player card.
 9. Handle loading, empty, offline, retry, expired-session and API-error states.
 
 Use Expo Router, strict TypeScript, TanStack Query for server state, React Hook
@@ -78,7 +79,7 @@ token, rotate it using a refresh token stored in SecureStore, attach
 `X-Request-ID`, and send `Idempotency-Key` on retryable mutations.
 
 Implement typed repositories for auth/session, current profile/legal/avatar, game
-accounts, competitions/eligibility/registrations/brackets, payments/refunds, match
+accounts, competitions/eligibility/registrations/brackets/standings, payments/refunds, match
 check-in, blind score reports and final score reports, signed evidence, push/inbox,
 rankings/search and public player histories.
 

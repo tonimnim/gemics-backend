@@ -662,20 +662,23 @@ func (s *Server) assertTransitionReady(r *http.Request, tx pgx.Tx, competitionID
 }
 
 // invalidateCompetitionCaches retires the public views an organizer write can
-// change. The detail and bracket keys are addressable and deleted directly; the
-// list keys are query-hashed, so they are retired by bumping the collection
-// generation instead.
+// change. The detail, bracket and standings keys are addressable and deleted
+// directly; the list keys are query-hashed, so they are retired by bumping the
+// collection generation instead.
 func (s *Server) invalidateCompetitionCaches(r *http.Request, competitionID string) {
 	s.invalidateCompetitionCachesContext(r.Context(), competitionID)
 	s.responses.BumpGeneration(r.Context(), competitionCacheFamily)
 }
 
-// invalidateCompetitionCachesContext retires the addressable detail and bracket
-// views. High-frequency registrations/results intentionally do not bump the
+// invalidateCompetitionCachesContext retires the addressable detail, bracket
+// and standings views. Every path that progresses a match calls it after its
+// commit, so a result reaches the tables and placements as it reaches the
+// bracket. High-frequency registrations/results intentionally do not bump the
 // collection generation: list pages keep their short 15-second counter staleness
 // instead of turning every registration into a platform-wide cache miss.
 func (s *Server) invalidateCompetitionCachesContext(ctx context.Context, competitionID string) {
-	s.responses.Invalidate(ctx, "competition-detail:"+competitionID, "competition-bracket:"+competitionID)
+	s.responses.Invalidate(ctx, "competition-detail:"+competitionID, "competition-bracket:"+competitionID,
+		competitionStandingsCacheKey(competitionID))
 }
 
 // organizerCompetitionSelect is shared by the list and single-record reads so

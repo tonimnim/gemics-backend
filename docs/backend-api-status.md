@@ -26,7 +26,8 @@ The contract currently covers:
 - eFootball Mobile accounts and evidence-based verification workflow, with separate
   manual and publisher-verification semantics.
 - Supported games, competition discovery/detail, structured eligibility, typed
-  bracket, free registration/withdrawal, and paid entry through M-Pesa STK.
+  bracket, round-robin standings and final placements, free registration/withdrawal,
+  and paid entry through M-Pesa STK.
 - Player payment history/status, refund history, paid withdrawal, administrative
   reconciliation review, and protected refund decisions.
 - Active/history matches, the blind match room and verification policy, idempotent
