@@ -74,10 +74,15 @@ func integrationPool(t *testing.T) *pgxpool.Pool {
 
 func insertQueuedEvidence(t *testing.T, pool *pgxpool.Pool, id string) {
 	t.Helper()
-	_, err := pool.Exec(context.Background(), `INSERT INTO evidence_uploads(id,object_key) VALUES ($1,'test.png');
-		INSERT INTO evidence_media_processing_jobs(evidence_id) VALUES ($1)`, id)
-	if err != nil {
-		t.Fatal(err)
+	// A parameterised statement is prepared, and PostgreSQL cannot prepare two
+	// commands at once, so the rows are inserted one statement at a time.
+	for _, statement := range []string{
+		`INSERT INTO evidence_uploads(id,object_key) VALUES ($1,'test.png')`,
+		`INSERT INTO evidence_media_processing_jobs(evidence_id) VALUES ($1)`,
+	} {
+		if _, err := pool.Exec(context.Background(), statement, id); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
