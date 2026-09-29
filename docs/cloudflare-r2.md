@@ -157,7 +157,7 @@ avatars will become inaccessible. Do not delete the source bucket during cutover
 
 ## Mobile integration and production gate
 
-The OpenAPI 0.7.0 upload flow is unchanged by the storage provider: request
+The OpenAPI 0.8.0 upload flow is unchanged by the storage provider: request
 intent, PUT raw bytes with all returned required headers, complete, poll
 `ready=true`, then attach the evidence ID to a final score report. Evidence is JPEG
 or PNG only; convert HEIC/HEIF before hashing. Do not use multipart/form-data for

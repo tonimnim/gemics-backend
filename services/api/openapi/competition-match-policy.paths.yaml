@@ -102,7 +102,9 @@ paths:
       description: >-
         The room is the caller's blind view. It never contains the opponent's score before the match
         is resolved: resultVerification says only whether the opponent reported or responded, and the
-        canonical result appears once the match is completed.
+        canonical result appears once the match is completed. home and away carry each side's gameAccount
+        (in-game name, platform and eFootball User ID) for setting up the Friend Match, which only the two
+        entries' players can read.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: matchId, in: path, required: true, schema: { type: string, format: uuid } }

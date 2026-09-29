@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Gamics API
-  version: 0.7.0
+  version: 0.8.0
   description: >-
     Gamics player, competition, blind match result verification, Gamics result review, rankings, M-Pesa payments,
     notification, identity and role-based operations API.
@@ -558,7 +558,9 @@ paths:
       description: >-
         The room is the caller's blind view. It never contains the opponent's score before the match is
         resolved: resultVerification says only whether the opponent reported or responded, and the canonical
-        result appears once the match is completed.
+        result appears once the match is completed. home and away carry each side's gameAccount (in-game
+        name, platform and eFootball User ID) for setting up the Friend Match, which only the two entries'
+        players can read.
       security:
         - bearerAuth: []
       parameters:
@@ -4873,12 +4875,18 @@ components:
           format: date-time
     MatchParticipant:
       type: object
+      description: >-
+        One side of a match as its two entries' players see it. Only those players can read the match
+        room and the match list, the only responses that carry gameAccount; brackets, standings and
+        discovery never do.
       required:
         - playerId
         - handle
         - displayName
         - initials
+        - avatarUrl
         - side
+        - gameAccount
       properties:
         playerId:
           type: string
@@ -4892,8 +4900,14 @@ components:
           minLength: 1
           maxLength: 2
         avatarUrl:
-          type: string
-          format: uri
+          type:
+            - string
+            - 'null'
+          format: uri-reference
+          description: >-
+            Stable API-relative avatar image reference, the same one player profiles use; resolve it
+            against the configured API origin. Null when the player has no avatar or a private
+            profile.
         side:
           type: string
           enum:
@@ -4902,6 +4916,37 @@ components:
         checkedInAt:
           type: string
           format: date-time
+        gameAccount:
+          description: >-
+            The game account this side plays the match with, for setting up the Friend Match. Null when
+            the entry has no account for the competition's game.
+          oneOf:
+            - $ref: '#/components/schemas/MatchGameAccount'
+            - type: 'null'
+    MatchGameAccount:
+      type: object
+      additionalProperties: false
+      required:
+        - inGameName
+        - platform
+        - publisherPlayerId
+      properties:
+        inGameName:
+          type: string
+          description: The name shown in eFootball.
+        platform:
+          type: string
+          enum:
+            - android
+            - ios
+          description: The device platform the account plays on.
+        publisherPlayerId:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The eFootball User ID, which is how players add each other as friends in eFootball. Null when
+            the player has not added it; search by inGameName instead.
     FriendMatchInstruction:
       type: object
       additionalProperties: false

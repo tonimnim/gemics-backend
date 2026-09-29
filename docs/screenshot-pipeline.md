@@ -2,7 +2,7 @@
 
 Updated 2026-09-28. The code supports scalable ingestion; 10,000-player capacity
 has NOT been demonstrated against a deployed stack. Do not treat unit tests as a
-capacity certification. The mobile app must adopt the OpenAPI 0.7.0 polling flow.
+capacity certification. The mobile app must adopt the OpenAPI 0.8.0 polling flow.
 Screenshots are needed only for a final score report after a mismatch; see
 [result verification](result-verification.md). Evidence is JPEG or PNG only: video
 uploads are refused.

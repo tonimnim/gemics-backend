@@ -1,6 +1,6 @@
 # Backend API status
 
-Last audited: 2026-09-28 against OpenAPI `0.7.0` and the registered Go routes.
+Last audited: 2026-09-29 against OpenAPI `0.8.0` and the registered Go routes.
 
 ## Sources of truth
 

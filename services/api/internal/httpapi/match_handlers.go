@@ -30,13 +30,41 @@ const (
 var canonicalUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type matchParticipantResponse struct {
-	PlayerID    string     `json:"playerId"`
-	Handle      string     `json:"handle"`
-	DisplayName string     `json:"displayName"`
-	Initials    string     `json:"initials"`
-	AvatarURL   *string    `json:"avatarUrl,omitempty"`
-	Side        string     `json:"side"`
-	CheckedInAt *time.Time `json:"checkedInAt,omitempty"`
+	PlayerID    string                    `json:"playerId"`
+	Handle      string                    `json:"handle"`
+	DisplayName string                    `json:"displayName"`
+	Initials    string                    `json:"initials"`
+	AvatarURL   *string                   `json:"avatarUrl"`
+	Side        string                    `json:"side"`
+	CheckedInAt *time.Time                `json:"checkedInAt,omitempty"`
+	GameAccount *matchGameAccountResponse `json:"gameAccount"`
+}
+
+// matchGameAccountResponse is the game account a side plays the match with,
+// which the opponent needs to set up the Friend Match. Only the players of the
+// match's two entries ever receive it.
+type matchGameAccountResponse struct {
+	InGameName        string  `json:"inGameName"`
+	Platform          string  `json:"platform"`
+	PublisherPlayerID *string `json:"publisherPlayerId"`
+}
+
+// matchSideIdentity is what the room query reads about a side's player beyond
+// the handle: whether a public avatar can be served, and the entry's game
+// account when it belongs to the competition's game.
+type matchSideIdentity struct {
+	HasAvatar         bool
+	InGameName        *string
+	Platform          *string
+	PublisherPlayerID *string
+}
+
+func (identity matchSideIdentity) gameAccount() *matchGameAccountResponse {
+	if identity.InGameName == nil || identity.Platform == nil {
+		return nil
+	}
+	return &matchGameAccountResponse{InGameName: *identity.InGameName, Platform: *identity.Platform,
+		PublisherPlayerID: identity.PublisherPlayerID}
 }
 
 type friendMatchInstruction struct {
@@ -196,10 +224,12 @@ type matchRecord struct {
 	HomeHandle             *string
 	HomeDisplayName        *string
 	HomeCheckedInAt        *time.Time
+	HomeIdentity           matchSideIdentity
 	AwayPlayerID           *string
 	AwayHandle             *string
 	AwayDisplayName        *string
 	AwayCheckedInAt        *time.Time
+	AwayIdentity           matchSideIdentity
 	VerificationPhase      *string
 	ReportWindowSeconds    *int
 	ReminderLeadSeconds    *int
@@ -252,7 +282,9 @@ const matchSelectColumns = `
 		CASE WHEN mine.entry_id=m.home_entry_id THEN 'home' ELSE 'away' END,
 		m.home_entry_id::text,m.away_entry_id::text,m.winner_entry_id::text,
 		home_player.user_id,home_player.handle,home_player.display_name,home_checkin.checked_in_at,
+		COALESCE(home_player.has_avatar,false),home_player.in_game_name,home_player.platform,home_player.publisher_player_id,
 		away_player.user_id,away_player.handle,away_player.display_name,away_checkin.checked_in_at,
+		COALESCE(away_player.has_avatar,false),away_player.in_game_name,away_player.platform,away_player.publisher_player_id,
 		verification.phase,verification.report_window_seconds,verification.reminder_lead_seconds,
 		verification.response_window_seconds,verification.report_deadline_at,verification.response_deadline_at,
 		verification.resolution,my_reports.reports,opponent.reported,opponent.responded,confirmed.result,
@@ -270,7 +302,11 @@ const matchSelectColumns = `
 	LEFT JOIN LATERAL (
 		SELECT member.user_id::text,
 			COALESCE(profile.handle,account.in_game_name,player.display_name) AS handle,
-			player.display_name
+			player.display_name,
+			(profile.avatar_object_key IS NOT NULL AND profile.discoverable AND player.status='active') AS has_avatar,
+			CASE WHEN account.game_id=c.game_id THEN account.in_game_name END AS in_game_name,
+			CASE WHEN account.game_id=c.game_id THEN account.platform END AS platform,
+			CASE WHEN account.game_id=c.game_id THEN account.publisher_player_id END AS publisher_player_id
 		FROM entry_members member
 		JOIN users player ON player.id=member.user_id
 		JOIN game_accounts account ON account.id=member.game_account_id
@@ -283,7 +319,11 @@ const matchSelectColumns = `
 	LEFT JOIN LATERAL (
 		SELECT member.user_id::text,
 			COALESCE(profile.handle,account.in_game_name,player.display_name) AS handle,
-			player.display_name
+			player.display_name,
+			(profile.avatar_object_key IS NOT NULL AND profile.discoverable AND player.status='active') AS has_avatar,
+			CASE WHEN account.game_id=c.game_id THEN account.in_game_name END AS in_game_name,
+			CASE WHEN account.game_id=c.game_id THEN account.platform END AS platform,
+			CASE WHEN account.game_id=c.game_id THEN account.publisher_player_id END AS publisher_player_id
 		FROM entry_members member
 		JOIN users player ON player.id=member.user_id
 		JOIN game_accounts account ON account.id=member.game_account_id
@@ -640,7 +680,11 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 			&record.SortAt, &record.CurrentEntryID, &record.CurrentEntryStatus, &record.CurrentSide,
 			&record.HomeEntryID, &record.AwayEntryID, &record.WinnerEntryID,
 			&record.HomePlayerID, &record.HomeHandle, &record.HomeDisplayName, &record.HomeCheckedInAt,
+			&record.HomeIdentity.HasAvatar, &record.HomeIdentity.InGameName, &record.HomeIdentity.Platform,
+			&record.HomeIdentity.PublisherPlayerID,
 			&record.AwayPlayerID, &record.AwayHandle, &record.AwayDisplayName, &record.AwayCheckedInAt,
+			&record.AwayIdentity.HasAvatar, &record.AwayIdentity.InGameName, &record.AwayIdentity.Platform,
+			&record.AwayIdentity.PublisherPlayerID,
 			&record.VerificationPhase, &record.ReportWindowSeconds, &record.ReminderLeadSeconds,
 			&record.ResponseWindowSeconds, &record.ReportDeadlineAt, &record.ResponseDeadlineAt,
 			&record.VerificationResolution, &reports, &record.OpponentReported, &record.OpponentResponded, &confirmed,
@@ -708,6 +752,7 @@ func (record matchRecord) response(userID string, now time.Time) matchRoomRespon
 	opensAt, closesAt := record.checkInWindow()
 	lifecycle, actions := record.presentation(now, opensAt, closesAt)
 	winnerSide, outcome := record.outcome()
+	revealGameAccounts := record.viewerPlays()
 	settings := resolveMatchSettings(record.GameID, record.StageFormat, record.RulesSnapshot, record.StageConfig)
 	roundName := fmt.Sprintf("Round %d", record.RoundNumber)
 	if record.StageFormat == "round_robin" {
@@ -723,8 +768,10 @@ func (record matchRecord) response(userID string, now time.Time) matchRoomRespon
 		ResultDueAt: utcTime(record.ResultDueAt), CompletedAt: utcTime(record.CompletedAt),
 		State: record.State, CompletionReason: record.CompletionReason, Lifecycle: lifecycle, Version: record.Version,
 		WinnerSide: winnerSide, Outcome: outcome, CurrentPlayerID: userID, CurrentPlayerSide: record.CurrentSide,
-		Home:           participantResponse(record.HomePlayerID, record.HomeHandle, record.HomeDisplayName, "home", record.HomeCheckedInAt),
-		Away:           participantResponse(record.AwayPlayerID, record.AwayHandle, record.AwayDisplayName, "away", record.AwayCheckedInAt),
+		Home: participantResponse(record.HomePlayerID, record.HomeHandle, record.HomeDisplayName, "home",
+			record.HomeCheckedInAt, record.HomeIdentity, revealGameAccounts),
+		Away: participantResponse(record.AwayPlayerID, record.AwayHandle, record.AwayDisplayName, "away",
+			record.AwayCheckedInAt, record.AwayIdentity, revealGameAccounts),
 		AllowedActions: actions, FriendMatchInstructions: settings.Instructions,
 		VerificationPolicy: resolveMatchVerificationPolicy(record.verificationSettings(settings.Verification)),
 		ResultVerification: record.resultVerification(),
@@ -782,6 +829,14 @@ func (record matchRecord) removedHere(entryID string) bool {
 	})
 }
 
+// viewerPlays is true when the viewer's entry is one of the match's two
+// entries. The room query returns no other row; checking again keeps game
+// accounts out of any view built from a record for someone else.
+func (record matchRecord) viewerPlays() bool {
+	return record.CurrentEntryID != "" && (sameOptionalString(&record.CurrentEntryID, record.HomeEntryID) ||
+		sameOptionalString(&record.CurrentEntryID, record.AwayEntryID))
+}
+
 // viewerEntryLive is false once the viewer's entry was withdrawn or removed:
 // it plays no further match, and its unreleased fixtures are settled without
 // it when their round is released.
@@ -801,14 +856,24 @@ func summarizeMatch(room matchRoomResponse) matchSummaryResponse {
 	}
 }
 
-func participantResponse(playerID, handle, displayName *string, side string, checkedInAt *time.Time) *matchParticipantResponse {
+// participantResponse builds one side of the room. avatarUrl is the same
+// stable public reference player profiles use, set only when that route can
+// serve the avatar; the game account is included only for a viewer who plays
+// the match.
+func participantResponse(playerID, handle, displayName *string, side string, checkedInAt *time.Time,
+	identity matchSideIdentity, revealGameAccount bool) *matchParticipantResponse {
 	if playerID == nil || handle == nil || displayName == nil {
 		return nil
 	}
-	return &matchParticipantResponse{
+	participant := &matchParticipantResponse{
 		PlayerID: *playerID, Handle: *handle, DisplayName: *displayName,
-		Initials: playerInitials(*displayName), Side: side, CheckedInAt: utcTime(checkedInAt),
+		Initials: playerInitials(*displayName), AvatarURL: publicPlayerAvatarReference(*playerID, identity.HasAvatar),
+		Side: side, CheckedInAt: utcTime(checkedInAt),
 	}
+	if revealGameAccount {
+		participant.GameAccount = identity.gameAccount()
+	}
+	return participant
 }
 
 func playerInitials(name string) string {
@@ -1030,7 +1095,7 @@ func defaultFriendMatchInstructions(gameID string) []friendMatchInstruction {
 	if gameID == "efootball-mobile" {
 		return []friendMatchInstruction{
 			{Title: "Wait for both players", Detail: "Start only after both sides show as checked in on Gamics."},
-			{Title: "Create a Friend Match", Detail: "Use the tournament settings and confirm both in-game names before kickoff."},
+			{Title: "Create a Friend Match", Detail: "Add your opponent by the eFootball User ID or in-game name on their match card, use the tournament settings and confirm both in-game names before kickoff."},
 			{Title: "Finish the match", Detail: "Play the complete match and do not leave the final result screen."},
 			{Title: "Keep the result screen", Detail: "Keep both in-game names and the final score visible for result evidence."},
 		}

@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,5 +171,73 @@ func TestIntegrationRemovedFlagIsScopedToTheRemovingMatch(t *testing.T) {
 	opponentActive := matchRoomSummaryIDs(matchRoomMustList(t, server, matchRoomUserOf(seeded, opponentEntry), "active"))
 	if !slices.Contains(opponentActive, roundThreeID) {
 		t.Fatalf("the live opponent lost the round 3 fixture from the active list: %v", opponentActive)
+	}
+}
+
+// Each player of a match sees the other side's game account and public avatar
+// in the room and the list. Nobody else can open the room, and no public
+// response carries the eFootball User ID.
+func TestIntegrationMatchRoomShowsGameAccountsToParticipantsOnly(t *testing.T) {
+	pool := openMigratedIntegrationDatabase(t)
+	server := resultReportsServer(pool)
+	seeded := seedIntegrationCompetition(t, pool, integrationSeedOptions{Format: "single_elimination", Entries: 4})
+	ready := readyIntegrationMatches(t, pool, seeded.ID)
+	sides := resultReportsStart(t, pool, ready[0])
+	suffix := strings.ToLower(rand.Text())[:10]
+	awayName, publisherID := "Otieno_"+suffix, "EF-"+suffix
+	resultFlowExec(t, pool, `UPDATE game_accounts SET in_game_name=$2,publisher_player_id=$3
+		WHERE id=(SELECT game_account_id FROM entry_members WHERE entry_id=$1)`, sides.AwayEntry, awayName, publisherID)
+	// Both players have an avatar, but only the away player's profile is public.
+	resultFlowExec(t, pool, `UPDATE player_profiles SET avatar_object_key='avatars/'||user_id::text||'/avatar.png',
+		discoverable=(user_id=$2) WHERE user_id IN ($1,$2)`, sides.HomeUser, sides.AwayUser)
+	var homeName string
+	if err := pool.QueryRow(t.Context(), `SELECT account.in_game_name FROM entry_members member
+		JOIN game_accounts account ON account.id=member.game_account_id WHERE member.entry_id=$1`,
+		sides.HomeEntry).Scan(&homeName); err != nil {
+		t.Fatal(err)
+	}
+
+	homeView := matchRoomMustGet(t, server, sides.HomeUser, sides.MatchID)
+	away := homeView.Away
+	if away == nil || away.GameAccount == nil || away.GameAccount.InGameName != awayName ||
+		away.GameAccount.Platform != "android" || optionalValue(away.GameAccount.PublisherPlayerID) != publisherID {
+		t.Fatalf("the home player cannot see the opponent's game account: %+v", away)
+	}
+	if optionalValue(away.AvatarURL) != "/v1/players/"+sides.AwayUser+"/avatar" || homeView.Home.AvatarURL != nil {
+		t.Fatalf("avatarUrl home=%v away=%v", homeView.Home.AvatarURL, away.AvatarURL)
+	}
+	awayView := matchRoomMustGet(t, server, sides.AwayUser, sides.MatchID)
+	if home := awayView.Home; home == nil || home.GameAccount == nil || home.GameAccount.InGameName != homeName ||
+		home.GameAccount.PublisherPlayerID != nil {
+		t.Fatalf("the away player cannot see the opponent's game account: %+v", awayView.Home)
+	}
+	var listed *matchSummaryResponse
+	for _, summary := range matchRoomMustList(t, server, sides.HomeUser, "active") {
+		if summary.ID == sides.MatchID {
+			listed = &summary
+		}
+	}
+	if listed == nil || listed.Away == nil || listed.Away.GameAccount == nil || listed.Away.GameAccount.InGameName != awayName {
+		t.Fatalf("the match list does not carry the opponent's game account: %+v", listed)
+	}
+
+	otherPlayer := resultReportsStart(t, pool, ready[1]).HomeUser
+	for name, userID := range map[string]string{"organizer": seeded.OrganizerID, "another entry's player": otherPlayer} {
+		if recorder := resultReportsGet(t, server.getMatch, userID, "matchId", sides.MatchID); recorder.Code != http.StatusNotFound ||
+			strings.Contains(recorder.Body.String(), publisherID) {
+			t.Fatalf("the %s opened the room: %d %s", name, recorder.Code, recorder.Body.String())
+		}
+	}
+	for name, recorder := range map[string]*httptest.ResponseRecorder{
+		"bracket":        resultReportsGet(t, server.getCompetitionBracket, "", "id", seeded.ID),
+		"player profile": resultReportsGet(t, server.publicPlayer, "", "id", sides.AwayUser),
+	} {
+		if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), publisherID) {
+			t.Fatalf("the public %s: %d, leaks the User ID: %v", name, recorder.Code,
+				strings.Contains(recorder.Body.String(), publisherID))
+		}
+	}
+	if body := resultReportsGet(t, server.getCompetitionBracket, "", "id", seeded.ID).Body.String(); strings.Contains(body, awayName) {
+		t.Fatalf("the public bracket carries an in-game name: %s", body)
 	}
 }

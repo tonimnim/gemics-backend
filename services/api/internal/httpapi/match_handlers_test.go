@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -410,6 +411,160 @@ func TestMatchQueriesScopeRemovalsAndTheActiveList(t *testing.T) {
 	}
 	if strings.Contains(matchSelectColumns, "mine_entry.status='disqualified'") {
 		t.Error("entryRemoved must not come from the entry's current status")
+	}
+}
+
+// gameAccountTestRecord is a ready match whose away player has a public avatar
+// and an eFootball User ID, and whose home player has neither.
+func gameAccountTestRecord(viewerEntry string) matchRecord {
+	home, away := "home-entry", "away-entry"
+	homeID, awayID := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	homeHandle, awayHandle, homeName, awayName := "kamau", "otieno", "Kamau Njoroge", "Otieno Ouma"
+	homeIGN, awayIGN, platform, publisherID := "KamauFC", "Otieno_10", "android", "EF-4471-2209"
+	return matchRecord{State: "ready", CurrentSide: "home", CurrentEntryID: viewerEntry,
+		HomeEntryID: &home, AwayEntryID: &away,
+		HomePlayerID: &homeID, HomeHandle: &homeHandle, HomeDisplayName: &homeName,
+		AwayPlayerID: &awayID, AwayHandle: &awayHandle, AwayDisplayName: &awayName,
+		HomeIdentity: matchSideIdentity{InGameName: &homeIGN, Platform: &platform},
+		AwayIdentity: matchSideIdentity{HasAvatar: true, InGameName: &awayIGN, Platform: &platform,
+			PublisherPlayerID: &publisherID}}
+}
+
+func TestMatchRoomShowsGameAccountsOnlyToParticipants(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		viewer string
+		reveal bool
+	}{
+		{"home player", "home-entry", true},
+		{"away player", "away-entry", true},
+		{"a player of another entry", "other-entry", false},
+		{"no entry", "", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			room := gameAccountTestRecord(test.viewer).response("viewer", now)
+			summary := summarizeMatch(room)
+			for name, participants := range map[string][2]*matchParticipantResponse{
+				"room": {room.Home, room.Away}, "summary": {summary.Home, summary.Away},
+			} {
+				home, away := participants[0], participants[1]
+				if !test.reveal {
+					if home.GameAccount != nil || away.GameAccount != nil {
+						t.Fatalf("%s reveals game accounts to a non-participant: %+v %+v", name, home.GameAccount, away.GameAccount)
+					}
+					continue
+				}
+				if home.GameAccount == nil || home.GameAccount.InGameName != "KamauFC" || home.GameAccount.Platform != "android" ||
+					home.GameAccount.PublisherPlayerID != nil {
+					t.Fatalf("%s home game account = %+v", name, home.GameAccount)
+				}
+				if away.GameAccount == nil || away.GameAccount.InGameName != "Otieno_10" ||
+					optionalValue(away.GameAccount.PublisherPlayerID) != "EF-4471-2209" {
+					t.Fatalf("%s away game account = %+v", name, away.GameAccount)
+				}
+			}
+			// The avatar is the public reference whoever views the room.
+			if room.Home.AvatarURL != nil || optionalValue(room.Away.AvatarURL) !=
+				"/v1/players/22222222-2222-4222-8222-222222222222/avatar" {
+				t.Fatalf("avatarUrl = %v %v", room.Home.AvatarURL, room.Away.AvatarURL)
+			}
+		})
+	}
+}
+
+func TestMatchParticipantJSONCarriesTheGameAccount(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	participants := func(record matchRecord) map[string]map[string]json.RawMessage {
+		t.Helper()
+		raw, err := json.Marshal(record.response("viewer", now))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var room struct {
+			Home map[string]json.RawMessage `json:"home"`
+			Away map[string]json.RawMessage `json:"away"`
+		}
+		if err = json.Unmarshal(raw, &room); err != nil {
+			t.Fatal(err)
+		}
+		return map[string]map[string]json.RawMessage{"home": room.Home, "away": room.Away}
+	}
+	room := participants(gameAccountTestRecord("away-entry"))
+	if keys := slices.Sorted(maps.Keys(room["away"])); !slices.Equal(keys, []string{"avatarUrl", "displayName",
+		"gameAccount", "handle", "initials", "playerId", "side"}) {
+		t.Fatalf("participant keys = %v", keys)
+	}
+	var account map[string]json.RawMessage
+	if err := json.Unmarshal(room["away"]["gameAccount"], &account); err != nil {
+		t.Fatal(err)
+	}
+	if keys := slices.Sorted(maps.Keys(account)); !slices.Equal(keys, []string{"inGameName", "platform", "publisherPlayerId"}) ||
+		string(account["publisherPlayerId"]) != `"EF-4471-2209"` {
+		t.Fatalf("unexpected game account: %s", room["away"]["gameAccount"])
+	}
+	if string(room["home"]["avatarUrl"]) != "null" || !strings.Contains(string(room["home"]["gameAccount"]), `"publisherPlayerId":null`) {
+		t.Fatalf("unexpected home participant: %v", room["home"])
+	}
+
+	stranger := participants(gameAccountTestRecord("other-entry"))
+	if string(stranger["away"]["gameAccount"]) != "null" || string(stranger["home"]["gameAccount"]) != "null" {
+		t.Fatalf("a non-participant received game accounts: %v", stranger)
+	}
+	// An entry account of another game is not the one the match is played with.
+	otherGame := gameAccountTestRecord("home-entry")
+	otherGame.AwayIdentity.InGameName, otherGame.AwayIdentity.Platform = nil, nil
+	if room = participants(otherGame); string(room["away"]["gameAccount"]) != "null" {
+		t.Fatalf("an account of another game was shown: %s", room["away"]["gameAccount"])
+	}
+}
+
+func TestMatchRoomQueryReadsTheMatchGameAccountAndPublicAvatar(t *testing.T) {
+	for _, fragment := range []string{
+		"(profile.avatar_object_key IS NOT NULL AND profile.discoverable AND player.status='active') AS has_avatar",
+		"CASE WHEN account.game_id=c.game_id THEN account.in_game_name END AS in_game_name",
+		"CASE WHEN account.game_id=c.game_id THEN account.publisher_player_id END AS publisher_player_id",
+	} {
+		if got := strings.Count(matchSelectColumns, fragment); got != 2 {
+			t.Errorf("matchSelectColumns reads %q %d times, want once per side", fragment, got)
+		}
+	}
+	// The eFootball User ID leaves the API only to its owner, Gamics staff and
+	// the two entries of a match: never through discovery, brackets or standings.
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := []string{"account_handlers.go", "account_security_handlers.go", "game_account_verification_handlers.go",
+		"match_handlers.go"}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") || slices.Contains(allowed, file) {
+			continue
+		}
+		if strings.Contains(readSourceFile(t, file), "publisher_player_id") {
+			t.Errorf("%s reads publisher_player_id", file)
+		}
+	}
+}
+
+func TestOpenAPIMatchParticipantDeclaresTheGameAccount(t *testing.T) {
+	contract := openAPIFile(t, "openapi.yaml")
+	participant := openAPIBlock(t, contract, "MatchParticipant", 4)
+	for _, field := range []string{"avatarUrl", "gameAccount"} {
+		if !strings.Contains(participant, "\n        - "+field+"\n") {
+			t.Errorf("MatchParticipant does not require %s", field)
+		}
+	}
+	if !strings.Contains(participant, "#/components/schemas/MatchGameAccount'") ||
+		!strings.Contains(openAPIBlock(t, participant, "avatarUrl", 8), "format: uri-reference") {
+		t.Error("MatchParticipant does not reference MatchGameAccount or a relative avatarUrl")
+	}
+	account := openAPIBlock(t, contract, "MatchGameAccount", 4)
+	for _, field := range []string{"inGameName", "platform", "publisherPlayerId"} {
+		if !strings.Contains(account, "\n        - "+field+"\n") {
+			t.Errorf("MatchGameAccount does not require %s", field)
+		}
 	}
 }
 

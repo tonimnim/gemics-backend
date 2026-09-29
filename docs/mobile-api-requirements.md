@@ -1,6 +1,6 @@
 # Mobile API handoff
 
-The authoritative contract is `services/api/openapi/openapi.yaml` (OpenAPI 0.7.0).
+The authoritative contract is `services/api/openapi/openapi.yaml` (OpenAPI 0.8.0).
 Generate types from that file and validate runtime responses. Do not invent routes or
 infer authorization from UI labels. All authenticated requests use the access token;
 refresh tokens are rotated by the API and stored only in secure device storage.
@@ -305,6 +305,17 @@ same key. OpenAPI lists the codes of every entry operation per status.
   `winnerSide`, and both check-in states.
 - `POST /v1/matches/{matchId}/check-ins` uses an `Idempotency-Key`.
 
+`home` and `away` (null until a side is known) carry `playerId`, `handle`,
+`displayName`, `initials`, `avatarUrl` and `gameAccount`. `avatarUrl` is the same
+API-relative reference player profiles use, or null when the player has no avatar or
+a private profile. `gameAccount` is `{inGameName, platform, publisherPlayerId}` for
+the game account that side plays this match with, or null when it has none. Use it
+to set up the Friend Match: add the opponent by `publisherPlayerId` (the eFootball
+User ID) when it is set, otherwise search for `inGameName`, and check both names
+before kickoff as `friendMatchInstructions` say. Only the players of the match's two
+entries can open the room or list the match, so only they receive `gameAccount`;
+brackets, standings, discovery and public profiles never carry the User ID.
+
 Drive the screen from `lifecycle` and `allowedActions`; never infer an action from
 the state or a local timer.
 
@@ -407,7 +418,7 @@ exposed merely because a tab is visible.
 
 ## Client rules
 
-- Generate request/response types from OpenAPI 0.7.0 and keep Zod validation at the
+- Generate request/response types from OpenAPI 0.8.0 and keep Zod validation at the
   network boundary.
 - Use a fresh UUID `Idempotency-Key` for each user intent and reuse it only for retries
   of that exact payload.

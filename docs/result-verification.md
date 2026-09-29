@@ -2,9 +2,9 @@
 
 > Implementation status: blind dual score reports, the report and response
 > windows, removal from the tournament, the Gamics review queue, conduct strikes
-> and the registration ban are implemented in the Go API and OpenAPI 0.7.0
+> and the registration ban are implemented in the Go API and OpenAPI 0.8.0
 > (`match-score-reports.paths.yaml`, `result-reviews.paths.yaml`). Last audited:
-> 2026-09-28.
+> 2026-09-29.
 
 Konami does not give Gamics a trusted public match-result API, so a score is a
 player's claim until the other entry agrees with it or Gamics decides. Gamics

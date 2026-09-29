@@ -31,7 +31,9 @@ Build these player journeys:
    `registered`; `refund_pending` means the money is being returned. Free and paid
    entry both refuse a blocked player with `409 competition_ineligible`: show its
    `message` and switch on `issue.code`, as for the eligibility preflight.
-5. Receive match reminders, check in, view opponent and Friend Match instructions.
+5. Receive match reminders, check in, view the opponent, including the eFootball
+   in-game name and User ID in the room's `gameAccount`, and the Friend Match
+   instructions.
 6. Report the score blind (score and declaration only, no screenshot) without ever
    seeing what the opponent reported.
 7. When the reports don't match, submit one final score with one to three
@@ -49,7 +51,7 @@ components and keep all HTTP calls behind a typed API client.
 
 ## API access
 
-Read the authoritative OpenAPI 0.7.0 contract in
+Read the authoritative OpenAPI 0.8.0 contract in
 `services/api/openapi/openapi.yaml` and the integration sequence in
 `docs/mobile-api-requirements.md`. The backend now covers email OTP and rotating
 sessions; onboarding/legal/profile/avatar; game accounts and verification; discovery,

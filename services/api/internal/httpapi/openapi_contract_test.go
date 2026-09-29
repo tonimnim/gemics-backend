@@ -79,8 +79,8 @@ func openAPIWords(text string) string {
 
 func TestOpenAPIContractVersionAndRetiredSurface(t *testing.T) {
 	contract := openAPIFile(t, "openapi.yaml")
-	if !strings.Contains(contract, "\n  version: 0.7.0\n") {
-		t.Error("openapi.yaml info.version is not 0.7.0")
+	if !strings.Contains(contract, "\n  version: 0.8.0\n") {
+		t.Error("openapi.yaml info.version is not 0.8.0")
 	}
 	componentsAt := strings.Index(contract, "\ncomponents:\n")
 	if componentsAt < 0 {
