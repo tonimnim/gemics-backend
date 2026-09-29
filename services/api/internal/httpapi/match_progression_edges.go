@@ -213,9 +213,12 @@ func applyProgressionEdges(ctx context.Context, tx pgx.Tx, source progressionSou
 }
 
 func loadProgressionTargetIDs(ctx context.Context, tx pgx.Tx, source progressionSource) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT DISTINCT target.id::text,target.graph_rank
+	// GROUP BY rather than DISTINCT: PostgreSQL only lets a DISTINCT query order
+	// by selected expressions, and the lock order needs the uuid, not its text.
+	rows, err := tx.Query(ctx, `SELECT target.id::text,target.graph_rank
 		FROM match_slots edge JOIN matches target ON target.id=edge.match_id
 		WHERE edge.source_match_id=$1 AND target.competition_id=$2
+		GROUP BY target.id,target.graph_rank
 		ORDER BY target.graph_rank,target.id`, source.ID, source.CompetitionID)
 	if err != nil {
 		return nil, err
