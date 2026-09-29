@@ -135,6 +135,15 @@ func TestDrawCandidateOrderingIsStableAndPolicySpecific(t *testing.T) {
 	}
 }
 
+func TestDrawCandidatesAcceptPlayersWithoutARating(t *testing.T) {
+	// New players have no player_game_ratings row, so the LEFT JOIN yields NULL
+	// and a bare matches_played would fail to scan into an int, making every
+	// draw with a first-time entrant fail.
+	assertFileOrder(t, "organizer_draw_handlers.go", "func loadFrozenDrawCandidates",
+		"rating.rating,COALESCE(rating.matches_played,0),entry.created_at",
+		"LEFT JOIN player_game_ratings rating ON rating.user_id=entry.captain_user_id")
+}
+
 func TestRandomDrawSeedMakesPlanReplayable(t *testing.T) {
 	input, problem := normalizeOrganizerDrawRequest(validDrawRequest("random"))
 	if problem != nil {

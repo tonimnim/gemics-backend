@@ -375,9 +375,11 @@ func loadFrozenDrawCandidates(ctx context.Context, tx pgx.Tx, competitionID, gam
 	// The competition row is already locked. Row-share locks below keep a status
 	// mutation from changing membership while the vector, fingerprints and graph
 	// are copied. An explicit id order prevents PostgreSQL plan changes from
-	// becoming draw-order changes.
+	// becoming draw-order changes. A player's rating row is created by their
+	// first rated result, so a new player has none: the rating stays NULL (the
+	// rating policy treats it as 1500) and matches played is zero.
 	rows, err := tx.Query(ctx, `SELECT entry.id::text,entry.captain_user_id::text,entry.seed,
-		rating.rating,rating.matches_played,entry.created_at
+		rating.rating,COALESCE(rating.matches_played,0),entry.created_at
 		FROM competition_entries entry
 		LEFT JOIN player_game_ratings rating ON rating.user_id=entry.captain_user_id AND rating.game_id=$2
 		WHERE entry.competition_id=$1 AND entry.status IN ('registered','checked_in','accepted')
