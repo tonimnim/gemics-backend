@@ -45,8 +45,9 @@ when a player chooses M-Pesa.
   `POST /v1/me/avatar/uploads/{id}/complete` uploads an avatar.
 - `PATCH /v1/me/avatar` selects the completed avatar; `GET /v1/me/avatar` returns
   signed private access for the owner.
-- `GET/PATCH /v1/me/notification-preferences` persists competition, match, and
-  marketing preferences.
+- `GET/PATCH /v1/me/notification-preferences` persists competition, match, result,
+  and marketing preferences. The catalogue in section 3 names the preference that
+  controls each push.
 
 ### 3. Device notifications and account security
 
@@ -59,6 +60,75 @@ when a player chooses M-Pesa.
 - `GET/POST/DELETE /v1/me/account-deletion` requests, inspects, or cancels deletion;
   `POST /v1/me/account-deletion/execute` executes an eligible request after the
   cooling-off period.
+
+#### Notification catalogue
+
+Every inbox item comes from one platform event, and `data.kind` is that event's type.
+Route and render on `kind` and the ids in `data`; never parse the title or body.
+`data` holds identifiers only, never a score.
+
+- Every event below is stored in the inbox. Rows whose delivery is push are also sent
+  through Expo, but only while the named preference is on
+  (`PATCH /v1/me/notification-preferences`) and only to installations registered with
+  `POST /v1/me/push-tokens`. The push has the same title and body as the inbox item.
+- The Expo push `data` is the item's `data` plus `notificationId`, plus `actionUrl`
+  when it is not null (`PushNotificationData` in OpenAPI).
+- When a push is tapped, call `POST /v1/me/notifications/{notificationId}/read`, then
+  open the screen listed for its `kind`, using the ids in `data`.
+- `actionUrl` is an in-app route hint, not an API path. It has no `/v1` prefix and must
+  never be requested from `EXPO_PUBLIC_API_URL`. It is null when the item has no screen
+  of its own; open the inbox item instead.
+- Items stored before `kind` existed may lack it, or carry one of the legacy values
+  `draw_generated`, `payment_succeeded`, `payment_review` or `payment_failed`. Route
+  those, and any `kind` the app does not know yet, by `category` and the ids in `data`,
+  and fall back to the inbox.
+
+| Kind | Category | Delivery | Preference | Title | actionUrl | Data keys | App screen |
+|---|---|---|---|---|---|---|---|
+| `competition.check_in` | `competition` | push | `competitionPush` | Competition check-in is open | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
+| `competition.running` | `competition` | push | `competitionPush` | Competition started | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
+| `competition.cancelled` | `competition` | push | `competitionPush` | Competition cancelled | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
+| `competition.completed` | `competition` | push | `competitionPush` | Competition complete | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail |
+| `competition.draw_generated` | `competition` | push | `competitionPush` | Tournament draw is ready | `/competitions/{competitionId}/bracket` | `kind`, `competitionId` | Competition bracket |
+| `match.ready` | `match` | push | `matchPush` | Your match is ready | `/matches/{matchId}` | `kind`, `matchId` | Match room |
+| `match.forfeited` | `match` | push | `matchPush` | Match decided by forfeit | `/matches/{matchId}` | `kind`, `matchId` | Match room |
+| `match.cancelled` | `match` | push | `matchPush` | Match cancelled | `/matches/{matchId}` | `kind`, `matchId` | Match room |
+| `match.participant_checked_in` | `match` | push | `matchPush` | Opponent checked in | `/matches/{matchId}` | `kind`, `matchId` | Match room |
+| `match.result_confirmed` | `result` | push | `resultPush` | Result confirmed | `/matches/{matchId}` | `kind`, `matchId` | Match room |
+| `result.report_received` | `result` | push | `resultPush` | Your opponent reported the score | `/matches/{matchId}` | `kind`, `matchId` | Match room, score report |
+| `result.report_reminder` | `result` | push | `resultPush` | Report your score now | `/matches/{matchId}` | `kind`, `matchId` | Match room, score report |
+| `result.mismatch` | `result` | push | `resultPush` | Scores don't match | `/matches/{matchId}` | `kind`, `matchId` | Match room, final score |
+| `result.under_review` | `result` | push | `resultPush` | Result under review | `/matches/{matchId}` | `kind`, `matchId` | Match room |
+| `result.review_decided` | `result` | push | `resultPush` | Review complete | `/matches/{matchId}` | `kind`, `matchId` | Match room |
+| `competition.entry_removed` | `result` | push | `resultPush` | Removed from tournament | `/matches/{matchId}` | `kind`, `competitionId`, `matchId` | Match room of the match that removed the entry |
+| `player.strike_recorded` | `account` | push | `resultPush` | Conduct strike recorded | null | `kind`, `strikeId` | Inbox item |
+| `player.strike_revoked` | `account` | inbox only | none | Conduct strike removed | null | `kind`, `strikeId` | Inbox item |
+| `payment.succeeded` | `payment` | inbox only | none | Payment received | `/payments/{paymentId}` | `kind`, `paymentId` | Payment status (`GET /v1/payments/{paymentId}`) |
+| `payment.reconciliation_review_required` | `payment` | inbox only | none | Payment needs review | `/payments/{paymentId}` | `kind`, `paymentId` | Payment status (`GET /v1/payments/{paymentId}`) |
+| `payment.review_marked_failed` | `payment` | inbox only | none | Payment not completed | `/payments/{paymentId}` | `kind`, `paymentId` | Payment status (`GET /v1/payments/{paymentId}`) |
+| `payment.refund_requested` | `payment` | inbox only | none | Refund requested | `/refunds/{refundId}` | `kind`, `refundId`, `status` | Refunds list (`GET /v1/me/refunds`) |
+| `payment.refund_approved` | `payment` | inbox only | none | Refund approved | `/refunds/{refundId}` | `kind`, `refundId`, `status` | Refunds list (`GET /v1/me/refunds`) |
+| `payment.refund_rejected` | `payment` | inbox only | none | Refund rejected | `/refunds/{refundId}` | `kind`, `refundId`, `status` | Refunds list (`GET /v1/me/refunds`) |
+| `payment.refund_succeeded` | `payment` | inbox only | none | Refund completed | `/refunds/{refundId}` | `kind`, `refundId`, `status` | Refunds list (`GET /v1/me/refunds`) |
+| `payment.refund_failed` | `payment` | inbox only | none | Refund needs attention | `/refunds/{refundId}` | `kind`, `refundId`, `status` | Refunds list (`GET /v1/me/refunds`) |
+| `payment.refund_manual_review` | `payment` | inbox only | none | Refund under review | `/refunds/{refundId}` | `kind`, `refundId`, `status` | Refunds list (`GET /v1/me/refunds`) |
+| `payment.refund_processing` | `payment` | inbox only | none | Refund processing | `/refunds/{refundId}` | `kind`, `refundId`, `status` | Refunds list (`GET /v1/me/refunds`) |
+| `game_account.verification_approved` | `account` | inbox only | none | Game account verification approved | `/game-accounts/{gameAccountId}` | `kind`, `verificationRequestId`, `status`, `gameAccountId` | Game account verification (`GET /v1/me/game-accounts/{gameAccountId}/verification`) |
+| `game_account.verification_rejected` | `account` | inbox only | none | Game account verification rejected | `/game-accounts/{gameAccountId}` | `kind`, `verificationRequestId`, `status`, `gameAccountId` | Game account verification (`GET /v1/me/game-accounts/{gameAccountId}/verification`) |
+
+Refund and game-account `status` is the state the event reports (`requested`,
+`approved`, `rejected`, `succeeded`, `failed`, `manual_review`, `processing`); read the
+current state from the API. Who receives each event:
+
+- Competition events go to the captain, starters and substitutes of every entry that is
+  still registered, checked in or accepted, or whose withdrawal is pending. The draw goes
+  to every entry in the draw.
+- Match and result events go to both entries' rosters, except entries that withdrew or
+  were removed. `match.participant_checked_in` skips the player who checked in.
+  `result.report_received` and `result.report_reminder` go only to the entry that still
+  owes its report, and are dropped once it reported, was removed or its window closed.
+- `competition.entry_removed` goes to the removed entry's roster.
+- Strike, payment, refund and game-account events go only to the player they concern.
 
 ### 4. Game accounts and verification
 

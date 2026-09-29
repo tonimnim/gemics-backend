@@ -201,8 +201,9 @@ recorded and when one is removed.
 | The confirmed score | once completed | once completed | in the bracket | yes | bracket and history |
 
 A reviewer or admin with a conflict of interest is treated like the player or
-organizer they are. Pushes carry only identifiers, never a score, and every
-error a player can receive depends only on their own entry. The response
+organizer they are. Pushes carry only identifiers and the event `kind`, never a
+score (see the catalogue in [mobile API handoff](mobile-api-requirements.md)), and
+every error a player can receive depends only on their own entry. The response
 stored for an idempotent retry holds only the caller's own view.
 
 ## Automated decisions later

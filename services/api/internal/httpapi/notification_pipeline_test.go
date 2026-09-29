@@ -58,7 +58,8 @@ func TestNotificationDefinitionWhitelistsResultData(t *testing.T) {
 	if definition.Disposition != notificationDispositionProjected || definition.PreferenceKey != "result_push" {
 		t.Fatalf("unexpected result mapping: %+v", definition)
 	}
-	if len(definition.Data) != 1 || definition.Data["matchId"] != testNotificationMatchID {
+	want := map[string]any{"matchId": testNotificationMatchID, "kind": "match.result_confirmed"}
+	if !maps.Equal(definition.Data, want) {
 		t.Fatalf("outbox payload leaked into public notification data: %#v", definition.Data)
 	}
 }
@@ -137,9 +138,12 @@ func TestNotificationDefinitionMapsResultVerificationEvents(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.eventType, func(t *testing.T) {
+			want := tc.want
+			want.Data = maps.Clone(tc.want.Data)
+			want.Data["kind"] = tc.eventType
 			got := notificationDefinitionForEvent(notificationTestEvent(t, tc.eventType, tc.aggregateID, tc.payload))
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("definition = %+v\nwant %+v", got, tc.want)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("definition = %+v\nwant %+v", got, want)
 			}
 		})
 	}
@@ -250,7 +254,13 @@ func TestResultNotificationsCarryIdentifiersOnly(t *testing.T) {
 		if definition.Disposition != notificationDispositionProjected {
 			t.Fatalf("%s disposition = %q", event.eventType, definition.Disposition)
 		}
+		if definition.Data["kind"] != event.eventType {
+			t.Errorf("%s kind = %v", event.eventType, definition.Data["kind"])
+		}
 		for key, value := range definition.Data {
+			if key == "kind" {
+				continue
+			}
 			id, isString := value.(string)
 			if !allowed[key] || strings.Contains(strings.ToLower(key), "score") || !isString || !uuidPattern.MatchString(id) {
 				t.Errorf("%s leaks %q=%v into notification data", event.eventType, key, value)
@@ -499,7 +509,7 @@ func TestIntegrationNotificationProjectorScopesResultEvents(t *testing.T) {
 		WHERE source_event_id=$1 AND user_id=$2`, removal, away.UserID).Scan(&title, &body, &actionURL, &data); err != nil {
 		t.Fatal(err)
 	}
-	wantData := map[string]string{"competitionId": seeded.ID, "matchId": matchID}
+	wantData := map[string]string{"competitionId": seeded.ID, "matchId": matchID, "kind": "competition.entry_removed"}
 	if title != "Removed from tournament" || body != "You didn't report your score in time." ||
 		actionURL != "/matches/"+matchID || !maps.Equal(data, wantData) {
 		t.Fatalf("removal notice = %q / %q / %q / %v", title, body, actionURL, data)

@@ -353,7 +353,23 @@ func insertInboxNotification(ctx context.Context, tx pgx.Tx, event notificationO
 	return notificationID, err
 }
 
+// notificationDefinitionForEvent maps an outbox event to its player-facing
+// notification. Every projected notification carries the event type as
+// data.kind, so the inbox and the push payload can be routed without parsing
+// the title. docs/mobile-api-requirements.md lists every kind.
 func notificationDefinitionForEvent(event notificationOutboxEvent) notificationDefinition {
+	definition := mapNotificationEvent(event)
+	if definition.Disposition != notificationDispositionProjected {
+		return definition
+	}
+	if definition.Data == nil {
+		definition.Data = map[string]any{}
+	}
+	definition.Data["kind"] = event.EventType
+	return definition
+}
+
+func mapNotificationEvent(event notificationOutboxEvent) notificationDefinition {
 	ignored := notificationDefinition{Disposition: notificationDispositionIgnored}
 	if !uuidPattern.MatchString(event.AggregateID) {
 		ignored.Disposition = notificationDispositionMalformed
@@ -378,7 +394,7 @@ func notificationDefinitionForEvent(event notificationOutboxEvent) notificationD
 		base.Category, base.PreferenceKey = "competition", "competition_push"
 		base.Title, base.Body = "Tournament draw is ready", "The bracket has been generated. Open it to see your path."
 		base.ActionURL, base.RecipientKind = "/competitions/"+event.AggregateID+"/bracket", notificationRecipientDraw
-		base.Data = map[string]any{"competitionId": event.AggregateID, "kind": "draw_generated"}
+		base.Data = map[string]any{"competitionId": event.AggregateID}
 		return base
 	case "match.ready":
 		return matchNotification(base, event.AggregateID, "match", "match_push", "Your match is ready", "Open the match room to check in and play.")
@@ -458,17 +474,17 @@ func notificationDefinitionForEvent(event notificationOutboxEvent) notificationD
 	case "payment.succeeded":
 		base.Category, base.Title, base.Body = "payment", "Payment received", "Your M-Pesa competition payment was confirmed."
 		base.RecipientKind, base.ActionURL = notificationRecipientPayment, "/payments/"+event.AggregateID
-		base.Data = map[string]any{"paymentId": event.AggregateID, "kind": "payment_succeeded"}
+		base.Data = map[string]any{"paymentId": event.AggregateID}
 		return base
 	case "payment.reconciliation_review_required":
 		base.Category, base.Title, base.Body = "payment", "Payment needs review", "Your M-Pesa payment is being reviewed. You do not need to pay again."
 		base.RecipientKind, base.ActionURL = notificationRecipientPayment, "/payments/"+event.AggregateID
-		base.Data = map[string]any{"paymentId": event.AggregateID, "kind": "payment_review"}
+		base.Data = map[string]any{"paymentId": event.AggregateID}
 		return base
 	case "payment.review_marked_failed":
 		base.Category, base.Title, base.Body = "payment", "Payment not completed", "The reviewed M-Pesa payment was not completed. Open it for details."
 		base.RecipientKind, base.ActionURL = notificationRecipientPayment, "/payments/"+event.AggregateID
-		base.Data = map[string]any{"paymentId": event.AggregateID, "kind": "payment_failed"}
+		base.Data = map[string]any{"paymentId": event.AggregateID}
 		return base
 	case "payment.refund_requested", "payment.refund_approved", "payment.refund_rejected", "payment.refund_succeeded", "payment.refund_failed", "payment.refund_manual_review", "payment.refund_processing":
 		status := strings.TrimPrefix(event.EventType, "payment.refund_")

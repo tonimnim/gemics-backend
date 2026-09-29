@@ -52,6 +52,10 @@ histories, notifications and account lifecycle. Generate types from OpenAPI and 
 runtime Zod validation. Do not call the provider callback route from the app and do
 not invent fields or endpoints.
 
+Route every push tap and inbox item by `data.kind` and the ids in `data`, using the
+notification catalogue in `docs/mobile-api-requirements.md`. Mark the tapped item read
+with its `notificationId`. `actionUrl` is an in-app route hint, never an API path.
+
 Set a capability to unavailable only when its required deployment service is not
 configured (for example Daraja, Expo or object storage). A local UI action must never
 pretend that a fixture accepted money, evidence or a match result.

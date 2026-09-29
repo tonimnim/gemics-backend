@@ -28,6 +28,7 @@ paths:
         deviceId is the stable app-installation identifier. Repeating this call is
         idempotent for that player/device pair. A new token replaces the old one,
         and a provider token previously assigned to another installation is revoked.
+        Each push's data object is PushNotificationData.
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -371,16 +372,78 @@ components:
     Notification:
       type: object
       additionalProperties: false
+      description: >-
+        One inbox item, projected from one platform event. Push-enabled kinds are
+        also sent through Expo while the matching preference is on, with the same
+        title and body; the push data object is PushNotificationData.
+        docs/mobile-api-requirements.md lists every kind with its delivery,
+        preference, title, actionUrl, data keys and app screen.
       required: [id, category, title, body, data, actionUrl, readAt, createdAt]
       properties:
         id: { type: string, format: uuid }
-        category: { type: string, minLength: 1, maxLength: 64 }
+        category:
+          type: string
+          enum: [competition, match, result, account, payment]
+          description: Broad grouping for inbox filters and icons. Route on data.kind, not on the category.
         title: { type: string, minLength: 1, maxLength: 160 }
         body: { type: string, minLength: 1, maxLength: 2000 }
-        data: { type: object, additionalProperties: true }
-        actionUrl: { type: string, maxLength: 1000, nullable: true }
+        data:
+          type: object
+          additionalProperties: true
+          description: >-
+            Identifiers only, never a score. kind names the event; the other keys
+            depend on it: competitionId, matchId, strikeId, paymentId, refundId,
+            gameAccountId, verificationRequestId, and status for refund and
+            game-account events.
+          properties:
+            kind:
+              type: string
+              maxLength: 64
+              description: >-
+                The event type and the stable key to route on. One of
+                competition.check_in, competition.running, competition.cancelled,
+                competition.completed, competition.draw_generated,
+                competition.entry_removed, match.ready, match.forfeited,
+                match.cancelled, match.participant_checked_in, match.result_confirmed,
+                result.report_received, result.report_reminder, result.mismatch,
+                result.under_review, result.review_decided, player.strike_recorded,
+                player.strike_revoked, payment.succeeded,
+                payment.reconciliation_review_required, payment.review_marked_failed,
+                payment.refund_requested, payment.refund_approved,
+                payment.refund_rejected, payment.refund_succeeded,
+                payment.refund_failed, payment.refund_manual_review,
+                payment.refund_processing, game_account.verification_approved or
+                game_account.verification_rejected. Items stored before kind existed
+                may lack it or carry a legacy value (draw_generated,
+                payment_succeeded, payment_review or payment_failed); route those,
+                and any kind the app does not know, by category and the ids in data.
+        actionUrl:
+          type: string
+          maxLength: 1000
+          nullable: true
+          description: >-
+            An in-app route hint, not an API path: /competitions/{competitionId},
+            /competitions/{competitionId}/bracket, /matches/{matchId},
+            /payments/{paymentId}, /refunds/{refundId} or
+            /game-accounts/{gameAccountId}. It has no /v1 prefix and must never be
+            requested from the API. Null when the item has no screen of its own,
+            such as a conduct strike.
         readAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time }
+    PushNotificationData:
+      type: object
+      additionalProperties: true
+      description: >-
+        The data object of an Expo push. No operation returns it: it is the pushed
+        Notification's data plus notificationId, plus actionUrl when that is not
+        null. When the push is tapped, call POST
+        /v1/me/notifications/{notificationId}/read, then open the screen for kind
+        with the ids in the payload.
+      required: [notificationId]
+      properties:
+        notificationId: { type: string, format: uuid }
+        kind: { type: string, maxLength: 64, description: The event type; the same value as Notification.data.kind. }
+        actionUrl: { type: string, maxLength: 1000, description: The Notification's in-app route hint. It is not an API path. }
     NotificationPage:
       type: object
       additionalProperties: false
