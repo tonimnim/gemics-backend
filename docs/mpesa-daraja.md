@@ -50,18 +50,43 @@ documentation.
 3. The writer transaction locks competition capacity and creates one active payment
    reservation per player/competition before Daraja is contacted.
 4. The app shows “check your phone” and polls `GET /v1/payments/{id}`. Backend query
-   leases and exponential backoff prevent mobile polling from hammering Daraja.
+   leases and exponential backoff prevent mobile polling from hammering Daraja. An app
+   that lost the payment ID finds it as `paymentId` on
+   `GET /v1/competitions/{id}/eligibility`. Whenever it is not null the app reads that
+   payment, whatever `requiredAction` says; `requiredAction` is `poll_payment` while the
+   payment is unfinished, even after registration closed or the places filled. At
+   `review` the app stops fast polling and tells the player they will not be charged
+   twice.
 5. A verified success creates `competition_entries` and `entry_members`, updates the
-   payment and writes audit/outbox events in one PostgreSQL transaction.
+   payment and writes audit/outbox events in one PostgreSQL transaction. If the place is
+   gone by then (the competition was cancelled, the draw was made, registration ended,
+   the places filled or the payer reached the conduct strike limit), the same
+   transaction creates a `withdrawal_pending` entry that never plays and a mandatory
+   full refund.
 
 Payment status meanings:
 
 - `initiating`: provider request is being made;
 - `pending`: prompt accepted, waiting for a terminal provider result;
 - `callback_received`: callback is durable and verification is in progress;
-- `succeeded`: payment and registration entry committed;
+- `succeeded`: the collection is verified and committed together with its registration
+  outcome; it does not by itself mean the payer is registered;
 - `failed`: Daraja confirmed a terminal non-success result;
 - `review`: outcome or business state is ambiguous; do not create another charge.
+
+Every payment view (the STK response, `GET /v1/payments/{id}` and `GET /v1/me/payments`)
+also carries `registrationStatus` and `refund`, derived from the entry and the latest
+refund and shown only to the payer. After `succeeded`, the app must read
+`registrationStatus`:
+
+- `pending`: the payment is not final yet;
+- `registered`: the payment holds an active entry;
+- `refund_pending`: the entry will not play and a full refund is owed, either because
+  the payment arrived after its place was gone or because the payer asked to withdraw;
+  `refund` has its status, amount, reason and timestamps;
+- `refunded`: the refund was paid out with a recorded provider receipt;
+- `removed`: the entry was removed from the competition after it was registered;
+- `not_registered`: no place is held, for example after a failed payment.
 
 ## Failure and abuse controls
 

@@ -40,13 +40,8 @@ type paymentRefundView struct {
 	UpdatedAt                 time.Time  `json:"updatedAt"`
 }
 
-type paymentHistoryItem struct {
-	paymentIntent
-	Refund *paymentRefundView `json:"refund"`
-}
-
 type paymentHistoryPage struct {
-	Data []paymentHistoryItem `json:"data"`
+	Data []paymentIntent `json:"data"`
 	Page struct {
 		NextCursor *string `json:"nextCursor"`
 		HasMore    bool    `json:"hasMore"`
@@ -112,20 +107,7 @@ func (s *Server) listMyPayments(w http.ResponseWriter, r *http.Request) {
 		value := cursorTime(cursor.SortTime)
 		beforeTime, beforeID = &value, &cursor.ID
 	}
-	rows, err := s.db.Writer.Query(r.Context(), `SELECT payment.id,payment.competition_id,payment.entry_id,
-		payment.amount_minor,payment.currency,payment.phone_e164,payment.status,payment.merchant_request_id,
-		payment.checkout_request_id,payment.provider_receipt,payment.provider_result_code,
-		payment.provider_result_description,payment.created_at,payment.updated_at,payment.completed_at,
-		payment.query_attempts,payment.next_query_at,
-		refund.id,refund.payment_id,refund.entry_id,refund.amount_minor,refund.currency,refund.reason_code,
-		refund.mandatory,refund.player_note,refund.status,refund.provider_receipt,refund.provider_result_description,
-		refund.requested_at,refund.reviewed_at,refund.completed_at,refund.updated_at
-		FROM payment_intents payment
-		LEFT JOIN LATERAL (
-			SELECT * FROM payment_refunds candidate WHERE candidate.payment_id=payment.id
-			ORDER BY candidate.requested_at DESC,candidate.id DESC LIMIT 1
-		) refund ON true
-		WHERE payment.user_id=$1 AND ($2='' OR payment.status=$2)
+	rows, err := s.db.Writer.Query(r.Context(), paymentIntentSelect+`WHERE payment.user_id=$1 AND ($2='' OR payment.status=$2)
 		AND ($3::timestamptz IS NULL OR (payment.created_at,payment.id)<($3,$4::uuid))
 		ORDER BY payment.created_at DESC,payment.id DESC LIMIT $5`,
 		userID, status, beforeTime, beforeID, limit+1)
@@ -134,9 +116,9 @@ func (s *Server) listMyPayments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	page := paymentHistoryPage{Data: []paymentHistoryItem{}}
+	page := paymentHistoryPage{Data: []paymentIntent{}}
 	for rows.Next() {
-		item, scanErr := scanPaymentHistoryItem(rows)
+		item, scanErr := scanPaymentIntent(rows)
 		if scanErr != nil {
 			writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load payment history.")
 			return
@@ -423,30 +405,6 @@ func (s *Server) requestPaidWithdrawal(w http.ResponseWriter, r *http.Request) {
 const refundSelect = `SELECT refund.id,refund.payment_id,refund.entry_id,refund.amount_minor,refund.currency,
 	refund.reason_code,refund.mandatory,refund.player_note,refund.status,refund.provider_receipt,refund.provider_result_description,
 	refund.requested_at,refund.reviewed_at,refund.completed_at,refund.updated_at FROM payment_refunds refund `
-
-func scanPaymentHistoryItem(row accountScanner) (paymentHistoryItem, error) {
-	var result paymentHistoryItem
-	var phone string
-	var refundID, refundPaymentID, refundEntryID, refundCurrency, refundReason, refundNote, refundStatus *string
-	var refundMandatory *bool
-	var refundReceipt, refundDescription *string
-	var refundAmount *int64
-	var refundRequested, refundReviewed, refundCompleted, refundUpdated *time.Time
-	err := row.Scan(&result.ID, &result.CompetitionID, &result.EntryID, &result.AmountMinor, &result.Currency, &phone,
-		&result.Status, &result.MerchantRequestID, &result.CheckoutRequestID, &result.ProviderReceipt,
-		&result.ProviderResultCode, &result.ProviderResultDescription, &result.CreatedAt, &result.UpdatedAt,
-		&result.CompletedAt, &result.QueryAttempts, &result.NextQueryAt,
-		&refundID, &refundPaymentID, &refundEntryID, &refundAmount, &refundCurrency, &refundReason, &refundMandatory, &refundNote,
-		&refundStatus, &refundReceipt, &refundDescription, &refundRequested, &refundReviewed, &refundCompleted, &refundUpdated)
-	result.MaskedPhone = maskPhone(phone)
-	if err == nil && refundID != nil {
-		result.Refund = &paymentRefundView{ID: *refundID, PaymentID: *refundPaymentID, EntryID: *refundEntryID,
-			AmountMinor: *refundAmount, Currency: *refundCurrency, ReasonCode: *refundReason, Mandatory: *refundMandatory, PlayerNote: *refundNote,
-			Status: *refundStatus, ProviderReceipt: refundReceipt, ProviderResultDescription: refundDescription,
-			RequestedAt: *refundRequested, ReviewedAt: refundReviewed, CompletedAt: refundCompleted, UpdatedAt: *refundUpdated}
-	}
-	return result, err
-}
 
 func refundScanTargets(value *paymentRefundView) []any {
 	return []any{&value.ID, &value.PaymentID, &value.EntryID, &value.AmountMinor, &value.Currency, &value.ReasonCode,

@@ -349,7 +349,9 @@ paths:
       summary: Reserve a competition place and send an M-Pesa STK prompt.
       description: >-
         A confirmed provider payment creates the competition entry atomically. Reuse the same Idempotency-Key when
-        retrying the same request.
+        retrying the same request. Poll GET /v1/payments/{id} until status is succeeded, failed or review, then read
+        registrationStatus: a verified payment that completes after its place is gone reads succeeded with
+        registrationStatus refund_pending and a mandatory refund.
       security:
         - bearerAuth: []
       parameters:
@@ -421,7 +423,9 @@ paths:
             format: uuid
       responses:
         '200':
-          description: Current payment and registration status.
+          description: >-
+            Current payment status, the registration outcome (registrationStatus) and the latest refund. Only the
+            payer can read a payment.
           content:
             application/json:
               schema:
@@ -4571,6 +4575,8 @@ components:
         - currency
         - phoneNumber
         - status
+        - registrationStatus
+        - refund
         - createdAt
         - updatedAt
       properties:
@@ -4604,6 +4610,31 @@ components:
             - succeeded
             - failed
             - review
+          description: >-
+            The collection only. succeeded means M-Pesa confirmed the money, not that the payer holds a place; read
+            registrationStatus for that.
+        registrationStatus:
+          type: string
+          enum:
+            - pending
+            - registered
+            - refund_pending
+            - refunded
+            - removed
+            - not_registered
+          description: >-
+            What the payment did for the payer's place, derived from the entry and the latest refund. pending: the
+            payment is not final yet. registered: the payment holds an active entry. refund_pending: the entry will
+            not play and a full refund is owed, because the payment completed after the competition was cancelled,
+            the draw was made, registration ended, the places filled or the payer reached the conduct strike limit,
+            or because the payer asked to withdraw; refund says where it stands. refunded: the refund was paid out.
+            removed: the entry was removed from the competition after it was registered. not_registered: no place is
+            held, for example after a failed payment.
+        refund:
+          description: The payment's latest refund, or null when none was requested.
+          oneOf:
+            - $ref: '#/components/schemas/PaymentRefund'
+            - type: 'null'
         merchantRequestId:
           type:
             - string
@@ -6457,16 +6488,9 @@ components:
           format: date-time
           nullable: true
     PaymentHistoryItem:
+      description: A payment history row, with the same registrationStatus and refund as GET /v1/payments/{id}.
       allOf:
         - $ref: '#/components/schemas/PaymentIntent'
-        - type: object
-          required:
-            - refund
-          properties:
-            refund:
-              oneOf:
-                - $ref: '#/components/schemas/PaymentRefund'
-                - type: 'null'
     PaymentHistoryPage:
       type: object
       required:
@@ -6858,6 +6882,7 @@ components:
         - currency
         - requirements
         - issues
+        - paymentId
         - evaluatedAt
       properties:
         competitionId:
@@ -6899,6 +6924,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CompetitionEligibilityIssue'
+        paymentId:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: >-
+            The player's latest payment for this competition, or null. Whenever it is not null, read it with
+            GET /v1/payments/{id} and act on its status and registrationStatus, whatever requiredAction says; that
+            payment also carries the refund when requiredAction is view_refund. requiredAction is poll_payment while
+            the payment is unfinished (initiating, pending, callback_received or review), even when a blocking
+            issue such as registration_closed or competition_full stops a new entry.
         evaluatedAt:
           type: string
           format: date-time

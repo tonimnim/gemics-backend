@@ -272,15 +272,9 @@ paths:
 components:
   schemas:
     PaymentHistoryItem:
+      description: A payment history row, with the same registrationStatus and refund as GET /v1/payments/{id}.
       allOf:
         - { $ref: "#/components/schemas/PaymentIntent" }
-        - type: object
-          required: [refund]
-          properties:
-            refund:
-              oneOf:
-                - { $ref: "#/components/schemas/PaymentRefund" }
-                - { type: "null" }
     PaymentHistoryPage:
       type: object
       required: [data, page]

@@ -187,7 +187,8 @@ cannot register for new competitions: the eligibility check, free registration
 and M-Pesa checkout report the blocking issue `conduct_suspended`. An M-Pesa
 payment that completes after the player reached the limit creates a
 `withdrawal_pending` entry that never plays, together with a mandatory full
-refund; that entry holds a place against the competition's capacity until the
+refund (the payment reads `succeeded` with `registrationStatus`
+`refund_pending`); that entry holds a place against the competition's capacity until the
 refund succeeds. Entries the player already holds are not affected. The player is told when a strike is
 recorded and when one is removed.
 

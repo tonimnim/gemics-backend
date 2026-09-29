@@ -210,7 +210,7 @@ func (scanner countOnlyScanner) Scan(destinations ...any) error {
 }
 
 func TestPaymentAndVerificationScanColumnCounts(t *testing.T) {
-	if _, err := scanPaymentHistoryItem(countOnlyScanner{t, 32}); !errors.Is(err, errCountOnlyScanner) {
+	if _, err := scanPaymentIntent(countOnlyScanner{t, 33}); !errors.Is(err, errCountOnlyScanner) {
 		t.Fatalf("unexpected payment scan error: %v", err)
 	}
 	if _, err := scanRefund(countOnlyScanner{t, 15}); !errors.Is(err, errCountOnlyScanner) {

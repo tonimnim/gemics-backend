@@ -95,6 +95,7 @@ components:
         - currency
         - requirements
         - issues
+        - paymentId
         - evaluatedAt
       properties:
         competitionId: { type: string, format: uuid }
@@ -115,6 +116,15 @@ components:
         issues:
           type: array
           items: { $ref: "#/components/schemas/CompetitionEligibilityIssue" }
+        paymentId:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            The player's latest payment for this competition, or null. Whenever it is not null, read it with
+            GET /v1/payments/{id} and act on its status and registrationStatus, whatever requiredAction says; that
+            payment also carries the refund when requiredAction is view_refund. requiredAction is poll_payment while
+            the payment is unfinished (initiating, pending, callback_received or review), even when a blocking
+            issue such as registration_closed or competition_full stops a new entry.
         evaluatedAt: { type: string, format: date-time }
     CompetitionEligibilityRequirements:
       type: object

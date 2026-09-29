@@ -49,8 +49,12 @@ type paymentIntent struct {
 	CreatedAt                 time.Time  `json:"createdAt"`
 	UpdatedAt                 time.Time  `json:"updatedAt"`
 	CompletedAt               *time.Time `json:"completedAt"`
-	QueryAttempts             int        `json:"-"`
-	NextQueryAt               *time.Time `json:"-"`
+	// RegistrationStatus and Refund tell the payer whether a succeeded
+	// payment holds a place or is being returned (paymentRegistrationStatus).
+	RegistrationStatus string             `json:"registrationStatus"`
+	Refund             *paymentRefundView `json:"refund"`
+	QueryAttempts      int                `json:"-"`
+	NextQueryAt        *time.Time         `json:"-"`
 }
 
 type callbackEnvelope struct {
@@ -240,17 +244,13 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify the payment request.")
 		return
 	}
-	var occupied int
-	err = tx.QueryRow(r.Context(), `SELECT
-		(SELECT count(*) FROM competition_entries WHERE competition_id=$1 AND status NOT IN ('withdrawn','disqualified'))
-		+ (SELECT count(*) FROM payment_intents WHERE competition_id=$1 AND entry_id IS NULL
-		   AND status IN ('initiating','pending','callback_received','review'))`).Scan(&occupied)
-	if err != nil || occupied >= maxEntries {
-		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify registration capacity.")
-		} else {
-			writeError(w, http.StatusConflict, "competition_full", "This competition is full.")
-		}
+	occupied, err := countPaymentCapacityOccupied(r.Context(), tx, input.CompetitionID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify registration capacity.")
+		return
+	}
+	if occupied >= maxEntries {
+		writeError(w, http.StatusConflict, "competition_full", "This competition is full.")
 		return
 	}
 
@@ -542,6 +542,22 @@ const invalidTransactionTimestampReviewSQL = `UPDATE payment_intents SET status=
 const competitionCapacityEntriesSQL = `SELECT count(*) FROM competition_entries WHERE competition_id=$1
 	AND status NOT IN ('withdrawn','disqualified')`
 
+// paymentCapacityOccupiedSQL counts the places a new payment competes for:
+// active entries plus unfinished payments that have not created their entry.
+const paymentCapacityOccupiedSQL = `SELECT (` + competitionCapacityEntriesSQL + `)
+	+ (SELECT count(*) FROM payment_intents WHERE competition_id=$1 AND entry_id IS NULL
+	   AND status IN ('initiating','pending','callback_received','review'))`
+
+// countPaymentCapacityOccupied binds the competition to every placeholder of
+// paymentCapacityOccupiedSQL.
+func countPaymentCapacityOccupied(ctx context.Context, queryer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, competitionID string) (int, error) {
+	var occupied int
+	err := queryer.QueryRow(ctx, paymentCapacityOccupiedSQL, competitionID).Scan(&occupied)
+	return occupied, err
+}
+
 func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transactionDate string, payload []byte) error {
 	transactionAt := parseMPesaTime(transactionDate)
 	if transactionAt == nil {
@@ -826,18 +842,8 @@ func (s *Server) finishCallbackEvent(ctx context.Context, eventID int64, process
 }
 
 func (s *Server) loadPayment(ctx context.Context, paymentID, userID string) (paymentIntent, error) {
-	var result paymentIntent
-	var phone string
-	err := s.db.Writer.QueryRow(ctx, `SELECT id,competition_id,entry_id,amount_minor,currency,phone_e164,status,
-		merchant_request_id,checkout_request_id,provider_receipt,provider_result_code,
-		provider_result_description,created_at,updated_at,completed_at,query_attempts,next_query_at
-		FROM payment_intents WHERE id=$1 AND user_id=$2`, paymentID, userID).Scan(
-		&result.ID, &result.CompetitionID, &result.EntryID, &result.AmountMinor, &result.Currency, &phone, &result.Status,
-		&result.MerchantRequestID, &result.CheckoutRequestID, &result.ProviderReceipt, &result.ProviderResultCode,
-		&result.ProviderResultDescription, &result.CreatedAt, &result.UpdatedAt, &result.CompletedAt,
-		&result.QueryAttempts, &result.NextQueryAt)
-	result.MaskedPhone = maskPhone(phone)
-	return result, err
+	return scanPaymentIntent(s.db.Writer.QueryRow(ctx, paymentIntentSelect+`WHERE payment.id=$1 AND payment.user_id=$2`,
+		paymentID, userID))
 }
 
 func (s *Server) paymentVelocityAllowed(ctx context.Context, userID, phone, ip string) bool {

@@ -26,6 +26,8 @@ Build these player journeys:
    For a paid event, choose the connected game account and M-Pesa number, generate a
    new Idempotency-Key once, start STK Push, then poll the returned payment ID until
    it is `succeeded`, `failed` or `review`. Reuse the same key after network retries.
+   A `succeeded` payment is a registration only when its `registrationStatus` is
+   `registered`; `refund_pending` means the money is being returned.
 5. Receive match reminders, check in, view opponent and Friend Match instructions.
 6. Report the score blind (score and declaration only, no screenshot) without ever
    seeing what the opponent reported.

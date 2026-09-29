@@ -60,7 +60,10 @@ type competitionEligibilityResult struct {
 	Currency       string                      `json:"currency"`
 	Requirements   competitionEligibilityRules `json:"requirements"`
 	Issues         []eligibilityIssue          `json:"issues"`
-	EvaluatedAt    time.Time                   `json:"evaluatedAt"`
+	// PaymentID is the player's latest payment for the competition, so a
+	// client that lost the STK response can resume polling it.
+	PaymentID   *string   `json:"paymentId"`
+	EvaluatedAt time.Time `json:"evaluatedAt"`
 }
 
 type competitionEligibilityFacts struct {
@@ -253,7 +256,7 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 		CompetitionID: facts.CompetitionID, GameID: facts.GameID,
 		Status: eligibilityStatusEligible, Eligible: true, RequiredAction: "none",
 		EntryFeeMinor: facts.EntryFeeMinor, Currency: facts.Currency,
-		Requirements: policy, Issues: []eligibilityIssue{}, EvaluatedAt: now.UTC(),
+		Requirements: policy, Issues: []eligibilityIssue{}, PaymentID: facts.PaymentID, EvaluatedAt: now.UTC(),
 	}
 	blocking := func(code, category, message string) {
 		result.Issues = append(result.Issues, eligibilityIssue{Code: code, Category: category, Severity: "blocking", Message: message})
@@ -327,6 +330,12 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 	}
 
 	if !result.Eligible {
+		// An unfinished payment still settles after registration closed or the
+		// places filled: it registers the payer or is refunded, so the app keeps
+		// polling it whatever now blocks a new entry.
+		if paymentUnfinished(facts.PaymentStatus) {
+			result.RequiredAction = "poll_payment"
+		}
 		return result
 	}
 	if facts.EntryFeeMinor == 0 {
@@ -375,6 +384,16 @@ func eligibilityString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// paymentUnfinished reports whether a payment has yet to settle, so the app
+// polls it rather than starting another charge.
+func paymentUnfinished(status *string) bool {
+	switch eligibilityString(status) {
+	case "initiating", "pending", "callback_received", "review":
+		return true
+	}
+	return false
 }
 
 func (s *Server) getCompetitionEligibility(w http.ResponseWriter, r *http.Request) {

@@ -130,7 +130,7 @@ Route and render on `kind` and the ids in `data`; never parse the title or body.
 | `competition.entry_removed` | `result` | push | `resultPush` | Removed from tournament | `/matches/{matchId}` | `kind`, `competitionId`, `matchId` | Match room of the match that removed the entry |
 | `player.strike_recorded` | `account` | push | `resultPush` | Conduct strike recorded | null | `kind`, `strikeId` | Inbox item |
 | `player.strike_revoked` | `account` | inbox only | none | Conduct strike removed | null | `kind`, `strikeId` | Inbox item |
-| `payment.succeeded` | `payment` | inbox only | none | Payment received | `/payments/{paymentId}` | `kind`, `paymentId` | Payment status (`GET /v1/payments/{paymentId}`) |
+| `payment.succeeded` | `payment` | inbox only | none | Payment received | `/payments/{paymentId}` | `kind`, `paymentId` | Payment status (`GET /v1/payments/{paymentId}`); registered only when `registrationStatus` is `registered` |
 | `payment.reconciliation_review_required` | `payment` | inbox only | none | Payment needs review | `/payments/{paymentId}` | `kind`, `paymentId` | Payment status (`GET /v1/payments/{paymentId}`) |
 | `payment.review_marked_failed` | `payment` | inbox only | none | Payment not completed | `/payments/{paymentId}` | `kind`, `paymentId` | Payment status (`GET /v1/payments/{paymentId}`) |
 | `payment.refund_requested` | `payment` | inbox only | none | Refund requested | `/refunds/{refundId}` | `kind`, `refundId`, `status` | Refunds list (`GET /v1/me/refunds`) |
@@ -195,9 +195,38 @@ returned as `404`; the app must not try to distinguish those states.
 - `GET /v1/me/registrations` lists the player's entries.
 
 For paid entry, call `POST /v1/payments/mpesa/stk-push` with an `Idempotency-Key`, then
-poll `GET /v1/payments/{id}` until a terminal state. Never call the provider callback
-from the app. Payment and registration success must come from the backend, not from an
-STK screen or client timer.
+poll `GET /v1/payments/{id}` until `status` is `succeeded`, `failed` or `review`. Never
+call the provider callback from the app. Payment and registration success must come from
+the backend, not from an STK screen or client timer.
+
+`status=succeeded` only means M-Pesa confirmed the money. Show the outcome from
+`registrationStatus` on the same payment:
+
+| `registrationStatus` | Show |
+|---|---|
+| `pending` | Payment still being confirmed; keep polling (for `status=review`, see below) |
+| `registered` | Registered |
+| `refund_pending` | Payment received but no place; a full refund is on its way (`refund` has its status and reason) |
+| `refunded` | Refunded (`refund.completedAt`) |
+| `removed` | The entry was removed from the competition |
+| `not_registered` | Not registered, for example after a failed payment |
+
+A payment that completes after its place is gone (the competition was cancelled, the
+draw was made, registration ended, the places filled or the player reached the conduct
+strike limit) reads `succeeded` with `registrationStatus=refund_pending`; never show it
+as a registration.
+
+`status=review` (`registrationStatus=pending`) means Gamics is checking the outcome with
+M-Pesa. Show "Payment under review. You will not be charged twice", stop fast polling,
+and read the payment again when the player reopens the screen or a `payment.*`
+notification arrives. Never start another payment for that competition.
+
+If the app restarts during a payment, `GET /v1/competitions/{id}/eligibility` returns
+the player's latest `paymentId`. Whenever `paymentId` is not null, read
+`GET /v1/payments/{paymentId}` and act on its `status` and `registrationStatus`,
+whatever `requiredAction` says. `requiredAction` is `poll_payment` while that payment is
+unfinished, even when registration has since closed or filled: the payment can still
+register the player or be refunded.
 
 - `GET /v1/me/payments` lists durable payment/receipt history.
 - `GET /v1/me/refunds` lists refund state.
