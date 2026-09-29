@@ -36,6 +36,17 @@ const eslintConfig = defineConfig([
       },
     },
   },
+  {
+    // k6 load scripts run in k6's runtime, which provides these globals.
+    files: ["tools/load/**/*.js"],
+    languageOptions: {
+      globals: {
+        __ENV: "readonly",
+        __VU: "readonly",
+        __ITER: "readonly",
+      },
+    },
+  },
 ]);
 
 export default eslintConfig;
