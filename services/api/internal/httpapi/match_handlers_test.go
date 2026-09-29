@@ -268,6 +268,151 @@ func TestMatchRoomJSONCarriesTheWinnerAndOutcome(t *testing.T) {
 	}
 }
 
+func TestMatchRoomScopesEntryRemovedToTheRemovingMatch(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	home, away := "home-entry", "away-entry"
+	removedAt := now.Add(-time.Hour)
+	removal := func(side, entryID, reason string) matchRemovalView {
+		return matchRemovalView{Side: side, EntryID: entryID, ReasonCode: reason, RemovedAt: removedAt}
+	}
+	disqualified := "disqualified"
+	tests := []struct {
+		name         string
+		state        string
+		winner       *string
+		viewer       string
+		status       *string
+		removals     []matchRemovalView
+		entryRemoved bool
+		outcome      string
+	}{
+		{"an earlier win of an entry removed later", "completed", &home, "home", &disqualified, nil, false, "won"},
+		{"the match that removed the viewer", "forfeit", &away, "home", &disqualified,
+			[]matchRemovalView{removal("home", home, "report_timeout")}, true, "lost"},
+		{"the winner sees the opponent's removal", "forfeit", &away, "away", nil,
+			[]matchRemovalView{removal("home", home, "report_timeout")}, false, "won"},
+		{"both entries removed", "cancelled", nil, "away", &disqualified,
+			[]matchRemovalView{removal("home", home, "no_result_reported"), removal("away", away, "no_result_reported")},
+			true, "no_result"},
+		{"a double no-show removes nobody", "cancelled", nil, "home", nil, nil, false, "no_result"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			viewerEntry := home
+			if test.viewer == "away" {
+				viewerEntry = away
+			}
+			record := matchRecord{State: test.state, CurrentSide: test.viewer, CurrentEntryID: viewerEntry,
+				CurrentEntryStatus: test.status, HomeEntryID: &home, AwayEntryID: &away, WinnerEntryID: test.winner,
+				Removals: test.removals}
+			room := record.response("player", now)
+			if room.ResultVerification.EntryRemoved != test.entryRemoved || optionalValue(room.Outcome) != test.outcome {
+				t.Fatalf("entryRemoved=%v outcome=%q, want %v %q", room.ResultVerification.EntryRemoved,
+					optionalValue(room.Outcome), test.entryRemoved, test.outcome)
+			}
+			if room.Removals == nil || len(room.Removals) != len(test.removals) ||
+				(len(test.removals) > 0 && !slices.Equal(room.Removals, test.removals)) {
+				t.Fatalf("removals = %+v, want %+v", room.Removals, test.removals)
+			}
+		})
+	}
+}
+
+func TestMatchRoomRemovalsJSONCarriesNoScore(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	home, away := "home-entry", "away-entry"
+	record := matchRecord{State: "forfeit", CurrentSide: "away", CurrentEntryID: away, HomeEntryID: &home,
+		AwayEntryID: &away, WinnerEntryID: &away, ConfirmedResult: &matchConfirmedResultResponse{HomeScore: 7, AwayScore: 3}}
+	raw, err := json.Marshal(record.response("away-player", now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"removals":[]`) {
+		t.Fatalf("a match without removals must carry an empty list: %s", raw)
+	}
+	if err = record.decodeRemovals([]byte(`[{"side":"home","entryId":"home-entry","reasonCode":"report_timeout",
+		"removedAt":"2026-09-28T14:31:00.123456+03:00"}]`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := record.Removals[0].RemovedAt; !got.Equal(time.Date(2026, 9, 28, 11, 31, 0, 123456000, time.UTC)) ||
+		got.Location() != time.UTC {
+		t.Fatalf("removedAt was not normalized to UTC: %s", got)
+	}
+	raw, err = json.Marshal(record.response("away-player", now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var room struct {
+		Removals []map[string]json.RawMessage `json:"removals"`
+	}
+	if err = json.Unmarshal(raw, &room); err != nil {
+		t.Fatal(err)
+	}
+	if len(room.Removals) != 1 || !slices.Equal(slices.Sorted(maps.Keys(room.Removals[0])),
+		[]string{"entryId", "reasonCode", "removedAt", "side"}) {
+		t.Fatalf("unexpected removals: %s", raw)
+	}
+	if strings.Contains(string(raw), `"homeScore":7`) {
+		t.Fatalf("a forfeit room leaks a score: %s", raw)
+	}
+	if err = (&matchRecord{}).decodeRemovals(nil); err != nil {
+		t.Fatalf("no removal row must decode as empty: %v", err)
+	}
+}
+
+func TestMatchPresentationNeverOffersFixturesOfEntriesThatLeft(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	opens, closes := now.Add(-5*time.Minute), now.Add(5*time.Minute)
+	homeID, awayID := "home-player", "away-player"
+	status := func(value string) *string { return &value }
+	tests := []struct {
+		name      string
+		state     string
+		status    *string
+		lifecycle string
+		actions   []string
+	}{
+		{"pending fixture of a removed entry", "pending", status("disqualified"), "out_of_competition", nil},
+		{"pending fixture of a withdrawn entry", "pending", status("withdrawn"), "out_of_competition", nil},
+		{"open check-in of a removed entry", "ready", status("disqualified"), "out_of_competition", nil},
+		{"live match of a withdrawn entry", "in_progress", status("withdrawn"), "out_of_competition", nil},
+		{"the removing forfeit stays forfeited", "forfeit", status("disqualified"), "forfeited", nil},
+		{"a cancelled match stays cancelled", "cancelled", status("disqualified"), "cancelled", nil},
+		{"pending fixture of a live entry", "pending", status("accepted"), "assigned", nil},
+		{"a pending withdrawal still plays", "ready", status("withdrawal_pending"), "ready_for_check_in", []string{"check_in"}},
+		{"open check-in of a live entry", "ready", nil, "ready_for_check_in", []string{"check_in"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := matchRecord{State: test.state, CurrentSide: "home", CurrentEntryStatus: test.status,
+				HomePlayerID: &homeID, AwayPlayerID: &awayID}
+			lifecycle, actions := record.presentation(now, &opens, &closes)
+			if lifecycle != test.lifecycle || !slices.Equal(actions, test.actions) {
+				t.Fatalf("presentation = %q %v, want %q %v", lifecycle, actions, test.lifecycle, test.actions)
+			}
+		})
+	}
+}
+
+func TestMatchQueriesScopeRemovalsAndTheActiveList(t *testing.T) {
+	for _, fragment := range []string{
+		"m.state IN ('pending','ready','in_progress','awaiting_confirmation','disputed')",
+		"AND mine_entry.status NOT IN ('withdrawn','disqualified')",
+	} {
+		if !strings.Contains(activeMatchClause, fragment) {
+			t.Errorf("activeMatchClause does not contain %q", fragment)
+		}
+	}
+	// Removals are read by primary key and only for this match.
+	if !strings.Contains(matchSelectColumns,
+		"WHERE removal.entry_id IN (m.home_entry_id,m.away_entry_id) AND removal.match_id=m.id") {
+		t.Error("matchSelectColumns does not scope removals to this match")
+	}
+	if strings.Contains(matchSelectColumns, "mine_entry.status='disqualified'") {
+		t.Error("entryRemoved must not come from the entry's current status")
+	}
+}
+
 func TestOpenAPIMatchSummaryDeclaresTheOutcome(t *testing.T) {
 	summary := openAPIBlock(t, openAPIFile(t, "openapi.yaml"), "MatchSummary", 4)
 	for field, want := range map[string][]string{
@@ -280,6 +425,23 @@ func TestOpenAPIMatchSummaryDeclaresTheOutcome(t *testing.T) {
 		if got := openAPIEnum(t, openAPIBlock(t, summary, field, 8)); !slices.Equal(got, want) {
 			t.Errorf("MatchSummary %s enum = %v, want %v", field, got, want)
 		}
+	}
+}
+
+func TestOpenAPIMatchRoomDeclaresItsRemovals(t *testing.T) {
+	contract := openAPIFile(t, "openapi.yaml")
+	room := openAPIBlock(t, contract, "MatchRoom", 4)
+	if !strings.Contains(room, "\n            - removals\n") || !strings.Contains(room, "#/components/schemas/MatchRemoval'") {
+		t.Error("MatchRoom does not require its removals")
+	}
+	removal := openAPIBlock(t, contract, "MatchRemoval", 4)
+	// The reason codes are exactly the competition_entry_removals CHECK list.
+	if got := openAPIEnum(t, openAPIBlock(t, removal, "reasonCode", 8)); !slices.Equal(got,
+		[]string{"report_timeout", "response_timeout", "no_result_reported", "platform_review"}) {
+		t.Errorf("MatchRemoval reasonCode enum = %v", got)
+	}
+	if strings.Contains(strings.ToLower(removal), "score:") {
+		t.Error("MatchRemoval must not carry a score")
 	}
 }
 

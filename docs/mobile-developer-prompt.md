@@ -100,7 +100,9 @@ drive actions only from `lifecycle` and `allowedActions`; `awaiting_resolution`
 means a deadline has passed and the server is settling the match. When the match is
 over, `lifecycle` is `completed`, `forfeited` or `cancelled`, and `outcome` (`won`,
 `lost`, `drawn` or `no_result`) tells the player how it ended for them, including a
-forfeit, which has no score; explain it with `completionReason`.
+forfeit, which has no score; explain it with `completionReason`. Show a removal
+only on the match whose `resultVerification.entryRemoved` is true; a removed
+player's unplayed fixtures show `out_of_competition` and leave the active list.
 
 Cloudflare R2 is the selected private object store; the client uses only API-issued
 URLs and never needs Cloudflare credentials or a hard-coded bucket URL.

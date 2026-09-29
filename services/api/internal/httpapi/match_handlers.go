@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -82,6 +83,16 @@ type matchResultVerificationResponse struct {
 	EntryRemoved      bool             `json:"entryRemoved"`
 }
 
+// matchRemovalView is an entry this match removed from the tournament. A
+// removal is public once it happened, so both viewers see both sides' rows;
+// it never carries a score.
+type matchRemovalView struct {
+	Side       string    `json:"side"`
+	EntryID    string    `json:"entryId"`
+	ReasonCode string    `json:"reasonCode"`
+	RemovedAt  time.Time `json:"removedAt"`
+}
+
 // matchConfirmedResultResponse is the canonical score, shown once the match
 // is completed.
 type matchConfirmedResultResponse struct {
@@ -125,6 +136,7 @@ type matchRoomResponse struct {
 	VerificationPolicy      matchVerificationPolicyResponse `json:"verificationPolicy"`
 	ResultVerification      matchResultVerificationResponse `json:"resultVerification"`
 	Result                  *matchConfirmedResultResponse   `json:"result"`
+	Removals                []matchRemovalView              `json:"removals"`
 	AllowedActions          []string                        `json:"allowedActions"`
 	FriendMatchInstructions []friendMatchInstruction        `json:"friendMatchInstructions"`
 }
@@ -200,6 +212,7 @@ type matchRecord struct {
 	OpponentReported       bool
 	OpponentResponded      bool
 	ConfirmedResult        *matchConfirmedResultResponse
+	Removals               []matchRemovalView
 }
 
 type matchCursor struct {
@@ -223,6 +236,13 @@ type matchQueryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
+// activeMatchClause selects the viewer's unfinished matches. A withdrawn or
+// removed entry plays no further match, so its unreleased round-robin fixtures
+// stay out of the active list; release settles them as walkovers, and they
+// then appear in history.
+const activeMatchClause = `m.state IN ('pending','ready','in_progress','awaiting_confirmation','disputed')
+		AND mine_entry.status NOT IN ('withdrawn','disqualified')`
+
 const matchSelectColumns = `
 	SELECT m.id::text,m.competition_id::text,c.name,c.game_id,g.name,
 		m.stage_id::text,stage.name,stage.format,stage.best_of,stage.config,c.rules_snapshot,
@@ -235,7 +255,8 @@ const matchSelectColumns = `
 		away_player.user_id,away_player.handle,away_player.display_name,away_checkin.checked_in_at,
 		verification.phase,verification.report_window_seconds,verification.reminder_lead_seconds,
 		verification.response_window_seconds,verification.report_deadline_at,verification.response_deadline_at,
-		verification.resolution,my_reports.reports,opponent.reported,opponent.responded,confirmed.result
+		verification.resolution,my_reports.reports,opponent.reported,opponent.responded,confirmed.result,
+		removed.removals
 	FROM matches m
 	JOIN competitions c ON c.id=m.competition_id
 	JOIN games g ON g.id=c.game_id
@@ -301,6 +322,14 @@ const matchSelectColumns = `
 		FROM result_submissions submission
 		WHERE m.state='completed' AND submission.match_id=m.id AND submission.status='confirmed'
 	) confirmed ON true
+	LEFT JOIN LATERAL (
+		SELECT json_agg(json_build_object(
+			'side',CASE WHEN removal.entry_id=m.home_entry_id THEN 'home' ELSE 'away' END,
+			'entryId',removal.entry_id::text,'reasonCode',removal.reason_code,'removedAt',removal.removed_at)
+			ORDER BY removal.entry_id=m.away_entry_id) AS removals
+		FROM competition_entry_removals removal
+		WHERE removal.entry_id IN (m.home_entry_id,m.away_entry_id) AND removal.match_id=m.id
+	) removed ON true
 `
 
 func (s *Server) listMyMatches(w http.ResponseWriter, r *http.Request) {
@@ -556,7 +585,7 @@ func (s *Server) queryMatchPage(ctx context.Context, pool *pgxpool.Pool, userID,
 	if pool == nil {
 		return nil, errors.New("database pool is unavailable")
 	}
-	stateClause := "m.state IN ('pending','ready','in_progress','awaiting_confirmation','disputed')"
+	stateClause := activeMatchClause
 	comparison := ">"
 	direction := "ASC"
 	if state == "history" {
@@ -602,7 +631,7 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 	records := make([]matchRecord, 0)
 	for rows.Next() {
 		var record matchRecord
-		var reports, confirmed []byte
+		var reports, confirmed, removals []byte
 		if err := rows.Scan(
 			&record.ID, &record.CompetitionID, &record.CompetitionName, &record.GameID, &record.GameName,
 			&record.StageID, &record.StageName, &record.StageFormat, &record.BestOf, &record.StageConfig, &record.RulesSnapshot,
@@ -615,10 +644,14 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 			&record.VerificationPhase, &record.ReportWindowSeconds, &record.ReminderLeadSeconds,
 			&record.ResponseWindowSeconds, &record.ReportDeadlineAt, &record.ResponseDeadlineAt,
 			&record.VerificationResolution, &reports, &record.OpponentReported, &record.OpponentResponded, &confirmed,
+			&removals,
 		); err != nil {
 			return nil, err
 		}
 		if err := record.decodeResultViews(reports, confirmed); err != nil {
+			return nil, err
+		}
+		if err := record.decodeRemovals(removals); err != nil {
 			return nil, err
 		}
 		records = append(records, record)
@@ -655,6 +688,22 @@ func (record *matchRecord) decodeResultViews(reports, confirmed []byte) error {
 	return nil
 }
 
+// decodeRemovals reads the entries this match removed, home side first, which
+// the room query builds as JSON. No row means nobody was removed here.
+func (record *matchRecord) decodeRemovals(raw []byte) error {
+	record.Removals = []matchRemovalView{}
+	if len(raw) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, &record.Removals); err != nil {
+		return err
+	}
+	for index := range record.Removals {
+		record.Removals[index].RemovedAt = record.Removals[index].RemovedAt.UTC()
+	}
+	return nil
+}
+
 func (record matchRecord) response(userID string, now time.Time) matchRoomResponse {
 	opensAt, closesAt := record.checkInWindow()
 	lifecycle, actions := record.presentation(now, opensAt, closesAt)
@@ -679,6 +728,10 @@ func (record matchRecord) response(userID string, now time.Time) matchRoomRespon
 		AllowedActions: actions, FriendMatchInstructions: settings.Instructions,
 		VerificationPolicy: resolveMatchVerificationPolicy(record.verificationSettings(settings.Verification)),
 		ResultVerification: record.resultVerification(),
+		Removals:           record.Removals,
+	}
+	if room.Removals == nil {
+		room.Removals = []matchRemovalView{}
 	}
 	if record.State == "completed" {
 		room.Result = record.ConfirmedResult
@@ -700,13 +753,14 @@ func (record matchRecord) verificationSettings(resolved matchVerificationSetting
 }
 
 // resultVerification is the viewer's blind view. Each deadline is shown only
-// in the phase it governs.
+// in the phase it governs. entryRemoved is scoped to this match: an entry
+// removed by a later match keeps false on the matches it played before.
 func (record matchRecord) resultVerification() matchResultVerificationResponse {
 	view := matchResultVerificationResponse{
 		Phase: "not_started", MyReport: record.MyInitialReport, MyFinalReport: record.MyFinalReport,
 		OpponentReported: record.OpponentReported, OpponentResponded: record.OpponentResponded,
 		Resolution:   record.VerificationResolution,
-		EntryRemoved: record.CurrentEntryStatus != nil && *record.CurrentEntryStatus == "disqualified",
+		EntryRemoved: record.removedHere(record.CurrentEntryID),
 	}
 	if record.VerificationPhase != nil {
 		view.Phase = *record.VerificationPhase
@@ -718,6 +772,22 @@ func (record matchRecord) resultVerification() matchResultVerificationResponse {
 		view.ResponseDeadline = utcTime(record.ResponseDeadlineAt)
 	}
 	return view
+}
+
+// removedHere reports whether this match removed the entry from the
+// tournament.
+func (record matchRecord) removedHere(entryID string) bool {
+	return entryID != "" && slices.ContainsFunc(record.Removals, func(removal matchRemovalView) bool {
+		return removal.EntryID == entryID
+	})
+}
+
+// viewerEntryLive is false once the viewer's entry was withdrawn or removed:
+// it plays no further match, and its unreleased fixtures are settled without
+// it when their round is released.
+func (record matchRecord) viewerEntryLive() bool {
+	return record.CurrentEntryStatus == nil ||
+		*record.CurrentEntryStatus != "withdrawn" && *record.CurrentEntryStatus != "disqualified"
 }
 
 func summarizeMatch(room matchRoomResponse) matchSummaryResponse {
@@ -766,9 +836,13 @@ func (record matchRecord) checkInWindow() (*time.Time, *time.Time) {
 
 // presentation derives the viewer's lifecycle and actions. An action is offered
 // only while its deadline is open, so none fails with a closed window;
-// awaiting_resolution covers the gap until the worker acts on a deadline.
+// awaiting_resolution covers the gap until the worker acts on a deadline. An
+// unfinished match of a withdrawn or removed entry is never shown as playable.
 func (record matchRecord) presentation(now time.Time, opensAt, closesAt *time.Time) (string, []string) {
 	actions := make([]string, 0, 1)
+	if !isProgressionTerminal(record.State) && !record.viewerEntryLive() {
+		return "out_of_competition", actions
+	}
 	switch record.State {
 	case "pending":
 		return "assigned", actions

@@ -143,7 +143,7 @@ func TestOpenAPIResultVerificationEnums(t *testing.T) {
 	}{
 		{"match-score-reports.paths.yaml", "MatchLifecycle", []string{"assigned", "ready_for_check_in", "checked_in",
 			"report_required", "awaiting_opponent_report", "mismatch_response_required", "awaiting_opponent_response",
-			"awaiting_resolution", "under_review", "forfeited", "completed", "cancelled"}},
+			"awaiting_resolution", "under_review", "forfeited", "completed", "cancelled", "out_of_competition"}},
 		{"match-score-reports.paths.yaml", "MatchAllowedAction", []string{"check_in", "report_score", "submit_final_score"}},
 		{"match-score-reports.paths.yaml", "MatchCompletionReason", []string{"played", "walkover", "double_no_show",
 			"timeout_forfeit", "reset_not_required", "correction_voided", "report_timeout", "response_timeout",

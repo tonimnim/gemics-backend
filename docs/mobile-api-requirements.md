@@ -124,7 +124,7 @@ Route and render on `kind` and the ids in `data`; never parse the title or body.
 | `result.mismatch` | `result` | push | `resultPush` | Scores don't match | `/matches/{matchId}` | `kind`, `matchId` | Match room, final score |
 | `result.under_review` | `result` | push | `resultPush` | Result under review | `/matches/{matchId}` | `kind`, `matchId` | Match room |
 | `result.review_decided` | `result` | push | `resultPush` | Review complete | `/matches/{matchId}` | `kind`, `matchId` | Match room |
-| `competition.entry_removed` | `result` | push | `resultPush` | Removed from tournament | `/matches/{matchId}` | `kind`, `competitionId`, `matchId` | Match room of the match that removed the entry |
+| `competition.entry_removed` | `result` | push | `resultPush` | Removed from tournament | `/matches/{matchId}` | `kind`, `competitionId`, `matchId` | Match room of the match that removed the entry (`entryRemoved`, `removals`) |
 | `player.strike_recorded` | `account` | push | `resultPush` | Conduct strike recorded | null | `kind`, `strikeId` | Inbox item |
 | `player.strike_revoked` | `account` | inbox only | none | Conduct strike removed | null | `kind`, `strikeId` | Inbox item |
 | `payment.succeeded` | `payment` | inbox only | none | Payment received | `/payments/{paymentId}` | `kind`, `paymentId` | Payment status (`GET /v1/payments/{paymentId}`); registered only when `registrationStatus` is `registered` |
@@ -296,7 +296,9 @@ same key. OpenAPI lists the codes of every entry operation per status.
 
 ### 7. Match room, evidence, and result verification
 
-- `GET /v1/me/matches?state=active|history`
+- `GET /v1/me/matches?state=active|history`. `active` leaves out the unplayed
+  fixtures of an entry that was removed or withdrew; they reach `history` once their
+  round's release settles them as walkovers.
 - `GET /v1/matches/{matchId}` returns `lifecycle`, `allowedActions`,
   `verificationPolicy` (report window, reminder lead, response window, screenshot
   rules), `resultVerification`, `result`, `completionReason`, `outcome`,
@@ -317,6 +319,7 @@ the state or a local timer.
 | `forfeited` | The match was decided without a score (forfeit or walkover) | none |
 | `completed` | A score was confirmed and is in `result` | none |
 | `cancelled` | The match ended with no result; `completionReason` says why | none |
+| `out_of_competition` | Your entry was removed or withdrew before this fixture was played; it will be settled without you | none |
 
 Once the match is over, `outcome` gives the result from your side: `won` or `lost`
 (also for a forfeit or walkover), `drawn` for a round-robin draw, or `no_result` for
@@ -341,9 +344,19 @@ the result screen from `lifecycle` and its wording from `outcome` and
 
 The room is blind. `resultVerification` holds only your entry's own reports
 (`myReport`, `myFinalReport`), whether the opponent reported or responded, the
-deadline of the current phase, the resolution, and `entryRemoved` when your entry
-was removed from the tournament. It never contains the opponent's score. The
-confirmed score appears in `result` once the match is completed.
+deadline of the current phase, the resolution, and `entryRemoved`. It never
+contains the opponent's score. The confirmed score appears in `result` once the
+match is completed.
+
+`entryRemoved` is true only on the match that removed your entry from the
+tournament; the matches your entry played before keep `false`, so an earlier win
+never shows a removal banner. The room's `removals` lists the entries this match
+removed, home side first: `side`, `entryId`, `reasonCode` (`report_timeout`,
+`response_timeout`, `no_result_reported` or `platform_review`) and `removedAt`. It is
+empty for most matches, shows both sides' removals to both players once the match
+is decided, and never carries a score. Show the removal banner only when
+`entryRemoved` is true, and use `removals` to tell the winner why the opponent is
+out.
 
 Evidence flow (screenshots are needed only for a final score after a mismatch):
 
