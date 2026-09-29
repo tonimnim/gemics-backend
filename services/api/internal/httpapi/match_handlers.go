@@ -115,6 +115,8 @@ type matchRoomResponse struct {
 	State                   string                          `json:"state"`
 	CompletionReason        *string                         `json:"completionReason"`
 	Lifecycle               string                          `json:"lifecycle"`
+	WinnerSide              *string                         `json:"winnerSide"`
+	Outcome                 *string                         `json:"outcome"`
 	Version                 int                             `json:"version"`
 	CurrentPlayerID         string                          `json:"currentPlayerId"`
 	CurrentPlayerSide       string                          `json:"currentPlayerSide"`
@@ -139,6 +141,8 @@ type matchSummaryResponse struct {
 	CheckInClosesAt   *time.Time                `json:"checkInClosesAt"`
 	State             string                    `json:"state"`
 	Lifecycle         string                    `json:"lifecycle"`
+	WinnerSide        *string                   `json:"winnerSide"`
+	Outcome           *string                   `json:"outcome"`
 	Version           int                       `json:"version"`
 	CurrentPlayerSide string                    `json:"currentPlayerSide"`
 	Home              *matchParticipantResponse `json:"home"`
@@ -173,6 +177,9 @@ type matchRecord struct {
 	CurrentEntryID         string
 	CurrentEntryStatus     *string
 	CurrentSide            string
+	HomeEntryID            *string
+	AwayEntryID            *string
+	WinnerEntryID          *string
 	HomePlayerID           *string
 	HomeHandle             *string
 	HomeDisplayName        *string
@@ -223,6 +230,7 @@ const matchSelectColumns = `
 		m.check_in_opens_at,m.check_in_closes_at,m.result_due_at,m.completed_at,m.version,
 		COALESCE(m.completed_at,m.scheduled_at,m.created_at),mine.entry_id::text,mine_entry.status,
 		CASE WHEN mine.entry_id=m.home_entry_id THEN 'home' ELSE 'away' END,
+		m.home_entry_id::text,m.away_entry_id::text,m.winner_entry_id::text,
 		home_player.user_id,home_player.handle,home_player.display_name,home_checkin.checked_in_at,
 		away_player.user_id,away_player.handle,away_player.display_name,away_checkin.checked_in_at,
 		verification.phase,verification.report_window_seconds,verification.reminder_lead_seconds,
@@ -601,6 +609,7 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 			&record.Bracket, &record.RoundNumber, &record.MatchNumber, &record.State, &record.CompletionReason, &record.ScheduledAt,
 			&record.CheckInOpensAt, &record.CheckInClosesAt, &record.ResultDueAt, &record.CompletedAt, &record.Version,
 			&record.SortAt, &record.CurrentEntryID, &record.CurrentEntryStatus, &record.CurrentSide,
+			&record.HomeEntryID, &record.AwayEntryID, &record.WinnerEntryID,
 			&record.HomePlayerID, &record.HomeHandle, &record.HomeDisplayName, &record.HomeCheckedInAt,
 			&record.AwayPlayerID, &record.AwayHandle, &record.AwayDisplayName, &record.AwayCheckedInAt,
 			&record.VerificationPhase, &record.ReportWindowSeconds, &record.ReminderLeadSeconds,
@@ -649,6 +658,7 @@ func (record *matchRecord) decodeResultViews(reports, confirmed []byte) error {
 func (record matchRecord) response(userID string, now time.Time) matchRoomResponse {
 	opensAt, closesAt := record.checkInWindow()
 	lifecycle, actions := record.presentation(now, opensAt, closesAt)
+	winnerSide, outcome := record.outcome()
 	settings := resolveMatchSettings(record.GameID, record.StageFormat, record.RulesSnapshot, record.StageConfig)
 	roundName := fmt.Sprintf("Round %d", record.RoundNumber)
 	if record.StageFormat == "round_robin" {
@@ -663,7 +673,7 @@ func (record matchRecord) response(userID string, now time.Time) matchRoomRespon
 		ScheduledAt: utcTime(record.ScheduledAt), CheckInOpensAt: utcTime(opensAt), CheckInClosesAt: utcTime(closesAt),
 		ResultDueAt: utcTime(record.ResultDueAt), CompletedAt: utcTime(record.CompletedAt),
 		State: record.State, CompletionReason: record.CompletionReason, Lifecycle: lifecycle, Version: record.Version,
-		CurrentPlayerID: userID, CurrentPlayerSide: record.CurrentSide,
+		WinnerSide: winnerSide, Outcome: outcome, CurrentPlayerID: userID, CurrentPlayerSide: record.CurrentSide,
 		Home:           participantResponse(record.HomePlayerID, record.HomeHandle, record.HomeDisplayName, "home", record.HomeCheckedInAt),
 		Away:           participantResponse(record.AwayPlayerID, record.AwayHandle, record.AwayDisplayName, "away", record.AwayCheckedInAt),
 		AllowedActions: actions, FriendMatchInstructions: settings.Instructions,
@@ -715,7 +725,7 @@ func summarizeMatch(room matchRoomResponse) matchSummaryResponse {
 		ID: room.ID, Code: room.Code, CompetitionID: room.CompetitionID, CompetitionName: room.CompetitionName,
 		GameID: room.GameID, GameName: room.GameName, RoundName: room.RoundName,
 		ScheduledAt: room.ScheduledAt, CheckInClosesAt: room.CheckInClosesAt,
-		State: room.State, Lifecycle: room.Lifecycle, Version: room.Version,
+		State: room.State, Lifecycle: room.Lifecycle, WinnerSide: room.WinnerSide, Outcome: room.Outcome, Version: room.Version,
 		CurrentPlayerSide: room.CurrentPlayerSide, Home: room.Home, Away: room.Away,
 		AllowedActions: room.AllowedActions,
 	}
@@ -802,11 +812,49 @@ func (record matchRecord) presentation(now time.Time, opensAt, closesAt *time.Ti
 		}
 	case "forfeit":
 		return "forfeited", actions
-	case "completed", "cancelled":
+	case "completed":
 		return "completed", actions
+	case "cancelled":
+		return "cancelled", actions
 	default:
 		return "assigned", actions
 	}
+}
+
+// outcome says who won a terminal match, from matches.winner_entry_id, the
+// same field the bracket and the standings read. winnerSide is the same for
+// both viewers; outcome is from the viewer's side. Both are nil while the match
+// is live, and a cancelled match has no winner and no result.
+func (record matchRecord) outcome() (*string, *string) {
+	var winnerSide, outcome string
+	switch record.State {
+	case "completed", "forfeit":
+		switch {
+		case record.WinnerEntryID != nil && sameOptionalString(record.WinnerEntryID, record.HomeEntryID):
+			winnerSide = "home"
+		case record.WinnerEntryID != nil && sameOptionalString(record.WinnerEntryID, record.AwayEntryID):
+			winnerSide = "away"
+		}
+		switch {
+		case winnerSide == "" && record.State == "completed" && record.WinnerEntryID == nil:
+			outcome = "drawn"
+		case winnerSide == "":
+			// A forfeit always names a winner, and the winner plays the match.
+			outcome = "no_result"
+		case winnerSide == record.CurrentSide:
+			outcome = "won"
+		default:
+			outcome = "lost"
+		}
+	case "cancelled":
+		outcome = "no_result"
+	default:
+		return nil, nil
+	}
+	if winnerSide == "" {
+		return nil, &outcome
+	}
+	return &winnerSide, &outcome
 }
 
 // deadlineOpen reports whether now is strictly before the deadline, so the

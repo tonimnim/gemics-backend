@@ -118,7 +118,7 @@ func TestMatchPresentationFollowsTheBlindReportPhases(t *testing.T) {
 			"under_review", nil},
 		{"forfeit", matchRecord{State: "forfeit"}, "forfeited", nil},
 		{"completed", matchRecord{State: "completed"}, "completed", nil},
-		{"cancelled", matchRecord{State: "cancelled"}, "completed", nil},
+		{"cancelled", matchRecord{State: "cancelled"}, "cancelled", nil},
 		{"pending", matchRecord{State: "pending"}, "assigned", nil},
 	}
 	for _, test := range tests {
@@ -185,6 +185,110 @@ func TestMatchRoomShowsTheConfirmedResultOnlyWhenCompleted(t *testing.T) {
 			t.Fatalf("%s match shows a result: %+v", state, room.Result)
 		}
 	}
+}
+
+func TestMatchRoomSaysWhoWonFromTheViewerSide(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	home, away, stranger := "home-entry", "away-entry", "other-entry"
+	tests := []struct {
+		name       string
+		state      string
+		winner     *string
+		viewer     string
+		lifecycle  string
+		winnerSide string
+		outcome    string
+	}{
+		{"home wins, home views", "completed", &home, "home", "completed", "home", "won"},
+		{"home wins, away views", "completed", &home, "away", "completed", "home", "lost"},
+		{"away wins, home views", "completed", &away, "home", "completed", "away", "lost"},
+		{"away wins, away views", "completed", &away, "away", "completed", "away", "won"},
+		{"round-robin draw", "completed", nil, "away", "completed", "", "drawn"},
+		{"home wins by forfeit, home views", "forfeit", &home, "home", "forfeited", "home", "won"},
+		{"home wins by forfeit, away views", "forfeit", &home, "away", "forfeited", "home", "lost"},
+		{"away wins by forfeit, home views", "forfeit", &away, "home", "forfeited", "away", "lost"},
+		{"away wins by forfeit, away views", "forfeit", &away, "away", "forfeited", "away", "won"},
+		{"forfeit without a winner", "forfeit", nil, "home", "forfeited", "", "no_result"},
+		{"winner outside the match", "completed", &stranger, "home", "completed", "", "no_result"},
+		{"cancelled, home views", "cancelled", nil, "home", "cancelled", "", "no_result"},
+		{"cancelled, away views", "cancelled", nil, "away", "cancelled", "", "no_result"},
+		{"cancelled with a stale winner", "cancelled", &home, "home", "cancelled", "", "no_result"},
+		{"pending", "pending", nil, "home", "assigned", "", ""},
+		{"ready", "ready", nil, "away", "assigned", "", ""},
+		{"in progress", "in_progress", nil, "home", "checked_in", "", ""},
+		{"awaiting the second report", "awaiting_confirmation", nil, "home", "awaiting_resolution", "", ""},
+		{"disputed", "disputed", nil, "away", "under_review", "", ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := matchRecord{State: test.state, CurrentSide: test.viewer, HomeEntryID: &home, AwayEntryID: &away,
+				WinnerEntryID: test.winner}
+			room := record.response("player", now)
+			summary := summarizeMatch(room)
+			for name, got := range map[string][3]string{
+				"room":    {room.Lifecycle, optionalValue(room.WinnerSide), optionalValue(room.Outcome)},
+				"summary": {summary.Lifecycle, optionalValue(summary.WinnerSide), optionalValue(summary.Outcome)},
+			} {
+				if want := [3]string{test.lifecycle, test.winnerSide, test.outcome}; got != want {
+					t.Fatalf("%s lifecycle/winnerSide/outcome = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestMatchRoomJSONCarriesTheWinnerAndOutcome(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	home, away, reason := "home-entry", "away-entry", "timeout_forfeit"
+	record := matchRecord{ID: testMatchID, State: "forfeit", CompletionReason: &reason, CurrentSide: "away",
+		HomeEntryID: &home, AwayEntryID: &away, WinnerEntryID: &home}
+	decode := func(value any) map[string]json.RawMessage {
+		t.Helper()
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err = json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		return fields
+	}
+	room := record.response("away-player", now)
+	for name, fields := range map[string]map[string]json.RawMessage{"room": decode(room), "summary": decode(summarizeMatch(room))} {
+		if string(fields["lifecycle"]) != `"forfeited"` || string(fields["winnerSide"]) != `"home"` ||
+			string(fields["outcome"]) != `"lost"` {
+			t.Fatalf("%s does not tell the away viewer they lost the forfeit: %v", name, fields)
+		}
+	}
+	record.State, record.WinnerEntryID, record.CompletionReason = "in_progress", nil, nil
+	fields := decode(record.response("away-player", now))
+	if string(fields["winnerSide"]) != "null" || string(fields["outcome"]) != "null" {
+		t.Fatalf("a live match must carry null winnerSide and outcome: %v", fields)
+	}
+}
+
+func TestOpenAPIMatchSummaryDeclaresTheOutcome(t *testing.T) {
+	summary := openAPIBlock(t, openAPIFile(t, "openapi.yaml"), "MatchSummary", 4)
+	for field, want := range map[string][]string{
+		"winnerSide": {"home", "away", "null"},
+		"outcome":    {"won", "lost", "drawn", "no_result", "null"},
+	} {
+		if !strings.Contains(summary, "\n        - "+field+"\n") {
+			t.Errorf("MatchSummary does not require %s", field)
+		}
+		if got := openAPIEnum(t, openAPIBlock(t, summary, field, 8)); !slices.Equal(got, want) {
+			t.Errorf("MatchSummary %s enum = %v, want %v", field, got, want)
+		}
+	}
+}
+
+// optionalValue renders a nullable string for table comparisons.
+func optionalValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func TestMatchRecordDecodesTheRoomQueryJSON(t *testing.T) {

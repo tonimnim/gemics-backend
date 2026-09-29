@@ -286,8 +286,10 @@ components:
       type: string
       description: >-
         The viewer's lifecycle. awaiting_resolution covers the short gap between a passed deadline and
-        the worker acting on it; it offers no actions. A removed entry is shown by
-        resultVerification.entryRemoved, not by a lifecycle.
+        the worker acting on it; it offers no actions. The three terminal values follow state: completed
+        (a result was confirmed; see result), forfeited (decided without a score, by forfeit or walkover)
+        and cancelled (no result; completionReason says why). outcome and winnerSide say who won. A
+        removed entry is shown by resultVerification.entryRemoved, not by a lifecycle.
       enum:
         - assigned
         - ready_for_check_in
@@ -300,6 +302,7 @@ components:
         - under_review
         - forfeited
         - completed
+        - cancelled
     MatchAllowedAction:
       type: string
       description: check_in maps to POST /check-ins, report_score to POST /score-reports and submit_final_score to POST /score-reports/final.

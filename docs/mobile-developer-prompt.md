@@ -97,7 +97,10 @@ Silence has a cost: a player who does not report, or does not respond after a
 mismatch, before the deadline is removed from the tournament, and if nobody reports
 before the result deadline both entries are removed. Make every deadline visible and
 drive actions only from `lifecycle` and `allowedActions`; `awaiting_resolution`
-means a deadline has passed and the server is settling the match.
+means a deadline has passed and the server is settling the match. When the match is
+over, `lifecycle` is `completed`, `forfeited` or `cancelled`, and `outcome` (`won`,
+`lost`, `drawn` or `no_result`) tells the player how it ended for them, including a
+forfeit, which has no score; explain it with `completionReason`.
 
 Cloudflare R2 is the selected private object store; the client uses only API-issued
 URLs and never needs Cloudflare credentials or a hard-coded bucket URL.

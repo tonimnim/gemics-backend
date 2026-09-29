@@ -115,8 +115,8 @@ Route and render on `kind` and the ids in `data`; never parse the title or body.
 | `competition.completed` | `competition` | push | `competitionPush` | Competition complete | `/competitions/{competitionId}` | `kind`, `competitionId` | Competition detail with final standings (`GET /v1/competitions/{competitionId}/standings`) |
 | `competition.draw_generated` | `competition` | push | `competitionPush` | Tournament draw is ready | `/competitions/{competitionId}/bracket` | `kind`, `competitionId` | Competition bracket |
 | `match.ready` | `match` | push | `matchPush` | Your match is ready | `/matches/{matchId}` | `kind`, `matchId` | Match room |
-| `match.forfeited` | `match` | push | `matchPush` | Match decided by forfeit | `/matches/{matchId}` | `kind`, `matchId` | Match room |
-| `match.cancelled` | `match` | push | `matchPush` | Match cancelled | `/matches/{matchId}` | `kind`, `matchId` | Match room |
+| `match.forfeited` | `match` | push | `matchPush` | Match decided by forfeit | `/matches/{matchId}` | `kind`, `matchId` | Match room; `outcome` and `winnerSide` say who won |
+| `match.cancelled` | `match` | push | `matchPush` | Match cancelled | `/matches/{matchId}` | `kind`, `matchId` | Match room (`lifecycle: cancelled`, `outcome: no_result`) |
 | `match.participant_checked_in` | `match` | push | `matchPush` | Opponent checked in | `/matches/{matchId}` | `kind`, `matchId` | Match room |
 | `match.result_confirmed` | `result` | push | `resultPush` | Result confirmed | `/matches/{matchId}` | `kind`, `matchId` | Match room |
 | `result.report_received` | `result` | push | `resultPush` | Your opponent reported the score | `/matches/{matchId}` | `kind`, `matchId` | Match room, score report |
@@ -299,8 +299,8 @@ same key. OpenAPI lists the codes of every entry operation per status.
 - `GET /v1/me/matches?state=active|history`
 - `GET /v1/matches/{matchId}` returns `lifecycle`, `allowedActions`,
   `verificationPolicy` (report window, reminder lead, response window, screenshot
-  rules), `resultVerification`, `result`, `completionReason`, and both check-in
-  states.
+  rules), `resultVerification`, `result`, `completionReason`, `outcome`,
+  `winnerSide`, and both check-in states.
 - `POST /v1/matches/{matchId}/check-ins` uses an `Idempotency-Key`.
 
 Drive the screen from `lifecycle` and `allowedActions`; never infer an action from
@@ -314,7 +314,30 @@ the state or a local timer.
 | `awaiting_opponent_response` | You responded; the response window is still running | none |
 | `awaiting_resolution` | A deadline passed and the server is settling the match | none |
 | `under_review` | Gamics is reviewing the match | none |
-| `forfeited` / `completed` | The match is over | none |
+| `forfeited` | The match was decided without a score (forfeit or walkover) | none |
+| `completed` | A score was confirmed and is in `result` | none |
+| `cancelled` | The match ended with no result; `completionReason` says why | none |
+
+Once the match is over, `outcome` gives the result from your side: `won` or `lost`
+(also for a forfeit or walkover), `drawn` for a round-robin draw, or `no_result` for
+a cancelled match. `winnerSide` is `home`, `away` or null (draw or cancelled) and
+is the same for both players. Both are null while the match is live, and both are on
+every `GET /v1/me/matches` summary too, so history cards need no extra call. Choose
+the result screen from `lifecycle` and its wording from `outcome` and
+`completionReason`:
+
+| `completionReason` | `lifecycle` | What to tell the player |
+|---|---|---|
+| `played` | `completed` | Both reports agreed; show `result` |
+| `platform_review` | `completed` or `cancelled` | Gamics decided the match after a review |
+| `report_timeout` | `forfeited` | One entry did not report in time and was removed; the reporter won |
+| `response_timeout` | `forfeited` or `cancelled` | After a mismatch, the silent entries were removed; a lone responder won |
+| `timeout_forfeit` | `forfeited` | Only one side checked in; that side won |
+| `walkover` | `forfeited` | One entry had already left the competition; the entry still in it won |
+| `no_result_reported` | `cancelled` | Nobody reported before `resultDueAt`; both entries were removed |
+| `double_no_show` | `cancelled` | Neither side checked in, or neither was still in the competition |
+| `competition_cancelled` | `cancelled` | The organizer cancelled the competition; nobody was removed |
+| `reset_not_required` / `correction_voided` | `cancelled` | The bracket no longer needed this match |
 
 The room is blind. `resultVerification` holds only your entry's own reports
 (`myReport`, `myFinalReport`), whether the opponent reported or responded, the
