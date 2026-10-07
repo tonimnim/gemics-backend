@@ -34,6 +34,7 @@ export type Competition = {
   startsAt?: string
   allowedTransitions: CompetitionStatus[]
   matchCount?: number
+  rules?: Record<string, unknown>
 }
 
 export type CompetitionInput = {
@@ -49,6 +50,7 @@ export type CompetitionInput = {
   registrationOpensAt: string
   registrationClosesAt: string
   startsAt: string
+  rules: Record<string, unknown>
 }
 
 export type DrawRequest = {

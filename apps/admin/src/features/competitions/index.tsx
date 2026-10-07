@@ -52,6 +52,7 @@ import {
   type CompetitionStatus,
   type DrawRequest,
 } from './api'
+import { allowedCountries, countryFlag, countryName } from './countries'
 import { CreateCompetitionDialog } from './create-dialog'
 
 /** What staff call each lifecycle step. */
@@ -134,6 +135,7 @@ export function CompetitionsPage() {
               <TableHead>Competition</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Players</TableHead>
+              <TableHead>Open to</TableHead>
               <TableHead>Entry</TableHead>
               <TableHead>Starts</TableHead>
               <TableHead className='w-12' />
@@ -144,7 +146,7 @@ export function CompetitionsPage() {
               isLoading={list.isLoading}
               error={list.error}
               empty='No competitions here yet.'
-              columns={6}
+              columns={7}
               count={list.items.length}
             />
             {list.items.map((competition) => (
@@ -166,6 +168,9 @@ export function CompetitionsPage() {
                 </TableCell>
                 <TableCell className='font-mono text-sm'>
                   {competition.entryCount}/{competition.maxEntries}
+                </TableCell>
+                <TableCell className='text-sm'>
+                  <OpenTo competition={competition} />
                 </TableCell>
                 <TableCell className='text-sm'>
                   {competition.entryFeeMinor
@@ -347,5 +352,25 @@ export function CompetitionsPage() {
         </DialogContent>
       </Dialog>
     </Page>
+  )
+}
+
+/** The countries a competition accepts players from. Paid entry is Kenya only. */
+function OpenTo({ competition }: { competition: Competition }) {
+  const countries = competition.entryFeeMinor
+    ? ['KE']
+    : allowedCountries(competition.rules)
+  if (countries.length === 0) {
+    return <span className='text-muted-foreground'>Every country</span>
+  }
+  return (
+    <span className='inline-flex flex-wrap items-center gap-x-2'>
+      {countries.map((code) => (
+        <span key={code} className='inline-flex items-center gap-1'>
+          <span aria-hidden>{countryFlag(code)}</span>
+          {countryName(code)}
+        </span>
+      ))}
+    </span>
   )
 }
