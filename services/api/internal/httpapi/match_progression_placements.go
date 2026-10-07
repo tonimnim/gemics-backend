@@ -106,9 +106,13 @@ func sameRoundRobinPlacementScore(left, right progressionStandingForPlacement) b
 		left.GoalsFor == right.GoalsFor
 }
 
-// rankEliminationPlacements ranks the whole frozen field by graph depth, then
+// rankEliminationPlacements ranks the whole frozen field by exit depth, then
 // omits non-live entries. Nobody is promoted into a removed entry's place, so a
-// final cancelled between two removed entries leaves no first place.
+// final cancelled between two removed entries leaves no first place. A bronze
+// match shares the final's graph rank, so it never sets an exit depth: its
+// semifinal losers exit at the semifinal, and only a bronze winner overrides
+// them to third and fourth. Without a champion nobody is placed first: the
+// finalists share second, and every other placement is unchanged.
 func rankEliminationPlacements(entries []progressionPlacementEntry, matches []progressionMatchForPlacement,
 	format string) ([]progressionPlacement, error) {
 	if len(entries) < 2 || len(matches) == 0 {
@@ -158,16 +162,17 @@ func rankEliminationPlacements(entries []progressionPlacementEntry, matches []pr
 		}
 		exitRank, participationRank := -1, -1
 		for _, match := range matches {
-			if !isProgressionTerminal(match.State) ||
+			if match.Bracket == "bronze" || !isProgressionTerminal(match.State) ||
 				match.CompletionReason != nil && *match.CompletionReason == "reset_not_required" ||
 				!entryParticipated(entryID, match) {
 				continue
 			}
-			if match.GraphRank > participationRank {
-				participationRank = match.GraphRank
+			depth := placementDepth(match, format)
+			if depth > participationRank {
+				participationRank = depth
 			}
-			if (match.WinnerEntryID == nil || *match.WinnerEntryID != entryID) && match.GraphRank > exitRank {
-				exitRank = match.GraphRank
+			if (match.WinnerEntryID == nil || *match.WinnerEntryID != entryID) && depth > exitRank {
+				exitRank = depth
 			}
 		}
 		if exitRank < 0 {
@@ -195,7 +200,9 @@ func rankEliminationPlacements(entries []progressionPlacementEntry, matches []pr
 		if index > 0 && item.Rank != exits[index-1].Rank {
 			placement = offset + index
 		}
-		result = append(result, progressionPlacement{EntryID: item.EntryID, Placement: placement})
+		// With a champion every exit is already second or lower; without one, the
+		// finalists' shared first becomes second.
+		result = append(result, progressionPlacement{EntryID: item.EntryID, Placement: max(placement, 2)})
 	}
 
 	if format == "single_elimination" {
@@ -219,6 +226,17 @@ func rankEliminationPlacements(entries []progressionPlacementEntry, matches []pr
 	}
 	sort.Slice(placed, func(i, j int) bool { return placed[i].EntryID < placed[j].EntryID })
 	return placed, nil
+}
+
+// placementDepth is how deep an exit sits. Every match in a single-elimination
+// round is the same depth, even when byes give some of them a shorter path
+// through the graph, so single elimination ranks by round. Double elimination
+// ranks by graph rank, which orders the winners and losers brackets together.
+func placementDepth(match progressionMatchForPlacement, format string) int {
+	if format == "single_elimination" {
+		return match.RoundNumber
+	}
+	return match.GraphRank
 }
 
 func entryParticipated(entryID string, match progressionMatchForPlacement) bool {
@@ -332,7 +350,7 @@ func progressionPlacementRule(format string) string {
 	if format == "round_robin" {
 		return "competition_rank(points,goal_difference,goals_for); exact metric ties share placement" + omitted
 	}
-	return "champion_then_competition_rank_by_terminal_graph_depth; bronze result overrides third/fourth" + omitted
+	return "champion_then_competition_rank_by_exit_depth; bronze result overrides third/fourth" + omitted
 }
 
 func loadProgressionPlacementEntries(ctx context.Context, tx pgx.Tx,

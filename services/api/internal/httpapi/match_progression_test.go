@@ -387,6 +387,114 @@ func TestEliminationPlacementsOmitRemovedEntriesWithoutPromotion(t *testing.T) {
 	}
 }
 
+func TestEliminationPlacementsNeverLiftBronzeOrInventAChampion(t *testing.T) {
+	resetReason, doubleNoShow := "reset_not_required", "double_no_show"
+	eightField := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	eightEarlyRounds := []progressionMatchForPlacement{
+		{ID: "q1", Bracket: "main", RoundNumber: 1, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("h"), WinnerEntryID: progressionTestString("a")},
+		{ID: "q2", Bracket: "main", RoundNumber: 1, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("d"), AwayEntryID: progressionTestString("e"), WinnerEntryID: progressionTestString("d")},
+		{ID: "q3", Bracket: "main", RoundNumber: 1, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("b"), AwayEntryID: progressionTestString("g"), WinnerEntryID: progressionTestString("b")},
+		{ID: "q4", Bracket: "main", RoundNumber: 1, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("c"), AwayEntryID: progressionTestString("f"), WinnerEntryID: progressionTestString("c")},
+		{ID: "s1", Bracket: "main", RoundNumber: 2, GraphRank: 2, State: "completed", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("d"), WinnerEntryID: progressionTestString("a")},
+		{ID: "s2", Bracket: "main", RoundNumber: 2, GraphRank: 2, State: "completed", HomeEntryID: progressionTestString("b"), AwayEntryID: progressionTestString("c"), WinnerEntryID: progressionTestString("b")},
+	}
+	fourSemifinals := []progressionMatchForPlacement{
+		{ID: "s1", Bracket: "main", RoundNumber: 1, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("d"), WinnerEntryID: progressionTestString("a")},
+		{ID: "s2", Bracket: "main", RoundNumber: 1, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("b"), AwayEntryID: progressionTestString("c"), WinnerEntryID: progressionTestString("b")},
+	}
+	cases := []struct {
+		name    string
+		format  string
+		entries []progressionPlacementEntry
+		matches []progressionMatchForPlacement
+		want    map[string]int
+	}{
+		{
+			name: "cancelled bronze leaves semifinal losers sharing third", format: "single_elimination",
+			entries: progressionTestField(eightField),
+			matches: slices.Concat(eightEarlyRounds, []progressionMatchForPlacement{
+				{ID: "final", Bracket: "main", RoundNumber: 3, GraphRank: 3, State: "completed", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("b"), WinnerEntryID: progressionTestString("a")},
+				{ID: "bronze", Bracket: "bronze", RoundNumber: 3, GraphRank: 3, State: "cancelled", HomeEntryID: progressionTestString("d"), AwayEntryID: progressionTestString("c"), CompletionReason: &doubleNoShow},
+			}),
+			want: map[string]int{"a": 1, "b": 2, "c": 3, "d": 3, "e": 5, "f": 5, "g": 5, "h": 5},
+		},
+		{
+			name: "cancelled bronze in a four-entry bracket", format: "single_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d"}),
+			matches: slices.Concat(fourSemifinals, []progressionMatchForPlacement{
+				{ID: "final", Bracket: "main", RoundNumber: 2, GraphRank: 2, State: "completed", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("b"), WinnerEntryID: progressionTestString("a")},
+				{ID: "bronze", Bracket: "bronze", RoundNumber: 2, GraphRank: 2, State: "cancelled", HomeEntryID: progressionTestString("d"), AwayEntryID: progressionTestString("c"), CompletionReason: &doubleNoShow},
+			}),
+			want: map[string]int{"a": 1, "b": 2, "c": 3, "d": 3},
+		},
+		{
+			name: "cancelled final between live finalists has no first place", format: "single_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d"}),
+			matches: slices.Concat(fourSemifinals, []progressionMatchForPlacement{
+				{ID: "final", Bracket: "main", RoundNumber: 2, GraphRank: 2, State: "cancelled", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("b"), CompletionReason: &doubleNoShow},
+			}),
+			want: map[string]int{"a": 2, "b": 2, "c": 3, "d": 3},
+		},
+		{
+			name: "cancelled final keeps a played bronze result", format: "single_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d"}),
+			matches: slices.Concat(fourSemifinals, []progressionMatchForPlacement{
+				{ID: "final", Bracket: "main", RoundNumber: 2, GraphRank: 2, State: "cancelled", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("b"), CompletionReason: &doubleNoShow},
+				{ID: "bronze", Bracket: "bronze", RoundNumber: 2, GraphRank: 2, State: "completed", HomeEntryID: progressionTestString("d"), AwayEntryID: progressionTestString("c"), WinnerEntryID: progressionTestString("c")},
+			}),
+			want: map[string]int{"a": 2, "b": 2, "c": 3, "d": 4},
+		},
+		{
+			name: "cancelled final and bronze keep the deeper placements", format: "single_elimination",
+			entries: progressionTestField(eightField),
+			matches: slices.Concat(eightEarlyRounds, []progressionMatchForPlacement{
+				{ID: "final", Bracket: "main", RoundNumber: 3, GraphRank: 3, State: "cancelled", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("b"), CompletionReason: &doubleNoShow},
+				{ID: "bronze", Bracket: "bronze", RoundNumber: 3, GraphRank: 3, State: "cancelled", HomeEntryID: progressionTestString("d"), AwayEntryID: progressionTestString("c"), CompletionReason: &doubleNoShow},
+			}),
+			want: map[string]int{"a": 2, "b": 2, "c": 3, "d": 3, "e": 5, "f": 5, "g": 5, "h": 5},
+		},
+		{
+			// Byes give s2 a shorter path through the graph than s1, but both
+			// are semifinals, so their losers share third.
+			name: "byes do not split a round", format: "single_elimination",
+			entries: progressionTestField([]string{"p1", "p2", "p3", "p4", "p5"}),
+			matches: []progressionMatchForPlacement{
+				{ID: "r1", Bracket: "main", RoundNumber: 1, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("p4"), AwayEntryID: progressionTestString("p5"), WinnerEntryID: progressionTestString("p4")},
+				{ID: "s1", Bracket: "main", RoundNumber: 2, GraphRank: 2, State: "completed", HomeEntryID: progressionTestString("p1"), AwayEntryID: progressionTestString("p4"), WinnerEntryID: progressionTestString("p1")},
+				{ID: "s2", Bracket: "main", RoundNumber: 2, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("p2"), AwayEntryID: progressionTestString("p3"), WinnerEntryID: progressionTestString("p2")},
+				{ID: "final", Bracket: "main", RoundNumber: 3, GraphRank: 3, State: "completed", HomeEntryID: progressionTestString("p1"), AwayEntryID: progressionTestString("p2"), WinnerEntryID: progressionTestString("p1")},
+				{ID: "bronze", Bracket: "bronze", RoundNumber: 3, GraphRank: 3, State: "cancelled", HomeEntryID: progressionTestString("p4"), AwayEntryID: progressionTestString("p3"), CompletionReason: &doubleNoShow},
+			},
+			want: map[string]int{"p1": 1, "p2": 2, "p3": 3, "p4": 3, "p5": 5},
+		},
+		{
+			name: "cancelled grand final between live finalists has no first place", format: "double_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d"}),
+			matches: []progressionMatchForPlacement{
+				{ID: "w1", Bracket: "winners", RoundNumber: 1, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("d"), WinnerEntryID: progressionTestString("a")},
+				{ID: "w2", Bracket: "winners", RoundNumber: 1, GraphRank: 1, State: "completed", HomeEntryID: progressionTestString("b"), AwayEntryID: progressionTestString("c"), WinnerEntryID: progressionTestString("b")},
+				{ID: "wf", Bracket: "winners", RoundNumber: 2, GraphRank: 2, State: "completed", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("b"), WinnerEntryID: progressionTestString("a")},
+				{ID: "l1", Bracket: "losers", RoundNumber: 1, GraphRank: 2, State: "completed", HomeEntryID: progressionTestString("d"), AwayEntryID: progressionTestString("c"), WinnerEntryID: progressionTestString("c")},
+				{ID: "lf", Bracket: "losers", RoundNumber: 2, GraphRank: 3, State: "completed", HomeEntryID: progressionTestString("c"), AwayEntryID: progressionTestString("b"), WinnerEntryID: progressionTestString("b")},
+				{ID: "gf1", Bracket: "grand_final", RoundNumber: 1, GraphRank: 4, State: "cancelled", HomeEntryID: progressionTestString("a"), AwayEntryID: progressionTestString("b"), CompletionReason: &doubleNoShow},
+				{ID: "gf2", Bracket: "grand_final", RoundNumber: 2, GraphRank: 5, State: "cancelled", CompletionReason: &resetReason},
+			},
+			want: map[string]int{"a": 2, "b": 2, "c": 3, "d": 4},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			placements, err := rankEliminationPlacements(tc.entries, tc.matches, tc.format)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := progressionTestPlacements(placements); !maps.Equal(got, tc.want) {
+				t.Fatalf("placements = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestProgressionOutcomeHashIsStableAndDetectsMaterialChanges(t *testing.T) {
 	winner := progressionTestString("entry-a")
 	home, away := progressionTestInt(2), progressionTestInt(1)
