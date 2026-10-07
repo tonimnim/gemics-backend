@@ -3355,6 +3355,7 @@ paths:
               - succeeded
               - rejected
               - failed
+              - all
             default: requested
         - name: limit
           in: query
@@ -3616,6 +3617,7 @@ paths:
               - under_review
               - approved
               - rejected
+              - all
             default: requested
         - name: limit
           in: query
@@ -4000,6 +4002,7 @@ paths:
               - succeeded
               - failed
               - review
+              - all
             default: review
         - name: competitionId
           in: query
@@ -4191,7 +4194,13 @@ paths:
         - name: status
           in: query
           schema:
-            $ref: '#/components/schemas/ResultReviewStatus'
+            type: string
+            enum:
+              - queued
+              - decided
+              - closed
+              - all
+            default: queued
         - name: competitionId
           in: query
           schema:
