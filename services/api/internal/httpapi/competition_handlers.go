@@ -457,8 +457,8 @@ func (s *Server) createFreeRegistration(w http.ResponseWriter, r *http.Request) 
 	var accountGameID, displayName string
 	var onboardingComplete bool
 	err = tx.QueryRow(r.Context(), `SELECT account.game_id,COALESCE(NULLIF(profile.handle,''),account.in_game_name),
-		(player.birth_date IS NOT NULL AND player.terms_accepted_at IS NOT NULL
-		 AND player.privacy_accepted_at IS NOT NULL AND profile.user_id IS NOT NULL AND player.display_name_set_at IS NOT NULL)
+		(profile.user_id IS NOT NULL
+		 AND player.terms_accepted_at IS NOT NULL AND player.privacy_accepted_at IS NOT NULL)
 		FROM users player JOIN game_accounts account ON account.id=$2 AND account.user_id=player.id
 		LEFT JOIN player_profiles profile ON profile.user_id=player.id
 		WHERE player.id=$1 AND player.status='active'`, userID, input.GameAccountID).

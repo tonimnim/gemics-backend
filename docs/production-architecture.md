@@ -70,7 +70,7 @@ Redis failure never changes business correctness.
 
 Use two independent managed Redis services in production:
 
-- `REDIS_SECURITY_URL`: OTP limits and short-lived session state, reserved memory,
+- `REDIS_SECURITY_URL`: email-code and registration limits and short-lived session state, reserved memory,
   TLS/auth and `noeviction`;
 - `REDIS_CACHE_URL`: disposable public response bodies, a strict memory budget and a
   measured cache eviction policy such as `allkeys-lfu`.
@@ -79,7 +79,7 @@ Local Compose may point both URLs at one Redis. Do not copy that compromise to
 production; cache eviction must never remove security controls.
 
 Refresh tokens rotate with a five-minute retry grace for the previously presented
-token, so a lost refresh response does not force another email OTP. Positive session
+token, so a lost refresh response does not force another sign-in. Positive session
 cache entries are capped at five seconds and logout returns an error unless Redis
 revocation propagation succeeds; the writer database remains authoritative.
 

@@ -97,13 +97,26 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_payment_request", "Competition and game account IDs must be valid UUIDs.")
 		return
 	}
+	userID := identityFromContext(r.Context()).UserID
+	// Without a number in the request, the phone saved on the account pays.
+	if strings.TrimSpace(input.PhoneNumber) == "" {
+		var saved *string
+		if err := s.db.Writer.QueryRow(r.Context(), `SELECT phone_e164 FROM users WHERE id=$1`, userID).Scan(&saved); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the saved phone number.")
+			return
+		}
+		if saved == nil {
+			writeError(w, http.StatusBadRequest, "phone_required", "Add an M-Pesa phone number to pay the entry fee.")
+			return
+		}
+		input.PhoneNumber = *saved
+	}
 	phone, ok := normalizeKenyanPhone(input.PhoneNumber)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid_phone", "Enter a valid Kenyan Safaricom phone number.")
+		writeError(w, http.StatusBadRequest, "invalid_phone", "M-Pesa needs a Kenyan Safaricom phone number.")
 		return
 	}
 
-	userID := identityFromContext(r.Context()).UserID
 	requestIP := s.clientIP(r)
 	tx, err := s.db.Writer.Begin(r.Context())
 	if err != nil {
@@ -199,8 +212,8 @@ func (s *Server) initiateMPesa(w http.ResponseWriter, r *http.Request) {
 	var accountGameID, entryDisplayName string
 	var onboardingComplete bool
 	err = tx.QueryRow(r.Context(), `SELECT account.game_id,COALESCE(profile.handle,account.in_game_name),
-		(player.birth_date IS NOT NULL AND player.terms_accepted_at IS NOT NULL
-		 AND player.privacy_accepted_at IS NOT NULL AND profile.user_id IS NOT NULL AND player.display_name_set_at IS NOT NULL)
+		(profile.user_id IS NOT NULL
+		 AND player.terms_accepted_at IS NOT NULL AND player.privacy_accepted_at IS NOT NULL)
 		FROM users player
 		JOIN game_accounts account ON account.id=$2 AND account.user_id=player.id
 		LEFT JOIN player_profiles profile ON profile.user_id=player.id

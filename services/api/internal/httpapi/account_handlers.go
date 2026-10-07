@@ -96,8 +96,6 @@ func (s *Server) patchMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		appendValue("display_name", value)
-		// An explicit choice completes the display-name onboarding step.
-		assignments = append(assignments, "display_name_set_at=now()")
 	}
 	if input.CountryCode != nil {
 		value := strings.ToUpper(strings.TrimSpace(*input.CountryCode))
@@ -181,9 +179,7 @@ func (s *Server) putProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to save the player profile.")
 		return
 	}
-	// Until the player chooses a display name, every surface shows the handle.
-	if _, err = tx.Exec(r.Context(), `UPDATE users SET display_name=$2,updated_at=now()
-		WHERE id=$1 AND display_name_set_at IS NULL`, userID, input.Handle); err != nil || tx.Commit(r.Context()) != nil {
+	if tx.Commit(r.Context()) != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to save the player profile.")
 		return
 	}
@@ -219,6 +215,10 @@ func (s *Server) createGameAccount(w http.ResponseWriter, r *http.Request) {
 	var publisherID any
 	if input.PublisherPlayerID != nil && strings.TrimSpace(*input.PublisherPlayerID) != "" {
 		publisherID = strings.TrimSpace(*input.PublisherPlayerID)
+		if _, _, ok := normalizeKonamiID(*input.PublisherPlayerID); input.GameID == registrationGameID && !ok {
+			writeError(w, http.StatusBadRequest, "invalid_konami_id", "Enter the Konami ID shown in eFootball.")
+			return
+		}
 	}
 	row := s.db.Writer.QueryRow(r.Context(), `INSERT INTO game_accounts
         (user_id,game_id,platform,in_game_name,publisher_player_id)
@@ -228,7 +228,7 @@ func (s *Server) createGameAccount(w http.ResponseWriter, r *http.Request) {
 		identityFromContext(r.Context()).UserID, input.GameID, strings.ToLower(strings.TrimSpace(input.Platform)), strings.TrimSpace(input.InGameName), publisherID)
 	account, err := scanGameAccount(row)
 	if err != nil {
-		if strings.Contains(err.Error(), "game_accounts_publisher_id_unique") {
+		if uniqueViolationOn(err, "game_accounts_publisher_id_unique") {
 			writeError(w, http.StatusConflict, "game_account_exists", "That publisher player ID is already connected.")
 			return
 		}
@@ -297,8 +297,15 @@ func (s *Server) patchGameAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "game_account_not_found", "Game account not found.")
 		return
 	}
+	if uniqueViolationOn(err, "game_accounts_publisher_id_unique") {
+		writeError(w, http.StatusConflict, "game_account_exists", "That publisher player ID is already connected.")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_game_account", "The game account could not be updated.")
+		return
+	}
+	if account.GameID == registrationGameID && !s.keepKonamiSignIn(w, r.Context(), tx, account) {
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `UPDATE game_account_verification_requests
@@ -310,21 +317,47 @@ func (s *Server) patchGameAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, account)
 }
 
+// keepKonamiSignIn checks an edited eFootball account: its Konami ID must be
+// well formed, and the player must keep at least one Konami ID, because that
+// is how they sign in.
+func (s *Server) keepKonamiSignIn(w http.ResponseWriter, ctx context.Context, tx pgx.Tx, account gameAccount) bool {
+	if account.PublisherPlayerID != nil {
+		if _, _, ok := normalizeKonamiID(*account.PublisherPlayerID); !ok {
+			writeError(w, http.StatusBadRequest, "invalid_konami_id", "Enter the Konami ID shown in eFootball.")
+			return false
+		}
+	}
+	var keeps bool
+	err := tx.QueryRow(ctx, `SELECT player.password_hash IS NULL OR EXISTS(SELECT 1 FROM game_accounts account
+		WHERE account.user_id=player.id AND account.game_id=$2 AND account.publisher_player_id IS NOT NULL)
+		FROM users player WHERE player.id=$1`, identityFromContext(ctx).UserID, registrationGameID).Scan(&keeps)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "The game account could not be updated.")
+		return false
+	}
+	if !keeps {
+		writeError(w, http.StatusConflict, "konami_id_required", "Your Konami ID is how you sign in, so it cannot be removed.")
+		return false
+	}
+	return true
+}
+
 func (s *Server) loadMe(ctx context.Context, pool *pgxpool.Pool, userID string) (map[string]any, error) {
-	var id, email, displayName, countryCode, status string
-	var birthDate *string
-	var termsAt, privacyAt, createdAt, updatedAt *time.Time
+	var id, displayName, countryCode, status string
+	var email, phone, birthDate, konamiID *string
+	var emailVerifiedAt, createdAt, updatedAt *time.Time
 	var handle, bio *string
 	var discoverable *bool
 	var analyticsAt, scoutingAt *time.Time
-	var displayNameSet, hasGameAccount bool
-	err := pool.QueryRow(ctx, `SELECT u.id,u.email,u.display_name,u.display_name_set_at IS NOT NULL,u.country_code,
-        to_char(u.birth_date,'YYYY-MM-DD'),u.status,u.terms_accepted_at,u.privacy_accepted_at,u.created_at,u.updated_at,
+	err := pool.QueryRow(ctx, `SELECT u.id,u.email,u.email_verified_at,u.phone_e164,u.display_name,u.country_code,
+        to_char(u.birth_date,'YYYY-MM-DD'),u.status,u.created_at,u.updated_at,
         p.handle,p.bio,p.discoverable,p.analytics_consent_at,p.scouting_consent_at,
-        EXISTS(SELECT 1 FROM game_accounts ga WHERE ga.user_id=u.id)
-        FROM users u LEFT JOIN player_profiles p ON p.user_id=u.id WHERE u.id=$1`, userID).
-		Scan(&id, &email, &displayName, &displayNameSet, &countryCode, &birthDate, &status, &termsAt, &privacyAt,
-			&createdAt, &updatedAt, &handle, &bio, &discoverable, &analyticsAt, &scoutingAt, &hasGameAccount)
+        (SELECT ga.publisher_player_id FROM game_accounts ga
+         WHERE ga.user_id=u.id AND ga.game_id=$2 AND ga.publisher_player_id IS NOT NULL
+         ORDER BY ga.created_at LIMIT 1)
+        FROM users u LEFT JOIN player_profiles p ON p.user_id=u.id WHERE u.id=$1`, userID, registrationGameID).
+		Scan(&id, &email, &emailVerifiedAt, &phone, &displayName, &countryCode, &birthDate, &status,
+			&createdAt, &updatedAt, &handle, &bio, &discoverable, &analyticsAt, &scoutingAt, &konamiID)
 	if err != nil {
 		return nil, err
 	}
@@ -334,27 +367,11 @@ func (s *Server) loadMe(ctx context.Context, pool *pgxpool.Pool, userID string) 
 			"analyticsConsent": analyticsAt != nil, "scoutingConsent": scoutingAt != nil}
 	}
 	return map[string]any{
-		"id": id, "email": email, "displayName": displayName, "countryCode": countryCode, "birthDate": birthDate,
+		"id": id, "username": handle, "konamiId": konamiID, "displayName": displayName,
+		"email": email, "emailVerified": email != nil && emailVerifiedAt != nil, "phoneNumber": phone,
+		"countryCode": countryCode, "birthDate": birthDate,
 		"status": status, "createdAt": createdAt, "updatedAt": updatedAt, "profile": profile,
-		"onboarding": newOnboardingStatus(birthDate != nil && termsAt != nil && privacyAt != nil,
-			displayNameSet, handle != nil, hasGameAccount),
 	}, nil
-}
-
-// onboardingStatus reports the onboarding steps a player has finished. The
-// display name counts only once the player chose it: until then it mirrors
-// the handle, and registration and paid entry stay closed.
-type onboardingStatus struct {
-	PersonalDetails bool `json:"personalDetails"`
-	DisplayName     bool `json:"displayName"`
-	Profile         bool `json:"profile"`
-	GameAccount     bool `json:"gameAccount"`
-	Complete        bool `json:"complete"`
-}
-
-func newOnboardingStatus(personalDetails, displayName, profile, gameAccount bool) onboardingStatus {
-	return onboardingStatus{PersonalDetails: personalDetails, DisplayName: displayName, Profile: profile,
-		GameAccount: gameAccount, Complete: personalDetails && displayName && profile && gameAccount}
 }
 
 func (s *Server) queryGameAccounts(ctx context.Context, pool *pgxpool.Pool, userID string) ([]gameAccount, error) {

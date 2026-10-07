@@ -2,20 +2,15 @@ package httpapi
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"errors"
-	"io"
 	"net/http"
 	stdmail "net/mail"
 	"strings"
 	"time"
 
 	gamicsauth "github.com/gamics-io/gamics/services/api/internal/auth"
-	"github.com/gamics-io/gamics/services/api/internal/username"
-	"github.com/jackc/pgx/v5"
 )
 
 type identityContextKey struct{}
@@ -26,163 +21,11 @@ type identity struct {
 	ExpiresAt time.Time
 }
 
-type otpRequest struct {
-	Email string `json:"email"`
-}
-
-type otpVerifyRequest struct {
-	Email      string `json:"email"`
-	Code       string `json:"code"`
-	DeviceName string `json:"deviceName"`
-}
-
 type refreshRequest struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
 const refreshTokenRetryGrace = 5 * time.Minute
-
-// signupHandleAttempts bounds how many generated handles a new account tries
-// against the unique handle index before signup fails closed.
-const signupHandleAttempts = 5
-
-var errHandleUnavailable = errors.New("no generated handle is available")
-
-func (s *Server) requestOTP(w http.ResponseWriter, r *http.Request) {
-	if !s.requireDatabase(w) {
-		return
-	}
-	if s.mailer == nil {
-		writeError(w, http.StatusServiceUnavailable, "email_unavailable", "Email delivery is temporarily unavailable.")
-		return
-	}
-	var input otpRequest
-	if !decodeJSON(w, r, &input) {
-		return
-	}
-	email, ok := normalizeEmail(input.Email)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid_email", "Enter a valid email address.")
-		return
-	}
-	ip := s.clientIP(r)
-	allowedEmail := s.allowOTPRate(r.Context(), "email", email, s.config.OTPEmailLimit)
-	allowedIP := s.allowOTPRate(r.Context(), "ip", ip, s.config.OTPIPLimit)
-	if !allowedEmail || !allowedIP {
-		w.Header().Set("Retry-After", retryAfterSeconds(s.config.OTPRequestWindow))
-		writeError(w, http.StatusTooManyRequests, "rate_limited", "Too many codes requested. Try again later.")
-		return
-	}
-	code, err := gamicsauth.GenerateOTP()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Unable to create a sign-in code.")
-		return
-	}
-	hash := gamicsauth.HashOTP(s.config.OTPHashSecret, email, code)
-	tx, err := s.db.Writer.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to request a code.")
-		return
-	}
-	defer tx.Rollback(r.Context()) //nolint:errcheck
-	if _, err = tx.Exec(r.Context(), "SELECT pg_advisory_xact_lock(hashtextextended(lower($1),0))", email); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to request a code.")
-		return
-	}
-	if _, err = tx.Exec(r.Context(), `UPDATE email_otp_challenges SET consumed_at=now()
-        WHERE lower(email)=lower($1) AND consumed_at IS NULL`, email); err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO email_otp_challenges(email, code_hash, request_ip, expires_at)
-            VALUES ($1,$2,$3,now()+$4::interval)`, email, hash, ip, s.config.OTPTTL.String())
-	}
-	if err != nil || tx.Commit(r.Context()) != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to request a code.")
-		return
-	}
-	if err := s.mailer.SendOTP(r.Context(), email, code); err != nil {
-		s.logger.Error("send OTP email", "error", err)
-		s.db.Writer.Exec(r.Context(), `UPDATE email_otp_challenges SET consumed_at=now()
-            WHERE lower(email)=lower($1) AND consumed_at IS NULL`, email) //nolint:errcheck
-		writeError(w, http.StatusServiceUnavailable, "email_unavailable", "Unable to send the sign-in email.")
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "expiresInSeconds": int(s.config.OTPTTL.Seconds())})
-}
-
-func (s *Server) verifyOTP(w http.ResponseWriter, r *http.Request) {
-	if !s.requireDatabase(w) {
-		return
-	}
-	var input otpVerifyRequest
-	if !decodeJSON(w, r, &input) {
-		return
-	}
-	email, ok := normalizeEmail(input.Email)
-	if !ok || len(input.Code) != 6 || len(input.DeviceName) > 120 {
-		writeError(w, http.StatusUnauthorized, "invalid_code", "The code is invalid or expired.")
-		return
-	}
-	tx, err := s.db.Writer.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify the code.")
-		return
-	}
-	defer tx.Rollback(r.Context()) //nolint:errcheck
-	var challengeID string
-	var expected []byte
-	var expiresAt time.Time
-	var attempts int
-	err = tx.QueryRow(r.Context(), `SELECT id, code_hash, expires_at, attempts
-        FROM email_otp_challenges
-        WHERE lower(email)=lower($1) AND consumed_at IS NULL
-        ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, email).Scan(&challengeID, &expected, &expiresAt, &attempts)
-	if err != nil || time.Now().After(expiresAt) || attempts >= s.config.OTPMaxAttempts {
-		writeError(w, http.StatusUnauthorized, "invalid_code", "The code is invalid or expired.")
-		return
-	}
-	actual := gamicsauth.HashOTP(s.config.OTPHashSecret, email, input.Code)
-	if !gamicsauth.VerifyOTP(expected, actual) {
-		_, _ = tx.Exec(r.Context(), "UPDATE email_otp_challenges SET attempts=attempts+1 WHERE id=$1", challengeID)
-		_ = tx.Commit(r.Context())
-		writeError(w, http.StatusUnauthorized, "invalid_code", "The code is invalid or expired.")
-		return
-	}
-	if _, err = tx.Exec(r.Context(), "UPDATE email_otp_challenges SET consumed_at=now() WHERE id=$1", challengeID); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to verify the code.")
-		return
-	}
-	var userID, userStatus string
-	err = tx.QueryRow(r.Context(), "SELECT id,status FROM users WHERE lower(email)=lower($1)", email).Scan(&userID, &userStatus)
-	if errors.Is(err, pgx.ErrNoRows) {
-		userStatus = "active"
-		userID, err = createPlayerAccount(r.Context(), tx, email, rand.Reader)
-	}
-	if errors.Is(err, errHandleUnavailable) {
-		writeError(w, http.StatusServiceUnavailable, "handle_unavailable", "Unable to create the player account. Try again.")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to create the player account.")
-		return
-	}
-	if userStatus != "active" {
-		writeError(w, http.StatusForbidden, "account_unavailable", "This player account is not available.")
-		return
-	}
-	refreshToken, refreshHash, err := gamicsauth.NewRefreshToken()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Unable to create a session.")
-		return
-	}
-	sessionID := gamicsauth.RandomID()
-	_, err = tx.Exec(r.Context(), `INSERT INTO refresh_sessions
-        (id,user_id,token_hash,device_name,user_agent,created_ip,last_used_ip)
-		VALUES ($1,$2,$3,$4,$5,$6,$6)`, sessionID, userID, refreshHash, strings.TrimSpace(input.DeviceName), r.UserAgent(), s.clientIP(r))
-	if err != nil || tx.Commit(r.Context()) != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to create a session.")
-		return
-	}
-	s.writeSessionResponse(w, r, userID, sessionID, refreshToken)
-}
 
 func (s *Server) refreshSession(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
@@ -229,7 +72,7 @@ func (s *Server) refreshSession(w http.ResponseWriter, r *http.Request) {
 	if len(previousHash) > 0 && previousValidUntil != nil && subtle.ConstantTimeCompare(presentedHash, previousHash) == 1 {
 		// Preserve the originally presented token during the bounded retry window.
 		// If the previous refresh response was lost, the client can safely retry and
-		// receive another rotated token instead of being forced through OTP login.
+		// receive another rotated token instead of being forced to sign in again.
 		nextPreviousHash = previousHash
 		nextPreviousValidUntil = *previousValidUntil
 	}
@@ -240,7 +83,7 @@ func (s *Server) refreshSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to refresh the session.")
 		return
 	}
-	s.writeSessionResponse(w, r, userID, sessionID, newToken)
+	s.writeSessionResponse(w, r, http.StatusOK, userID, sessionID, newToken)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +121,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) writeSessionResponse(w http.ResponseWriter, r *http.Request, userID, sessionID, refreshToken string) {
+func (s *Server) writeSessionResponse(w http.ResponseWriter, r *http.Request, status int, userID, sessionID, refreshToken string) {
 	accessToken, expiresAt, err := s.tokens.Issue(userID, sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Unable to issue an access token.")
@@ -295,7 +138,7 @@ func (s *Server) writeSessionResponse(w http.ResponseWriter, r *http.Request, us
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the player account.")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, status, map[string]any{
 		"accessToken": accessToken, "refreshToken": refreshToken, "tokenType": "Bearer",
 		"expiresInSeconds": int(time.Until(expiresAt).Seconds()), "player": player,
 	})
@@ -339,37 +182,6 @@ func normalizeEmail(raw string) (string, bool) {
 		return "", false
 	}
 	return raw, true
-}
-
-// createPlayerAccount inserts a new player with a generated handle such as
-// Swift_Falcon_4821. The handle is also the display name until the player
-// chooses one during onboarding, so no name is ever derived from the email.
-func createPlayerAccount(ctx context.Context, tx pgx.Tx, email string, entropy io.Reader) (string, error) {
-	handles, err := username.Candidates(entropy, signupHandleAttempts)
-	if err != nil {
-		return "", err
-	}
-	var userID string
-	if err = tx.QueryRow(ctx, `INSERT INTO users(email,display_name,status) VALUES ($1,$2,'active') RETURNING id`,
-		email, handles[0]).Scan(&userID); err != nil {
-		return "", err
-	}
-	for _, handle := range handles {
-		var claimed string
-		err = tx.QueryRow(ctx, `INSERT INTO player_profiles(user_id,handle) VALUES ($1,$2)
-			ON CONFLICT ((lower(handle))) DO NOTHING RETURNING handle`, userID, handle).Scan(&claimed)
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		if claimed != handles[0] {
-			_, err = tx.Exec(ctx, `UPDATE users SET display_name=$2 WHERE id=$1`, userID, claimed)
-		}
-		return userID, err
-	}
-	return "", errHandleUnavailable
 }
 
 func (s *Server) allowOTPRate(ctx context.Context, kind, value string, limit int) bool {

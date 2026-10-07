@@ -20,7 +20,8 @@ Cloudflare R2 is the selected managed evidence store. Set `STORAGE_MODE=r2` and
 follow [R2 setup](../../docs/cloudflare-r2.md), including the live acceptance test
 and `npm run stack:r2:up` overlay. Local MinIO remains available for development.
 
-The API covers email OTP and rotating sessions; player onboarding, legal consent,
+The API covers registration with a username, Konami ID and password, Konami ID sign-in
+and rotating sessions; email and phone added after registration, legal consent,
 profiles, avatars and game-account verification; competition discovery, eligibility,
 registration, typed draws and progression; rankings and public histories; match
 check-in, blind score reports, private screenshot evidence, removal of silent
@@ -32,7 +33,8 @@ The complete machine-readable contract is `openapi/openapi.yaml`; mobile integra
 order and deployment dependencies are documented in `../../docs/mobile-api-requirements.md`
 and `../../docs/backend-api-status.md`.
 
-Email OTPs are logged only when `EMAIL_MODE=log` for local development. Production
+Passwords are stored as Argon2id hashes. Email codes (address verification and
+password reset) are logged only when `EMAIL_MODE=log` for local development. Production
 configuration rejects that mode and requires SMTP. Access tokens are short-lived;
 refresh tokens rotate on every use, retain a bounded retry grace after a lost
 response, and the underlying session remains valid until the player explicitly
@@ -41,8 +43,8 @@ report success when Redis revocation propagation fails.
 
 All mutations use the writer pool. Safe catalog and collection reads use the
 reader pool and fall back to the writer when the reader is unavailable. Current
-player reads use the writer to preserve read-after-write consistency during
-onboarding.
+player reads use the writer to preserve read-after-write consistency after
+registration and account changes.
 
 `GET /v1/games` uses a reusable Redis stale-while-revalidate response cache with
 stable ETags, process-local request coalescing, a distributed rebuild lock and a

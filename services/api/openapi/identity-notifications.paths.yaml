@@ -6,7 +6,7 @@ paths:
     get:
       operationId: getCurrentLegalDocuments
       tags: [Legal]
-      summary: Return the current terms and privacy-policy versions for onboarding.
+      summary: Return the current terms and privacy-policy versions for registration.
       responses:
         "200":
           description: Current legal documents.

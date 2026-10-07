@@ -5,7 +5,12 @@ reviewed against the source. The four load-bearing claims about existing behavio
 independently verified: the createGameAccount 409 oracle, HashOTP email binding, verifyOTP
 auto-creating users, and the PresignGet 1-15 minute clamp.
 
-Status: **specified, not implemented.** Migration 000010 does not exist yet.
+Status: **superseded, never implemented.** On 2026-10-07 the product decision changed:
+players register with only a username, Konami ID and password and sign in with the Konami
+ID and password; email and phone are added after registration. See
+`docs/mobile-api-requirements.md` and `services/api/openapi/openapi.yaml` for the
+implemented contract. Kept for its reasoning: the Konami ID stays on `game_accounts`
+behind a normalized unique index, phones are country-neutral, and one account per phone.
 
 ---
 # Gamics 000010 — Player Identity Implementation Spec

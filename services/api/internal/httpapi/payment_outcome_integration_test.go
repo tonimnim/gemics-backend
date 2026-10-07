@@ -107,8 +107,8 @@ func paymentFlowInsertPlayer(t *testing.T, h paymentFlowHarness, label string) (
 	handle := label + "_" + strings.ToLower(rand.Text())[:10]
 	var userID, gameAccountID string
 	if err := h.Pool.QueryRow(t.Context(), `INSERT INTO users(email,display_name,status,birth_date,
-		terms_accepted_at,privacy_accepted_at,display_name_set_at)
-		VALUES ($1||'@gamics.test',$1,'active','2000-01-01',now(),now(),now())
+		terms_accepted_at,privacy_accepted_at)
+		VALUES ($1||'@gamics.test',$1,'active','2000-01-01',now(),now())
 		RETURNING id::text`, handle).Scan(&userID); err != nil {
 		t.Fatal(err)
 	}

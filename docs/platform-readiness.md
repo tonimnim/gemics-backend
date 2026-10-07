@@ -23,7 +23,7 @@ dependencies and `mobile-api-requirements.md` for the player journey.
 | Notifications and Expo push receipts | Implemented | Configure Expo, monitor delivery jobs, and add transactional notification email if enabled |
 | PostgreSQL writer/reader and Redis cache/security split | Implemented in service configuration | Use managed failover/replicas and separate production Redis policies; Compose is not HA |
 | Local private media storage | Implemented with MinIO | Use HTTPS, scoped credentials and managed S3-compatible storage in production |
-| Mobile player app | API-ready; client integration remains in its own repository | Generate types from OpenAPI 0.8.0 and disable fixtures only when the local stack is reachable |
+| Mobile player app | API-ready; client integration remains in its own repository | Generate types from OpenAPI 0.9.0 and disable fixtures only when the local stack is reachable |
 | Organizer and Gamics staff UI | Not implemented in this backend repository | Build dedicated authenticated clients; do not turn the marketing page into an operations console |
 | Marketing site | Implemented | Deploy separately from the mobile app and verify analytics/SEO |
 

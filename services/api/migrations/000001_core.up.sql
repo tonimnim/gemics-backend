@@ -10,12 +10,25 @@ CREATE TABLE users (
     country_code char(2) NOT NULL DEFAULT 'KE',
     birth_date date,
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('pending', 'active', 'suspended', 'deleted')),
+    -- Players register with a username, Konami ID and password. Email and
+    -- phone are optional contact details added after registration; email is
+    -- stored only once its code is verified.
+    password_hash text CHECK (password_hash IS NULL OR password_hash LIKE '$argon2id$%'),
+    password_changed_at timestamptz,
+    email_verified_at timestamptz,
+    registration_ip text,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    CHECK (email IS NOT NULL OR phone_e164 IS NOT NULL)
+    -- International E.164 with a leading plus, never one country's format:
+    -- Kenya and India launch first, but the platform is global.
+    CONSTRAINT users_phone_e164_chk CHECK (phone_e164 IS NULL OR phone_e164 ~ '^\+[1-9][0-9]{7,14}$')
 );
 CREATE UNIQUE INDEX users_email_unique ON users (lower(email)) WHERE email IS NOT NULL;
+-- One account per phone: the anti-fraud handle for payments.
 CREATE UNIQUE INDEX users_phone_unique ON users (phone_e164) WHERE phone_e164 IS NOT NULL;
+-- Registrations per IP are counted here when Redis is unavailable.
+CREATE INDEX users_registration_ip_idx ON users (registration_ip, created_at DESC)
+    WHERE registration_ip IS NOT NULL;
 
 CREATE TABLE player_profiles (
     user_id uuid PRIMARY KEY REFERENCES users(id),
@@ -68,16 +81,22 @@ CREATE TABLE game_accounts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id uuid NOT NULL REFERENCES users(id),
     game_id text NOT NULL REFERENCES games(id),
-    platform text NOT NULL,
+    -- Registration does not ask for a platform; '' means not chosen yet.
+    platform text NOT NULL DEFAULT '',
     in_game_name text NOT NULL,
-    publisher_player_id text,
+    publisher_player_id text CHECK (publisher_player_id IS NULL OR char_length(publisher_player_id) <= 64),
     verification_status text NOT NULL DEFAULT 'unverified' CHECK (verification_status IN ('unverified', 'pending', 'verified', 'rejected')),
     verified_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX game_accounts_user_game_idx ON game_accounts (user_id, game_id);
-CREATE UNIQUE INDEX game_accounts_publisher_id_unique ON game_accounts (game_id, publisher_player_id) WHERE publisher_player_id IS NOT NULL;
+-- For eFootball the publisher ID is the player's Konami ID, which is also the
+-- sign-in identifier. Players type it with varying case and separators, so
+-- uniqueness and lookup use its uppercase alphanumeric form.
+CREATE UNIQUE INDEX game_accounts_publisher_id_unique ON game_accounts
+    (game_id, upper(regexp_replace(publisher_player_id, '[^A-Za-z0-9]+', '', 'g')))
+    WHERE publisher_player_id IS NOT NULL;
 
 CREATE TABLE competitions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

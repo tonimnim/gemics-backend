@@ -20,7 +20,7 @@ type Sender interface {
 type LogSender struct{ Logger *slog.Logger }
 
 func (s LogSender) SendOTP(_ context.Context, recipient, code string) error {
-	s.Logger.Warn("development OTP email", "recipient", recipient, "code", code)
+	s.Logger.Warn("development email code", "recipient", recipient, "code", code)
 	return nil
 }
 
@@ -98,7 +98,7 @@ func (s SMTPSender) SendOTP(ctx context.Context, recipient, code string) error {
 	}
 	message := []byte("From: " + from.String() + "\r\n" +
 		"To: " + to.String() + "\r\n" +
-		"Subject: Your Gamics sign-in code\r\n" +
+		"Subject: Your Gamics verification code\r\n" +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n\r\n" +
 		"Your Gamics code is " + code + ". It expires soon. If you did not request it, ignore this email.\r\n")

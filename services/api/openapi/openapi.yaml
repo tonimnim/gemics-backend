@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Gamics API
-  version: 0.8.0
+  version: 0.9.0
   description: >-
     Gamics player, competition, blind match result verification, Gamics result review, rankings, M-Pesa payments,
     notification, identity and role-based operations API.
@@ -57,68 +57,88 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/Game'
-  /v1/auth/otp/request:
+  /v1/auth/register:
     post:
-      operationId: requestEmailOTP
+      operationId: registerPlayer
       tags:
         - Authentication
-      summary: Send a passwordless sign-in code by email.
+      summary: Register with a username, eFootball Konami ID and password.
+      description: >-
+        Registration asks for nothing else. The username becomes the player's handle and display name, the Konami ID
+        becomes their eFootball game account, and the current terms and privacy notice, which the registration
+        screen must present, are recorded as accepted. The new player can enter competitions straight away. Email
+        and phone are added later from the signed-in account.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required:
-                - email
+                - username
+                - konamiId
+                - password
               properties:
-                email:
+                username:
                   type: string
-                  format: email
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9_.]{2,23}$
+                konamiId:
+                  type: string
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9 _.-]{5,63}$
+                  description: >-
+                    As shown in eFootball. Case, spaces, dots, dashes and underscores are ignored when comparing, and
+                    at least six letters or digits are required.
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+                  description: Characters, not bytes. It may not be the username or the Konami ID.
+                deviceName:
+                  type: string
+                  maxLength: 120
       responses:
-        '202':
-          description: The request was accepted.
+        '201':
+          description: Registered and signed in.
           content:
             application/json:
               schema:
-                type: object
-                required:
-                  - status
-                  - expiresInSeconds
-                properties:
-                  status:
-                    type: string
-                    const: accepted
-                  expiresInSeconds:
-                    type: integer
+                $ref: '#/components/schemas/AuthSession'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_username, invalid_konami_id, invalid_password, weak_password, invalid_device_name.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: username_taken; konami_id_taken (the Konami ID already has an account, so sign in instead).
         '429':
           $ref: '#/components/responses/Error'
-  /v1/auth/otp/verify:
+          description: rate_limited (too many registrations from this network), with Retry-After.
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/auth/login:
     post:
-      operationId: verifyEmailOTP
+      operationId: signIn
       tags:
         - Authentication
-      summary: Verify an email code and create or sign in the player.
+      summary: Sign in with a Konami ID and password.
       description: >-
-        A new account gets a generated handle such as Swift_Falcon_4821 and a private profile. The handle is also
-        its display name until the player chooses one, so player.onboarding.displayName starts false. No name is
-        ever derived from the email address.
+        An unknown Konami ID and a wrong password return the same 401. Repeated failures for one Konami ID or one
+        network are refused with 429 for LOGIN_FAILURE_WINDOW.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required:
-                - email
-                - code
+                - konamiId
+                - password
               properties:
-                email:
+                konamiId:
                   type: string
-                  format: email
-                code:
+                password:
                   type: string
-                  pattern: ^[0-9]{6}$
                 deviceName:
                   type: string
                   maxLength: 120
@@ -131,11 +151,90 @@ paths:
                 $ref: '#/components/schemas/AuthSession'
         '401':
           $ref: '#/components/responses/Error'
+          description: invalid_credentials.
+        '403':
+          $ref: '#/components/responses/Error'
+          description: account_unavailable (suspended), only after a correct password.
+        '429':
+          $ref: '#/components/responses/Error'
+          description: rate_limited, with Retry-After.
         '503':
           $ref: '#/components/responses/Error'
-          description: >-
-            database_unavailable, or handle_unavailable when no generated handle could be claimed for a new
-            account; retry the same code.
+  /v1/auth/password-reset/request:
+    post:
+      operationId: requestPasswordReset
+      tags:
+        - Authentication
+      summary: Email a password-reset code to the account's verified address.
+      description: >-
+        Always 202 for a well-formed Konami ID, whether or not it has an account or a verified email, so the answer
+        reveals nothing. Players who never verified an email cannot reset their password themselves; the app should
+        ask players to add one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - konamiId
+              properties:
+                konamiId:
+                  type: string
+      responses:
+        '202':
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodeAccepted'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_konami_id.
+        '429':
+          $ref: '#/components/responses/Error'
+          description: rate_limited, with Retry-After.
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/auth/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      tags:
+        - Authentication
+      summary: Set a new password with the emailed code and sign every device out.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - konamiId
+                - code
+                - newPassword
+              properties:
+                konamiId:
+                  type: string
+                code:
+                  type: string
+                  pattern: ^[0-9]{6}$
+                newPassword:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+      responses:
+        '204':
+          description: Password changed. Sign in with the new password.
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_password, weak_password. The code is not spent.
+        '401':
+          $ref: '#/components/responses/Error'
+          description: invalid_code (wrong, expired or used).
+        '503':
+          $ref: '#/components/responses/Error'
   /v1/auth/refresh:
     post:
       operationId: refreshSession
@@ -189,7 +288,7 @@ paths:
         - bearerAuth: []
       responses:
         '200':
-          description: Current player and onboarding progress.
+          description: Current player.
           content:
             application/json:
               schema:
@@ -200,7 +299,7 @@ paths:
       operationId: updateCurrentPlayer
       tags:
         - Players
-      description: Setting displayName completes the display-name onboarding step.
+      description: Optional profile details a player can change after registration.
       security:
         - bearerAuth: []
       requestBody:
@@ -216,7 +315,7 @@ paths:
                   type: string
                   minLength: 2
                   maxLength: 80
-                  description: The name opponents and public profiles show. Setting it marks onboarding.displayName true.
+                  description: The name opponents and public profiles show. It starts as the username.
                 countryCode:
                   type: string
                   pattern: ^[A-Z]{2}$
@@ -240,7 +339,7 @@ paths:
       operationId: putPlayerProfile
       tags:
         - Players
-      description: While onboarding.displayName is false, the display name follows the handle set here.
+      description: The handle is the username. Changing it does not change the display name or the Konami ID.
       security:
         - bearerAuth: []
       requestBody:
@@ -258,6 +357,167 @@ paths:
                 $ref: '#/components/schemas/Player'
         '409':
           $ref: '#/components/responses/Error'
+  /v1/me/password:
+    post:
+      operationId: changePassword
+      tags:
+        - Players
+      summary: Change the password and sign every other device out.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - currentPassword
+                - newPassword
+              properties:
+                currentPassword:
+                  type: string
+                newPassword:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+      responses:
+        '204':
+          description: Password changed; this session stays signed in.
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_password, weak_password.
+        '401':
+          $ref: '#/components/responses/Error'
+          description: invalid_credentials (wrong current password), authentication_required, invalid_session.
+        '429':
+          $ref: '#/components/responses/Error'
+          description: rate_limited, with Retry-After.
+  /v1/me/email:
+    post:
+      operationId: requestEmailVerification
+      tags:
+        - Players
+      summary: Add or change the account email; a code is sent to confirm it.
+      description: >-
+        The address is stored only after POST /v1/me/email/verify. A verified email receives Gamics communication
+        and is the only way to reset a forgotten password.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '202':
+          description: Code sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodeAccepted'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_email.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: email_already_verified, email_taken.
+        '429':
+          $ref: '#/components/responses/Error'
+          description: rate_limited, with Retry-After.
+        '503':
+          $ref: '#/components/responses/Error'
+          description: email_unavailable, database_unavailable.
+  /v1/me/email/verify:
+    post:
+      operationId: verifyEmail
+      tags:
+        - Players
+      summary: Confirm the emailed code and store the address as verified.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - code
+              properties:
+                code:
+                  type: string
+                  pattern: ^[0-9]{6}$
+      responses:
+        '200':
+          description: Updated player.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Player'
+        '401':
+          $ref: '#/components/responses/Error'
+          description: invalid_code.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: email_taken.
+  /v1/me/phone:
+    put:
+      operationId: putPhone
+      tags:
+        - Players
+      summary: Save the phone number used for payments.
+      description: >-
+        International E.164 format with the country code, for example +254712345678 or +919812345678. One phone
+        number belongs to one account. The number is not verified by SMS. M-Pesa uses it when a payment request
+        omits phoneNumber, and M-Pesa itself accepts only Kenyan Safaricom numbers.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - phoneNumber
+              properties:
+                phoneNumber:
+                  type: string
+      responses:
+        '200':
+          description: Updated player.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Player'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_phone (missing country code or not a phone number).
+        '409':
+          $ref: '#/components/responses/Error'
+          description: phone_taken (linked to another account; Gamics support can help the owner).
+    delete:
+      operationId: deletePhone
+      tags:
+        - Players
+      summary: Remove the saved phone number.
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Removed.
   /v1/me/game-accounts:
     get:
       operationId: listMyGameAccounts
@@ -374,7 +634,6 @@ paths:
               required:
                 - competitionId
                 - gameAccountId
-                - phoneNumber
               properties:
                 competitionId:
                   type: string
@@ -384,7 +643,9 @@ paths:
                   format: uuid
                 phoneNumber:
                   type: string
-                  description: Kenyan Safaricom number; local or 254 format is accepted.
+                  description: >-
+                    Kenyan Safaricom number; local, 254 or +254 format is accepted. When omitted, the phone saved
+                    with PUT /v1/me/phone is used.
       responses:
         '200':
           description: Idempotent replay of an existing request.
@@ -402,7 +663,8 @@ paths:
           $ref: '#/components/responses/Error'
           description: >-
             idempotency_key_required; invalid_request (malformed body or unknown field); invalid_payment_request
-            (competitionId or gameAccountId is not a UUID); invalid_phone (not a Kenyan Safaricom number).
+            (competitionId or gameAccountId is not a UUID); invalid_phone (not a Kenyan Safaricom number); phone_required
+            (no phoneNumber and no saved phone).
         '401':
           $ref: '#/components/responses/Error'
           description: authentication_required, invalid_access_token, invalid_session.
@@ -2189,7 +2451,7 @@ paths:
       operationId: getCurrentLegalDocuments
       tags:
         - Legal
-      summary: Return the current terms and privacy-policy versions for onboarding.
+      summary: Return the current terms and privacy-policy versions for registration.
       responses:
         '200':
           description: Current legal documents.
@@ -4625,24 +4887,44 @@ components:
       type: object
       required:
         - id
-        - email
+        - username
+        - konamiId
         - displayName
+        - email
+        - emailVerified
+        - phoneNumber
         - countryCode
         - status
-        - onboarding
       properties:
         id:
           type: string
           format: uuid
-        email:
-          type: string
-          format: email
+        username:
+          type:
+            - string
+            - 'null'
+          description: The player's handle, chosen at registration.
+        konamiId:
+          type:
+            - string
+            - 'null'
+          description: The eFootball Konami ID the player signs in with, as they typed it.
         displayName:
           type: string
-          description: >-
-            The name opponents, match rooms and public profiles show. Until the player chooses one
-            (onboarding.displayName false) it is their handle, or Player when they have no handle yet. It is never
-            derived from the email address.
+          description: The name opponents, match rooms and public profiles show. It starts as the username.
+        email:
+          type:
+            - string
+            - 'null'
+          format: email
+          description: Null until the player adds and verifies one with POST /v1/me/email.
+        emailVerified:
+          type: boolean
+        phoneNumber:
+          type:
+            - string
+            - 'null'
+          description: E.164, null until saved with PUT /v1/me/phone.
         countryCode:
           type: string
         birthDate:
@@ -4650,38 +4932,24 @@ components:
             - string
             - 'null'
           format: date
+          description: Asked only when a competition has a minimum age.
         status:
           type: string
         profile:
           oneOf:
             - $ref: '#/components/schemas/Profile'
             - type: 'null'
-        onboarding:
-          type: object
-          required:
-            - personalDetails
-            - displayName
-            - profile
-            - gameAccount
-            - complete
-          properties:
-            personalDetails:
-              type: boolean
-            displayName:
-              type: boolean
-              description: >-
-                True once the player chose a display name with PATCH /v1/me. While false, show the display-name
-                screen; the display name is still the handle.
-            profile:
-              type: boolean
-            gameAccount:
-              type: boolean
-            complete:
-              type: boolean
-              description: >-
-                All four steps are done. Until it is true, GET /v1/competitions/{id}/eligibility reports a blocking
-                issue (profile_incomplete while the display name is pending) and free registration and paid entry are
-                refused with 409 competition_ineligible for the same reason, issue.code profile_incomplete.
+    CodeAccepted:
+      type: object
+      required:
+        - status
+        - expiresInSeconds
+      properties:
+        status:
+          type: string
+          const: accepted
+        expiresInSeconds:
+          type: integer
     ProfileInput:
       type: object
       required:
@@ -7361,7 +7629,7 @@ components:
             - conduct_suspended
             - competition_cancelled
           description: >-
-            profile_incomplete means onboarding is unfinished (see Player.onboarding), including a pending display name.
+            profile_incomplete means the player has not accepted the current terms and privacy notice.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
             competition_cancelled (category registration) blocks every new entry once the competition is cancelled

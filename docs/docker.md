@@ -37,7 +37,8 @@ Useful endpoints:
 - marketing website: `http://localhost:3000`
 - MinIO console: `http://localhost:9001`
 
-With `EMAIL_MODE=log`, request an email OTP and read it from:
+With `EMAIL_MODE=log`, email codes (verifying an added email, password reset) are
+read from:
 
 ```sh
 docker compose --env-file .env.docker logs api

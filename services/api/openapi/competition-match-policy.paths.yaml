@@ -218,7 +218,7 @@ components:
             - conduct_suspended
             - competition_cancelled
           description: >-
-            profile_incomplete means onboarding is unfinished (see Player.onboarding), including a pending display name.
+            profile_incomplete means the player has not accepted the current terms and privacy notice.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
             competition_cancelled (category registration) blocks every new entry once the competition is cancelled

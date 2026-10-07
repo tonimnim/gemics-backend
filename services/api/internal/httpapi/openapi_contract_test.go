@@ -79,15 +79,15 @@ func openAPIWords(text string) string {
 
 func TestOpenAPIContractVersionAndRetiredSurface(t *testing.T) {
 	contract := openAPIFile(t, "openapi.yaml")
-	if !strings.Contains(contract, "\n  version: 0.8.0\n") {
-		t.Error("openapi.yaml info.version is not 0.8.0")
+	if !strings.Contains(contract, "\n  version: 0.9.0\n") {
+		t.Error("openapi.yaml info.version is not 0.9.0")
 	}
 	componentsAt := strings.Index(contract, "\ncomponents:\n")
 	if componentsAt < 0 {
 		t.Fatal("openapi.yaml has no components section")
 	}
 	paths, components := contract[:componentsAt], contract[componentsAt:]
-	for _, retired := range []string{"referee-case", "result-submissions", "dispute"} {
+	for _, retired := range []string{"referee-case", "result-submissions", "dispute", "/v1/auth/otp/"} {
 		if strings.Contains(paths, retired) {
 			t.Errorf("openapi.yaml paths still mention %q", retired)
 		}

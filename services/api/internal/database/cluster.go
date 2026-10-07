@@ -19,8 +19,8 @@ type Cluster struct {
 }
 
 var trustedLegacyMigrationChecksums = map[string]string{
-	"000001_core.up.sql":     "ca8d784e27c79300115d56c1bc5400861cb2ec0e18761c28e696e0f34d956c63",
-	"000002_identity.up.sql": "9c8f79206ab13f041673335d2c5040377cd0863f27e41d48705e3d52e604cb26",
+	"000001_core.up.sql":     "46456006cdffdb047340c9d292895b4b95f4e822fec07e43c1f2cfec1badc6b1",
+	"000002_identity.up.sql": "16098812e19fb205b6837dc1b8192f9698aba34002f19e5c9ac6267fc42e8b5b",
 }
 
 func Open(ctx context.Context, writeURL, readURL string, writeMax, readMax int32) (*Cluster, error) {

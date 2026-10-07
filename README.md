@@ -8,8 +8,9 @@ eFootball Mobile in Kenya.
 - An Expo SDK 57 React Native player app for iOS and Android.
 - A responsive marketing website using the Next.js App Router programming model.
 - A Go API with graceful shutdown, timeouts, structured logs, CORS and request IDs.
-- Email OTP onboarding, rotating refresh sessions, player/game-account APIs and a
-  replica-aware Redis-cached game catalog.
+- Registration with only a username, Konami ID and password; Konami ID sign-in;
+  email and phone added after registration; rotating refresh sessions,
+  player/game-account APIs and a replica-aware Redis-cached game catalog.
 - A role-based organizer API: an explicit permission matrix, per-route
   authorization over organization membership, and competition create/edit/publish
   with status-aware edit rules, guarded lifecycle transitions and audit history.

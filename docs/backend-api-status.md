@@ -18,9 +18,9 @@ Requirements documents explain behavior; they do not override OpenAPI.
 
 The contract currently covers:
 
-- Email OTP sign-in, rotating refresh sessions, explicit logout, and device/session
-  revocation.
-- Current-player onboarding, versioned legal acceptance, profile and avatar media,
+- Registration (username, Konami ID, password), Konami ID sign-in, rotating refresh
+  sessions, explicit logout, device/session revocation, and password change/reset.
+- Email verification and phone numbers added after registration, versioned legal acceptance, profile and avatar media,
   preferences, and cooling-off account deletion.
 - Expo push-device registration and notification inbox/read operations.
 - eFootball Mobile accounts and evidence-based verification workflow, with separate
@@ -50,7 +50,7 @@ backend contract and must never be called by a player client.
 
 These are deployment integrations, not missing player routes:
 
-1. SMTP credentials for email OTP delivery.
+1. SMTP credentials for email verification and password-reset codes.
 2. Daraja production credentials, Till/PayBill configuration, and a public HTTPS
    callback origin.
 3. Daraja Pull Transactions (or an equivalent independent receipt source) to recover
@@ -80,7 +80,7 @@ These are deployment integrations, not missing player routes:
 - Add richer round-robin tie-break rules such as head-to-head if a competition format
   requires them; current persisted ordering uses points, goal difference, and goals.
 
-Phone OTP is not required for launch. Konami result ingestion is also not required:
+Phone verification by SMS is not required for launch. Konami result ingestion is also not required:
 the implemented trust model is blind dual score reports, screenshots after a
 mismatch, removal of silent entries, and Gamics staff review of the claims that
 still differ.

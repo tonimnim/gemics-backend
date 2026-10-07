@@ -28,6 +28,9 @@ func TestRemovedRoutesAreNotFound(t *testing.T) {
 		method string
 		path   string
 	}{
+		// Email codes no longer sign players in or create accounts.
+		{http.MethodPost, "/v1/auth/otp/request"},
+		{http.MethodPost, "/v1/auth/otp/verify"},
 		{http.MethodPost, "/v1/matches/" + matchID + "/result-submissions"},
 		{http.MethodPost, "/v1/result-submissions/" + caseID + "/confirmations"},
 		{http.MethodGet, "/v1/matches/" + matchID + "/referee-case"},

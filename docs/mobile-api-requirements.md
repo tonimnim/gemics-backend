@@ -1,6 +1,6 @@
 # Mobile API handoff
 
-The authoritative contract is `services/api/openapi/openapi.yaml` (OpenAPI 0.8.0).
+The authoritative contract is `services/api/openapi/openapi.yaml` (OpenAPI 0.9.0).
 Generate types from that file and validate runtime responses. Do not invent routes or
 infer authorization from UI labels. All authenticated requests use the access token;
 refresh tokens are rotated by the API and stored only in secure device storage.
@@ -19,11 +19,25 @@ against `EXPO_PUBLIC_API_URL`. The public avatar route responds with a short-liv
 
 ## Player journey
 
-### 1. Email sign-in and durable sessions
+### 1. Registration, sign-in and durable sessions
 
-- `POST /v1/auth/otp/request` with an email address.
-- `POST /v1/auth/otp/verify` creates or signs in the player and returns access and
-  refresh tokens.
+Registration asks for exactly three things, and nothing else:
+
+1. **Username** (3-24 letters, numbers, underscores or dots). It becomes the handle
+   and the display name.
+2. **Konami ID**, as shown in eFootball. Case, spaces, dots, dashes and underscores
+   are ignored when comparing, so `ABCD-1234-EFGH` and `abcd1234efgh` are the same
+   ID. It becomes the player's eFootball game account.
+3. **Password** (8-128 characters, not the username or Konami ID).
+
+- `POST /v1/auth/register` with `{username, konamiId, password}` returns `201` and an
+  `AuthSession`. The registration screen must show the current terms and privacy
+  notice (`GET /v1/legal/documents/current`): registering records them as accepted.
+  `409 username_taken` and `409 konami_id_taken` (offer sign-in) are the conflicts.
+  A registered player can enter competitions straight away.
+- `POST /v1/auth/login` with `{konamiId, password}` returns an `AuthSession`. An
+  unknown Konami ID and a wrong password both return `401 invalid_credentials`;
+  repeated failures return `429` with `Retry-After`.
 - `POST /v1/auth/refresh` rotates the refresh token. Serialize refresh attempts and
   replace the stored token atomically.
 - `POST /v1/auth/logout` revokes the current session and every push installation
@@ -33,31 +47,40 @@ against `EXPO_PUBLIC_API_URL`. The public avatar route responds with a short-liv
   Revoking a session also revokes its push installations, so a lost phone signed out
   from another device stops receiving the player's pushes.
 
-Phone OTP is intentionally not part of onboarding. A phone number is requested only
-when a player chooses M-Pesa.
+### 2. Contact details, password, legal consent, profile, and avatar
 
-### 2. Onboarding, legal consent, profile, and avatar
+Email and phone are never asked for at registration. Ask for them later, from the
+signed-in account, when they matter.
 
-- `GET /v1/me` returns the player and `onboarding`: `personalDetails`, `displayName`,
-  `profile`, `gameAccount` and `complete`. Show the next unfinished step. Until
-  `complete` is true, `GET /v1/competitions/{id}/eligibility` reports a blocking issue
-  (`profile_incomplete` while the display name is pending) and free registration and
-  paid entry are refused with `409 competition_ineligible` for the same reason
-  (`issue.code` `profile_incomplete`). Route it to the unfinished step.
-- A new account starts with a generated handle such as `Swift_Falcon_4821` and a
-  private profile, so `onboarding.profile` is already true. That handle is also the
-  display name until the player chooses one. While `onboarding.displayName` is false,
-  show the display-name screen and save the answer with `PATCH /v1/me`
-  (`displayName`, 2-80 characters). Opponents, match rooms and public profiles show
-  `displayName`; it is never taken from the email address, so never prefill the screen
-  with the email.
-- `GET /v1/legal/documents/current` returns the exact current terms/privacy versions.
-- `POST /v1/me/legal-acceptances` records those exact versions; `GET` lists accepted
-  versions.
-- `PATCH /v1/me` updates personal details and the display name. It does not accept
-  legal-consent booleans.
-- `PUT /v1/me/profile` creates or updates handle, bio, discoverability, and profile
-  preferences. While the display name is still pending it follows the handle.
+- **Email** (communication and password recovery): `POST /v1/me/email` sends a
+  6-digit code; `POST /v1/me/email/verify` with `{code}` stores the address as
+  verified. Encourage players to add one: it is the only self-service way to recover
+  a forgotten password.
+- **Phone** (payments): `PUT /v1/me/phone` with `{phoneNumber}` in international
+  format with the country code, for example `+254712345678` (Kenya) or
+  `+919812345678` (India). Players from any country are accepted. One number belongs
+  to one account (`409 phone_taken`). It is not verified by SMS. M-Pesa uses it when a
+  payment request omits `phoneNumber`; M-Pesa itself accepts only Kenyan Safaricom
+  numbers. `DELETE /v1/me/phone` removes it.
+- **Password**: `POST /v1/me/password` with `{currentPassword, newPassword}` keeps
+  this device signed in and signs every other device out.
+- **Forgotten password**: `POST /v1/auth/password-reset/request` with `{konamiId}`
+  always answers `202`; if the account has a verified email, a code is sent to it.
+  `POST /v1/auth/password-reset/confirm` with `{konamiId, code, newPassword}` sets the
+  password and signs every device out. Without a verified email the player must
+  contact Gamics support.
+- `GET /v1/me` returns the player: `username`, `konamiId`, `displayName`, `email`,
+  `emailVerified`, `phoneNumber`, `countryCode`, `birthDate` and `profile`.
+- `PATCH /v1/me` optionally changes `displayName` (2-80 characters), `countryCode` and
+  `birthDate`. A birth date is needed only for a competition with a minimum age, which
+  reports `age_required`.
+- When the terms or privacy notice change, `GET /v1/competitions/{id}/eligibility`
+  reports `profile_incomplete`; record the new versions with
+  `POST /v1/me/legal-acceptances` (`GET` lists accepted versions).
+- `PUT /v1/me/profile` updates the handle (username), bio, discoverability and profile
+  preferences.
+- Editing the eFootball game account's `publisherPlayerId` changes the Konami ID the
+  player signs in with. It cannot be removed (`409 konami_id_required`).
 - `POST /v1/me/avatar/uploads`, direct object upload, then
   `POST /v1/me/avatar/uploads/{id}/complete` uploads an avatar.
 - `PATCH /v1/me/avatar` selects the completed avatar; `GET /v1/me/avatar` returns
@@ -418,7 +441,7 @@ exposed merely because a tab is visible.
 
 ## Client rules
 
-- Generate request/response types from OpenAPI 0.8.0 and keep Zod validation at the
+- Generate request/response types from OpenAPI 0.9.0 and keep Zod validation at the
   network boundary.
 - Use a fresh UUID `Idempotency-Key` for each user intent and reuse it only for retries
   of that exact payload.

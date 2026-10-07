@@ -256,19 +256,17 @@ func (s *Server) executeAccountDeletion(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var email *string
-	if err = tx.QueryRow(r.Context(), `SELECT email FROM users WHERE id=$1 AND status='active' FOR UPDATE`, current.UserID).Scan(&email); errors.Is(err, pgx.ErrNoRows) {
+	var locked bool
+	if err = tx.QueryRow(r.Context(), `SELECT true FROM users WHERE id=$1 AND status='active' FOR UPDATE`, current.UserID).Scan(&locked); errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "account_unavailable", "This account can no longer be deleted.")
 		return
 	} else if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to delete this account.")
 		return
 	}
-	if email != nil {
-		if _, err = tx.Exec(r.Context(), `DELETE FROM email_otp_challenges WHERE lower(email)=lower($1)`, *email); err != nil {
-			writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to delete this account.")
-			return
-		}
+	if _, err = tx.Exec(r.Context(), `DELETE FROM email_otp_challenges WHERE user_id=$1`, current.UserID); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to delete this account.")
+		return
 	}
 
 	suffix := strings.ReplaceAll(current.UserID, "-", "")
@@ -297,7 +295,8 @@ func (s *Server) executeAccountDeletion(w http.ResponseWriter, r *http.Request) 
 		{`UPDATE competition_entries SET display_name='Deleted player',updated_at=now() WHERE captain_user_id=$1`, []any{current.UserID}},
 		{`UPDATE payment_intents SET entry_display_name='Deleted player',updated_at=now() WHERE user_id=$1`, []any{current.UserID}},
 		{`UPDATE payment_refunds SET player_note='',updated_at=now() WHERE user_id=$1`, []any{current.UserID}},
-		{`UPDATE users SET email=$2,phone_e164=NULL,display_name='Deleted player',country_code='ZZ',birth_date=NULL,
+		{`UPDATE users SET email=$2,email_verified_at=NULL,phone_e164=NULL,display_name='Deleted player',country_code='ZZ',
+			birth_date=NULL,password_hash=NULL,password_changed_at=NULL,registration_ip=NULL,
 			status='deleted',terms_accepted_at=NULL,privacy_accepted_at=NULL,updated_at=now() WHERE id=$1`, []any{current.UserID, syntheticEmail}},
 	}
 	for _, statement := range statements {

@@ -27,7 +27,7 @@ type paymentInProgressError struct {
 // decision passed, worded exactly as assessCompetitionEligibility words them.
 var (
 	entryIssueProfileIncomplete = eligibilityIssue{Code: "profile_incomplete", Category: "profile",
-		Severity: "blocking", Message: "Complete your profile, choose a display name and accept the current terms and privacy notice."}
+		Severity: "blocking", Message: "Accept the current terms and privacy notice to enter competitions."}
 	entryIssueRegistrationNotReusable = eligibilityIssue{Code: "registration_not_reusable", Category: "registration",
 		Severity: "blocking", Message: "This player cannot create another entry for this competition."}
 	entryIssueCompetitionFull = eligibilityIssue{Code: "competition_full", Category: "capacity",

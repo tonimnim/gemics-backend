@@ -2,7 +2,7 @@
 
 > Implementation status: blind dual score reports, the report and response
 > windows, removal from the tournament, the Gamics review queue, conduct strikes
-> and the registration ban are implemented in the Go API and OpenAPI 0.8.0
+> and the registration ban are implemented in the Go API and OpenAPI 0.9.0
 > (`match-score-reports.paths.yaml`, `result-reviews.paths.yaml`). Last audited:
 > 2026-09-29.
 

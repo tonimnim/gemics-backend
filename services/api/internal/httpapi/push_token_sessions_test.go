@@ -107,7 +107,7 @@ func TestPushTokenRegistrationBindsTheCallersLiveSession(t *testing.T) {
 		"session_id=EXCLUDED.session_id,last_seen_at=now(),revoked_at=NULL",
 		"func (s *Server) revokePushToken")
 	assertFileOrder(t, "account_security_handlers.go", "func (s *Server) executeAccountDeletion",
-		"SELECT email FROM users WHERE id=$1 AND status='active' FOR UPDATE",
+		"SELECT true FROM users WHERE id=$1 AND status='active' FOR UPDATE",
 		"UPDATE refresh_sessions SET revoked_at=COALESCE(revoked_at,now())",
 		"DELETE FROM push_tokens WHERE user_id=$1")
 	// Refresh must lock only its session: taking the player row as well, after

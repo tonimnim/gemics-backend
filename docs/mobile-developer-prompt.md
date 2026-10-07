@@ -17,9 +17,10 @@ in a WebView.
 
 Build these player journeys:
 
-1. Email OTP onboarding, a required display-name step, profile creation,
-   age/country eligibility and consent choices.
-2. Add an eFootball Mobile game account and public player handle.
+1. Registration with only a username, Konami ID and password (which also creates
+   the eFootball Mobile game account), and sign-in with Konami ID and password.
+2. Add an email (communication, password recovery) and a phone number (payments)
+   later from the account screen, plus profile and consent choices.
 3. Discover/search competitions; view format, schedule, rules, capacity,
    organizer, entry type and prize source. A cancelled competition still opens by id
    and must show its cancelled state.
@@ -51,10 +52,10 @@ components and keep all HTTP calls behind a typed API client.
 
 ## API access
 
-Read the authoritative OpenAPI 0.8.0 contract in
+Read the authoritative OpenAPI 0.9.0 contract in
 `services/api/openapi/openapi.yaml` and the integration sequence in
-`docs/mobile-api-requirements.md`. The backend now covers email OTP and rotating
-sessions; onboarding/legal/profile/avatar; game accounts and verification; discovery,
+`docs/mobile-api-requirements.md`. The backend now covers Konami ID registration/sign-in and rotating
+sessions; email/phone/password/legal/profile/avatar; game accounts and verification; discovery,
 eligibility, registration and M-Pesa; matches, blind score reports and evidence; rankings,
 histories, notifications and account lifecycle. Generate types from OpenAPI and keep
 runtime Zod validation. Do not call the provider callback route from the app and do

@@ -48,6 +48,11 @@ type Config struct {
 	OTPRequestWindow        time.Duration
 	OTPEmailLimit           int
 	OTPIPLimit              int
+	LoginFailureWindow      time.Duration
+	LoginAccountFailures    int
+	LoginIPFailures         int
+	RegistrationWindow      time.Duration
+	RegistrationIPLimit     int
 	EmailMode               string
 	SMTPHost                string
 	SMTPPort                int
@@ -169,6 +174,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	loginFailureWindow, err := duration("LOGIN_FAILURE_WINDOW", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	registrationWindow, err := duration("REGISTRATION_WINDOW", time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
 	mpesaTimeout, err := duration("MPESA_TIMEOUT", 15*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -274,6 +287,11 @@ func Load() (Config, error) {
 		OTPRequestWindow:        otpRequestWindow,
 		OTPEmailLimit:           integer("OTP_EMAIL_LIMIT", 5),
 		OTPIPLimit:              integer("OTP_IP_LIMIT", 20),
+		LoginFailureWindow:      loginFailureWindow,
+		LoginAccountFailures:    integer("LOGIN_ACCOUNT_FAILURES", 10),
+		LoginIPFailures:         integer("LOGIN_IP_FAILURES", 50),
+		RegistrationWindow:      registrationWindow,
+		RegistrationIPLimit:     integer("REGISTRATION_IP_LIMIT", 10),
 		EmailMode:               strings.ToLower(value("EMAIL_MODE", "log")),
 		SMTPHost:                strings.TrimSpace(os.Getenv("SMTP_HOST")),
 		SMTPPort:                integer("SMTP_PORT", 587),
@@ -391,6 +409,10 @@ func Load() (Config, error) {
 	}
 	if cfg.OTPMaxAttempts < 1 || cfg.OTPEmailLimit < 1 || cfg.OTPIPLimit < 1 {
 		return Config{}, fmt.Errorf("OTP limits must be positive")
+	}
+	if cfg.LoginAccountFailures < 1 || cfg.LoginIPFailures < 1 || cfg.RegistrationIPLimit < 1 ||
+		cfg.LoginFailureWindow <= 0 || cfg.RegistrationWindow <= 0 {
+		return Config{}, fmt.Errorf("login and registration limits must be positive")
 	}
 	if cfg.MPesaMaxAmountMinor < 100 || cfg.MPesaUserLimit < 1 || cfg.MPesaPhoneLimit < 1 || cfg.MPesaIPLimit < 1 || cfg.MPesaUserWindow <= 0 || cfg.MPesaPhoneWindow <= 0 || cfg.MPesaIPWindow <= 0 {
 		return Config{}, fmt.Errorf("M-Pesa amount and velocity limits must be positive")

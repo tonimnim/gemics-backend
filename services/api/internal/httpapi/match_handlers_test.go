@@ -532,12 +532,14 @@ func TestMatchRoomQueryReadsTheMatchGameAccountAndPublicAvatar(t *testing.T) {
 	}
 	// The eFootball User ID leaves the API only to its owner, Gamics staff and
 	// the two entries of a match: never through discovery, brackets or standings.
+	// Registration, sign-in and recovery look it up to find the caller's own
+	// account and never return it.
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := []string{"account_handlers.go", "account_security_handlers.go", "game_account_verification_handlers.go",
-		"match_handlers.go"}
+	allowed := []string{"account_handlers.go", "account_contact_handlers.go", "account_security_handlers.go",
+		"game_account_verification_handlers.go", "match_handlers.go", "registration_handlers.go"}
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") || slices.Contains(allowed, file) {
 			continue
