@@ -60,7 +60,7 @@ func TestStaffDecisionIdempotencyScopesSeparateOperators(t *testing.T) {
 }
 
 func TestMandatoryRefundSchemaAndContract(t *testing.T) {
-	migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000013_payments_and_account_verification.up.sql"))
+	migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000005_payments.up.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,9 +72,9 @@ func TestMandatoryRefundSchemaAndContract(t *testing.T) {
 		contents []byte
 		text     string
 	}{
-		{migration, "mandatory boolean NOT NULL DEFAULT false"},
-		{migration, "NOT mandatory OR status <> 'rejected'"},
-		{migration, "reason_code <> 'competition_cancelled' OR mandatory"},
+		{migration, "mandatory boolean DEFAULT false NOT NULL"},
+		{migration, "((NOT mandatory) OR (status <> 'rejected'::text))"},
+		{migration, "((reason_code <> 'competition_cancelled'::text) OR mandatory)"},
 		{contract, "mandatory: { type: boolean"},
 	} {
 		if !strings.Contains(string(required.contents), required.text) {

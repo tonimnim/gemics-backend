@@ -136,23 +136,6 @@ func TestPushDeliveryRequiresALiveSession(t *testing.T) {
 	}
 }
 
-func TestPushTokenSessionMigrationShape(t *testing.T) {
-	up := filepath.Join("..", "..", "migrations", pushTokenSessionMigration+".up.sql")
-	down := filepath.Join("..", "..", "migrations", pushTokenSessionMigration+".down.sql")
-	for _, path := range []string{up, down} {
-		contents := strings.TrimSpace(readSourceFile(t, path))
-		if !strings.HasPrefix(contents, "BEGIN;") || !strings.HasSuffix(contents, "COMMIT;") {
-			t.Errorf("%s must be wrapped in BEGIN; ... COMMIT;", path)
-		}
-	}
-	assertFileOrder(t, up,
-		"ADD COLUMN session_id uuid REFERENCES refresh_sessions(id) ON DELETE CASCADE;",
-		"UPDATE push_tokens SET revoked_at=now(),updated_at=now()\nWHERE session_id IS NULL AND revoked_at IS NULL;",
-		"CREATE INDEX push_tokens_session_idx ON push_tokens (session_id);")
-	assertFileContains(t, down, "DROP INDEX IF EXISTS push_tokens_session_idx;",
-		"ALTER TABLE push_tokens DROP COLUMN IF EXISTS session_id;")
-}
-
 // TestIntegrationPushTokensStopWithTheirSession runs registration, logout,
 // remote revoke and the production projector and claim against PostgreSQL.
 func TestIntegrationPushTokensStopWithTheirSession(t *testing.T) {
@@ -218,35 +201,6 @@ func TestIntegrationPushTokensStopWithTheirSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	pushSessionIntegrationRegister(t, server, deletedID, deletedSession, "tablet", http.StatusUnauthorized)
-}
-
-// TestIntegrationPushTokenSessionMigration upgrades a schema holding a legacy
-// installation, then rolls the migration back and forward again.
-func TestIntegrationPushTokenSessionMigration(t *testing.T) {
-	pool := openIntegrationSchema(t)
-	applyEmbeddedMigrationsBefore(t, pool, pushTokenSessionMigration)
-	userID := pushSessionIntegrationUser(t, pool)
-	var legacyID string
-	if err := pool.QueryRow(t.Context(), `INSERT INTO push_tokens(user_id,device_id,expo_push_token,platform)
-		VALUES ($1,'legacy-device','ExpoPushToken[legacy-installation-0001]','android') RETURNING id::text`,
-		userID).Scan(&legacyID); err != nil {
-		t.Fatal(err)
-	}
-	for _, direction := range []string{"up", "down", "up"} {
-		raw := readSourceFile(t, filepath.Join("..", "..", "migrations", pushTokenSessionMigration+"."+direction+".sql"))
-		if err := execMigrationSQL(t.Context(), pool, raw); err != nil {
-			t.Fatalf("apply %s %s: %v", pushTokenSessionMigration, direction, err)
-		}
-	}
-	var revoked bool
-	var sessionID *string
-	if err := pool.QueryRow(t.Context(), `SELECT revoked_at IS NOT NULL,session_id::text FROM push_tokens WHERE id=$1`,
-		legacyID).Scan(&revoked, &sessionID); err != nil {
-		t.Fatal(err)
-	}
-	if !revoked || sessionID != nil {
-		t.Fatalf("legacy installation revoked=%v session=%v, want revoked without a session", revoked, sessionID)
-	}
 }
 
 func pushSessionIntegrationUser(t *testing.T, pool *pgxpool.Pool) string {

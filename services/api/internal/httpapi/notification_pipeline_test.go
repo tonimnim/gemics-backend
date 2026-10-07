@@ -17,7 +17,6 @@ import (
 
 	"github.com/gamics-io/gamics/services/api/internal/config"
 	"github.com/gamics-io/gamics/services/api/internal/database"
-	"github.com/gamics-io/gamics/services/api/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -788,25 +787,6 @@ func TestNotificationRetryBackoffIsBoundedDeterministicAndJittered(t *testing.T)
 	}
 	if got := notificationPushRetryDelay(99, testNotificationEventID); got <= 0 || got > time.Hour {
 		t.Fatalf("capped retry = %s", got)
-	}
-}
-
-func TestNotificationMigrationUsesConsumerLedger(t *testing.T) {
-	raw, err := migrations.FS.ReadFile("000016_notification_pipeline.up.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(raw)
-	for _, required := range []string{"notification_outbox_consumptions", "source_event_id uuid", "notification_push_deliveries", "notification_outbox_queue", "outbox_events_notification_enqueue", "checking_receipt", "delivered", "sent_token_hash"} {
-		if !strings.Contains(text, required) {
-			t.Fatalf("migration is missing %q", required)
-		}
-	}
-	if strings.Contains(strings.ToUpper(text), "UPDATE OUTBOX_EVENTS") {
-		t.Fatal("notification consumer must not globally acknowledge shared outbox rows")
-	}
-	if strings.Contains(text, "outbox_events_notification_scan_idx") {
-		t.Fatal("projector must not retain a historical outbox scan index")
 	}
 }
 

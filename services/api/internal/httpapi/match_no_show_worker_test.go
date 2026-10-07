@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -138,29 +137,6 @@ func TestMatchNoShowWorkerIsBoundedGateFirstAndOptimistic(t *testing.T) {
 	}
 	if !strings.Contains(source, "ORDER BY entry_id FOR UPDATE") {
 		t.Fatal("current participant check-ins are not locked in deterministic entry order")
-	}
-}
-
-func TestMatchNoShowWorkerMigrationIsNarrowAndReversible(t *testing.T) {
-	up, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000018_match_no_show_deadlines.up.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	down, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000018_match_no_show_deadlines.down.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, fragment := range []string{
-		"CREATE INDEX matches_ready_check_in_deadline_idx",
-		"ON matches (check_in_closes_at, id)",
-		"WHERE state = 'ready' AND check_in_closes_at IS NOT NULL",
-	} {
-		if !strings.Contains(string(up), fragment) {
-			t.Errorf("up migration does not contain %q", fragment)
-		}
-	}
-	if !strings.Contains(string(down), "DROP INDEX IF EXISTS matches_ready_check_in_deadline_idx") {
-		t.Fatal("down migration does not drop the deadline index")
 	}
 }
 

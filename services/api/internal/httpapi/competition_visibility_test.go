@@ -1,15 +1,11 @@
 package httpapi
 
 import (
-	"io/fs"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gamics-io/gamics/services/api/migrations"
 )
 
 const competitionPublicationMigration = "000024_competition_publication"
@@ -134,31 +130,6 @@ func TestCompetitionEligibilityReportsCancellation(t *testing.T) {
 					test.wantStatus, test.wantAction, test.wantCodes)
 			}
 		})
-	}
-}
-
-func TestCompetitionPublicationMigrationShape(t *testing.T) {
-	up := readSourceFile(t, filepath.Join("..", "..", "migrations", competitionPublicationMigration+".up.sql"))
-	down := readSourceFile(t, filepath.Join("..", "..", "migrations", competitionPublicationMigration+".down.sql"))
-	for name, contents := range map[string]string{"up": up, "down": down} {
-		if !strings.HasPrefix(contents, "BEGIN;") || !strings.HasSuffix(strings.TrimSpace(contents), "COMMIT;") {
-			t.Fatalf("the %s migration must be wrapped in BEGIN; ... COMMIT;", name)
-		}
-	}
-	assertOrder(t, "up migration", up,
-		"ALTER TABLE competitions ADD COLUMN published_at timestamptz;",
-		"IF NEW.published_at IS NULL AND NEW.status NOT IN ('draft', 'cancelled') THEN",
-		"BEFORE INSERT OR UPDATE OF status ON competitions",
-		"UPDATE competitions competition SET published_at",
-		"audit.action = 'competition.published'",
-		"audit.before_state ->> 'status' <> 'draft'",
-		"FROM competition_entries entry")
-	assertOrder(t, "down migration", down,
-		"DROP TRIGGER IF EXISTS competitions_stamp_published_at ON competitions;",
-		"DROP FUNCTION IF EXISTS stamp_competition_published_at();",
-		"ALTER TABLE competitions DROP COLUMN IF EXISTS published_at;")
-	if _, err := fs.Stat(migrations.FS, competitionPublicationMigration+".up.sql"); err != nil {
-		t.Fatalf("the up migration is not embedded: %v", err)
 	}
 }
 

@@ -1,0 +1,7 @@
+BEGIN;
+
+DROP TABLE IF EXISTS payment_refunds CASCADE;
+DROP TABLE IF EXISTS payment_callback_events CASCADE;
+DROP TABLE IF EXISTS payment_intents CASCADE;
+
+COMMIT;

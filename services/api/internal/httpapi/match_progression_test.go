@@ -461,33 +461,6 @@ func TestValidateMatchProgressionInputAcceptsOnlyCurrentCauses(t *testing.T) {
 	}
 }
 
-func TestMatchProgressionMigrationHasDurableConflictGuardAndSafeRollback(t *testing.T) {
-	upPath := filepath.Join("..", "..", "migrations", "000015_match_progression.up.sql")
-	downPath := filepath.Join("..", "..", "migrations", "000015_match_progression.down.sql")
-	up, err := os.ReadFile(upPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	down, err := os.ReadFile(downPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, fragment := range []string{
-		"PRIMARY KEY (source_match_id, finalized_match_version)",
-		"octet_length(outcome_hash) = 32",
-		"application_result jsonb NOT NULL",
-		"REFERENCES matches (id, competition_id) ON DELETE CASCADE",
-		"'standings_updated'",
-	} {
-		if !strings.Contains(string(up), fragment) {
-			t.Errorf("up migration does not contain %q", fragment)
-		}
-	}
-	if !strings.Contains(string(down), "cannot roll back 000015_match_progression") {
-		t.Fatal("down migration lacks an explicit standings audit guard")
-	}
-}
-
 func TestProgressionSourceKeepsGateBeforeSourceAndChildLocks(t *testing.T) {
 	path := filepath.Join("match_progression.go")
 	source, err := os.ReadFile(path)

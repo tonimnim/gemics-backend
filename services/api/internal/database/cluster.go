@@ -18,11 +18,6 @@ type Cluster struct {
 	Reader *pgxpool.Pool
 }
 
-var trustedLegacyMigrationChecksums = map[string]string{
-	"000001_core.up.sql":     "ac0d1f9da4a79358fdb6536702c649eb8d3927f8e9c24d710f64cf713aa747a9",
-	"000002_identity.up.sql": "16098812e19fb205b6837dc1b8192f9698aba34002f19e5c9ac6267fc42e8b5b",
-}
-
 func Open(ctx context.Context, writeURL, readURL string, writeMax, readMax int32) (*Cluster, error) {
 	if writeURL == "" {
 		return nil, fmt.Errorf("database writer URL is required")
@@ -125,11 +120,10 @@ func Migrate(ctx context.Context, writer *pgxpool.Pool) error {
 	}()
 
 	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
-        version text PRIMARY KEY,
-		checksum text,
-        applied_at timestamptz NOT NULL DEFAULT now()
-	);
-	ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text`); err != nil {
+		version text PRIMARY KEY,
+		checksum text NOT NULL,
+		applied_at timestamptz NOT NULL DEFAULT now()
+	)`); err != nil {
 		return fmt.Errorf("create migration ledger: %w", err)
 	}
 
@@ -151,23 +145,14 @@ func Migrate(ctx context.Context, writer *pgxpool.Pool) error {
 			return err
 		}
 		checksum := fmt.Sprintf("%x", sha256.Sum256(raw))
-		var storedChecksum *string
+		var storedChecksum string
 		if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version=$1),
-			(SELECT checksum FROM schema_migrations WHERE version=$1)`, name).Scan(&applied, &storedChecksum); err != nil {
+			COALESCE((SELECT checksum FROM schema_migrations WHERE version=$1),'')`, name).Scan(&applied, &storedChecksum); err != nil {
 			return err
 		}
 		if applied {
-			if storedChecksum != nil && *storedChecksum != checksum {
+			if storedChecksum != checksum {
 				return fmt.Errorf("migration %s checksum changed after application", name)
-			}
-			if storedChecksum == nil {
-				trusted, ok := trustedLegacyMigrationChecksums[name]
-				if !ok || trusted != checksum {
-					return fmt.Errorf("migration %s has no trusted legacy checksum", name)
-				}
-				if _, err := conn.Exec(ctx, "UPDATE schema_migrations SET checksum=$2 WHERE version=$1", name, checksum); err != nil {
-					return fmt.Errorf("record checksum for %s: %w", name, err)
-				}
 			}
 			continue
 		}

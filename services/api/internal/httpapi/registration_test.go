@@ -44,11 +44,15 @@ func TestNormalizeKonamiID(t *testing.T) {
 // The sign-in lookup must use exactly the expression the unique index is
 // built on, or PostgreSQL cannot use the index and the two could disagree.
 func TestKonamiLookupMatchesTheUniqueIndex(t *testing.T) {
-	compact := func(text string) string { return strings.Join(strings.Fields(text), "") }
-	lookup := compact(strings.ReplaceAll(konamiKeyExpression, "account.", ""))
-	migration := compact(readSourceFile(t, filepath.Join("..", "..", "migrations", "000001_core.up.sql")))
-	if !strings.Contains(migration, "CREATEUNIQUEINDEXgame_accounts_publisher_id_uniqueONgame_accounts(game_id,"+lookup+")") {
-		t.Fatalf("game_accounts_publisher_id_unique is not built on %s", lookup)
+	migration := readSourceFile(t, filepath.Join("..", "..", "migrations", "000002_games.up.sql"))
+	const index = "CREATE UNIQUE INDEX game_accounts_publisher_id_unique ON game_accounts USING btree (game_id, " +
+		"upper(regexp_replace(publisher_player_id, '[^A-Za-z0-9]+'::text, ''::text, 'g'::text))) " +
+		"WHERE (publisher_player_id IS NOT NULL);"
+	if !strings.Contains(migration, index) {
+		t.Fatal("game_accounts_publisher_id_unique is not built on the normalized Konami ID")
+	}
+	if konamiKeyExpression != `upper(regexp_replace(account.publisher_player_id,'[^A-Za-z0-9]+','','g'))` {
+		t.Fatalf("konamiKeyExpression = %s, which the unique index cannot serve", konamiKeyExpression)
 	}
 	for _, path := range []string{"registration_handlers.go", "account_contact_handlers.go"} {
 		assertFileContains(t, path, "AND account.publisher_player_id IS NOT NULL\n\t\tAND `+konamiKeyExpression+`=$2")
