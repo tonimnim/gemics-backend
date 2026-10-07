@@ -200,15 +200,8 @@ const stageCards: {
   },
 ]
 
-function StageCards({
-  stage,
-  onChange,
-  summary,
-}: {
-  stage: Stage
-  onChange: (stage: Stage) => void
-  summary?: Summary
-}) {
+/** Count and total per stage. A summary only: the list below shows every refund. */
+function StageCards({ summary }: { summary?: Summary }) {
   const values = summary && {
     action: summary.action,
     processing: summary.processing,
@@ -217,30 +210,17 @@ function StageCards({
   return (
     <div className='grid gap-4 sm:grid-cols-3'>
       {stageCards.map((card) => {
-        const active = card.stage === stage
         const value = values?.[card.stage]
         return (
-          <button
-            key={card.stage}
-            onClick={() => onChange(card.stage)}
-            className={cn(
-              'group rounded-2xl border bg-card p-5 text-start transition',
-              active
-                ? 'border-primary/40 shadow-[0_0_0_4px_rgba(91,91,214,0.10)]'
-                : 'border-transparent hover:border-border'
-            )}
-          >
-            <div className='flex items-center justify-between'>
-              <span
-                className={cn(
-                  'grid size-10 place-items-center rounded-xl',
-                  card.tone
-                )}
-              >
-                <card.icon className='size-5' />
-              </span>
-              {active && <span className='size-2 rounded-full bg-primary' />}
-            </div>
+          <div key={card.stage} className='rounded-2xl bg-card p-5'>
+            <span
+              className={cn(
+                'grid size-10 place-items-center rounded-xl',
+                card.tone
+              )}
+            >
+              <card.icon className='size-5' />
+            </span>
             <div className='mt-4 text-sm text-muted-foreground'>
               {card.label}
             </div>
@@ -254,7 +234,7 @@ function StageCards({
                 </span>
               )}
             </div>
-          </button>
+          </div>
         )
       })}
     </div>
@@ -536,22 +516,9 @@ function RefundSheet({
   )
 }
 
-const stageTitles: Record<Stage, string> = {
-  action: 'Needs action',
-  processing: 'Processing',
-  done: 'Completed',
-}
-
-const emptyStates: Record<Stage, { title: string; icon: React.ElementType }> = {
-  action: { title: 'All caught up', icon: CheckCircle2 },
-  processing: { title: 'Nothing processing', icon: Clock3 },
-  done: { title: 'No refunds yet', icon: Inbox },
-}
-
 export function RefundsPage() {
   const queryClient = useQueryClient()
   const canManage = useCan('refund.manage')
-  const [stage, setStage] = useState<Stage>('action')
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Refund | null>(null)
   const [deciding, setDeciding] = useState<{
@@ -562,7 +529,9 @@ export function RefundsPage() {
     queryKey: ['refunds', 'summary'],
     queryFn: () => api<Summary>('/v1/admin/refunds/summary'),
   })
-  const list = usePagedList<Refund>(['refunds'], '/v1/admin/refunds', { stage })
+  const list = usePagedList<Refund>(['refunds'], '/v1/admin/refunds', {
+    status: 'all',
+  })
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase()
     if (!term) return list.items
@@ -603,17 +572,16 @@ export function RefundsPage() {
   })
   const openDecision = (refund: Refund, decision: Decision) =>
     setDeciding({ refund, decision })
-  const empty = emptyStates[stage]
 
   return (
     <Page title='Refunds' permission='refund.view'>
       <div className='grid gap-5'>
-        <StageCards stage={stage} onChange={setStage} summary={summary.data} />
+        <StageCards summary={summary.data} />
 
         <section className='overflow-hidden rounded-2xl bg-card'>
           <div className='flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4'>
             <div className='flex items-center gap-2'>
-              <h2 className='font-semibold'>{stageTitles[stage]}</h2>
+              <h2 className='font-semibold'>All refunds</h2>
               <span className='rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground'>
                 {visible.length}
                 {list.hasNextPage ? '+' : ''}
@@ -640,10 +608,10 @@ export function RefundsPage() {
           ) : visible.length === 0 ? (
             <div className='grid place-items-center gap-3 py-16 text-center'>
               <span className='grid size-14 place-items-center rounded-full bg-[#eef0fb] text-[#5b5bd6]'>
-                <empty.icon className='size-6' />
+                <Inbox className='size-6' />
               </span>
               <div className='font-semibold'>
-                {search ? 'No matches' : empty.title}
+                {search ? 'No matches' : 'No refunds yet'}
               </div>
             </div>
           ) : (

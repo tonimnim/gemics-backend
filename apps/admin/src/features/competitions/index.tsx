@@ -41,7 +41,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { FilterTabs } from '@/components/filter-tabs'
 import { ListRows, LoadMore } from '@/components/list-state'
 import { Page } from '@/components/page'
 import { StatusBadge } from '@/components/status-badge'
@@ -54,16 +53,6 @@ import {
   type DrawRequest,
 } from './api'
 import { CreateCompetitionDialog } from './create-dialog'
-
-const filters = [
-  'all',
-  'draft',
-  'registration_open',
-  'check_in',
-  'running',
-  'completed',
-  'cancelled',
-] as const
 
 /** What staff call each lifecycle step. */
 const transitionLabels: Record<CompetitionStatus, string> = {
@@ -79,7 +68,6 @@ const transitionLabels: Record<CompetitionStatus, string> = {
 export function CompetitionsPage() {
   const orgId = useAuthStore((state) => state.staff?.gamicsOrganizationId ?? '')
   const queryClient = useQueryClient()
-  const [filter, setFilter] = useState<string>('all')
   const [creating, setCreating] = useState(false)
   const [moving, setMoving] = useState<{
     competition: Competition
@@ -95,9 +83,7 @@ export function CompetitionsPage() {
   const list = usePagedList<Competition>(
     ['competitions'],
     competitionsPath(orgId),
-    {
-      status: filter === 'all' ? undefined : filter,
-    },
+    {},
     !!orgId
   )
 
@@ -141,7 +127,6 @@ export function CompetitionsPage() {
         </Button>
       }
     >
-      <FilterTabs value={filter} options={filters} onChange={setFilter} />
       <div className='rounded-md border'>
         <Table>
           <TableHeader>

@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ago, humanize } from '@/lib/format'
 import { usePagedList } from '@/lib/paged'
@@ -10,24 +9,19 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { FilterTabs } from '@/components/filter-tabs'
 import { ListRows, LoadMore } from '@/components/list-state'
 import { Page } from '@/components/page'
 import { StatusBadge } from '@/components/status-badge'
 import type { ReviewSummary } from './api'
 
-const filters = ['queued', 'decided', 'closed'] as const
-
 export function ResultReviewsPage() {
-  const [status, setStatus] = useState<string>('queued')
   const list = usePagedList<ReviewSummary>(
     ['result-reviews'],
     '/v1/admin/result-reviews',
-    { status }
+    { status: 'all' }
   )
   return (
     <Page title='Result reviews' permission='result_review.manage'>
-      <FilterTabs value={status} options={filters} onChange={setStatus} />
       <div className='rounded-md border'>
         <Table>
           <TableHeader>

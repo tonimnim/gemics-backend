@@ -26,7 +26,6 @@ import {
   DecisionDialog,
   type DecisionOption,
 } from '@/components/decision-dialog'
-import { FilterTabs } from '@/components/filter-tabs'
 import { ListRows, LoadMore } from '@/components/list-state'
 import { Page } from '@/components/page'
 import { StatusBadge } from '@/components/status-badge'
@@ -64,13 +63,6 @@ type PaymentDetail = {
 }
 
 type Decision = 'retry_query' | 'replay_callbacks' | 'mark_failed'
-const filters = [
-  'review',
-  'pending',
-  'callback_received',
-  'succeeded',
-  'failed',
-] as const
 const options: Record<Decision, DecisionOption> = {
   retry_query: { label: 'Ask M-Pesa again', noteLabel: 'Note' },
   replay_callbacks: { label: 'Replay received callbacks', noteLabel: 'Note' },
@@ -221,16 +213,14 @@ function PaymentSheet({
 }
 
 export function PaymentsPage() {
-  const [status, setStatus] = useState<string>('review')
   const [selected, setSelected] = useState<string | null>(null)
   const list = usePagedList<Payment>(
     ['payment-reviews'],
     '/v1/admin/payment-reviews',
-    { status }
+    { status: 'all' }
   )
   return (
     <Page title='Payment reviews' permission='payment_review.manage'>
-      <FilterTabs value={status} options={filters} onChange={setStatus} />
       <div className='rounded-md border'>
         <Table>
           <TableHeader>

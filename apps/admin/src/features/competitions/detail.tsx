@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ArrowLeft, Loader2 } from 'lucide-react'
@@ -17,7 +16,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { FilterTabs } from '@/components/filter-tabs'
 import { ListRows, LoadMore } from '@/components/list-state'
 import { Page } from '@/components/page'
 import { StatusBadge } from '@/components/status-badge'
@@ -37,15 +35,6 @@ type Entry = {
   paymentStatus: string | null
 }
 
-const filters = [
-  'all',
-  'registered',
-  'checked_in',
-  'withdrawal_pending',
-  'withdrawn',
-  'disqualified',
-] as const
-
 function Fact({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
@@ -64,7 +53,6 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
  */
 export function CompetitionDetailPage({ id }: { id: string }) {
   const orgId = useAuthStore((state) => state.staff?.gamicsOrganizationId ?? '')
-  const [status, setStatus] = useState<string>('all')
   const competition = useQuery({
     queryKey: ['competition', orgId, id],
     queryFn: () =>
@@ -74,9 +62,7 @@ export function CompetitionDetailPage({ id }: { id: string }) {
   const entries = usePagedList<Entry>(
     ['competition-entries', id],
     `${competitionsPath(orgId)}/${id}/entries`,
-    {
-      status: status === 'all' ? undefined : status,
-    },
+    {},
     !!orgId
   )
   const data = competition.data?.data
@@ -124,7 +110,6 @@ export function CompetitionDetailPage({ id }: { id: string }) {
       )}
 
       <h2 className='mb-3 text-lg font-bold'>Registrations</h2>
-      <FilterTabs value={status} options={filters} onChange={setStatus} />
       <div className='rounded-md border'>
         <Table>
           <TableHeader>

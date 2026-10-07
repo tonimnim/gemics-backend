@@ -18,7 +18,6 @@ import {
   type DecisionOption,
 } from '@/components/decision-dialog'
 import { EvidenceImage } from '@/components/evidence-image'
-import { FilterTabs } from '@/components/filter-tabs'
 import { ListRows, LoadMore } from '@/components/list-state'
 import { Page } from '@/components/page'
 import { StatusBadge } from '@/components/status-badge'
@@ -35,7 +34,11 @@ type Verification = {
   requestedAt: string
 }
 
-const filters = ['requested', 'under_review', 'approved', 'rejected'] as const
+/** Requests still waiting on a reviewer. */
+function isOpen(status: string) {
+  return status === 'requested' || status === 'under_review'
+}
+
 const options: Record<'approve' | 'reject', DecisionOption> = {
   approve: { label: 'Approve verification', noteLabel: 'Reason' },
   reject: {
@@ -48,7 +51,6 @@ const options: Record<'approve' | 'reject', DecisionOption> = {
 
 export function VerificationsPage() {
   const queryClient = useQueryClient()
-  const [status, setStatus] = useState<string>('requested')
   const [deciding, setDeciding] = useState<{
     item: Verification
     decision: 'approve' | 'reject'
@@ -56,7 +58,7 @@ export function VerificationsPage() {
   const list = usePagedList<Verification>(
     ['verifications'],
     '/v1/admin/game-account-verifications',
-    { status }
+    { status: 'all' }
   )
   const decide = useMutation({
     mutationFn: (reason: string) =>
@@ -79,14 +81,12 @@ export function VerificationsPage() {
       queryClient.invalidateQueries({ queryKey: ['overview'] })
     },
   })
-  const open = status === 'requested' || status === 'under_review'
 
   return (
     <Page
       title='Account verifications'
       permission='game_account_verification.manage'
     >
-      <FilterTabs value={status} options={filters} onChange={setStatus} />
       <div className='rounded-md border'>
         <Table>
           <TableHeader>
@@ -94,7 +94,7 @@ export function VerificationsPage() {
               <TableHead>Request</TableHead>
               <TableHead>Evidence</TableHead>
               <TableHead>Status</TableHead>
-              {open && <TableHead className='text-end'>Decide</TableHead>}
+              <TableHead className='text-end'>Decide</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -102,7 +102,7 @@ export function VerificationsPage() {
               isLoading={list.isLoading}
               error={list.error}
               empty='No requests here.'
-              columns={open ? 4 : 3}
+              columns={4}
               count={list.items.length}
             />
             {list.items.map((item) => (
@@ -141,7 +141,7 @@ export function VerificationsPage() {
                     </div>
                   )}
                 </TableCell>
-                {open && (
+                {isOpen(item.status) ? (
                   <TableCell className='space-x-2 text-end align-top'>
                     <Button
                       size='sm'
@@ -157,6 +157,8 @@ export function VerificationsPage() {
                       Reject
                     </Button>
                   </TableCell>
+                ) : (
+                  <TableCell />
                 )}
               </TableRow>
             ))}

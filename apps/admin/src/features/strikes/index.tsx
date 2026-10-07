@@ -14,7 +14,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DecisionDialog } from '@/components/decision-dialog'
-import { FilterTabs } from '@/components/filter-tabs'
 import { ListRows, LoadMore } from '@/components/list-state'
 import { Page } from '@/components/page'
 import { StatusBadge } from '@/components/status-badge'
@@ -30,14 +29,11 @@ type Strike = {
   revokeReason: string | null
 }
 
-const filters = ['active', 'revoked', 'all'] as const
-
 export function StrikesPage() {
   const queryClient = useQueryClient()
-  const [status, setStatus] = useState<string>('active')
   const [revoking, setRevoking] = useState<Strike | null>(null)
   const list = usePagedList<Strike>(['strikes'], '/v1/admin/player-strikes', {
-    status,
+    status: 'all',
   })
   const revoke = useMutation({
     mutationFn: (reason: string) =>
@@ -55,7 +51,6 @@ export function StrikesPage() {
 
   return (
     <Page title='Conduct strikes' permission='player_strike.revoke'>
-      <FilterTabs value={status} options={filters} onChange={setStatus} />
       <div className='rounded-md border'>
         <Table>
           <TableHeader>
