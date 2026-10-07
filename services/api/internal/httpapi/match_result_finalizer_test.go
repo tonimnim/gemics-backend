@@ -173,11 +173,12 @@ func TestEvidenceAccessIsOwnerOrUnconflictedReviewer(t *testing.T) {
 	}
 	slices.Sort(granted)
 	want := make([]string, 0, 2)
-	for _, role := range []string{"admin", "analyst", "owner", "reviewer", "support"} {
+	for _, role := range append([]string{"analyst", "owner"}, platformRoles...) {
 		if platformRoleCan(role, platformResultReviewManage) {
 			want = append(want, role)
 		}
 	}
+	slices.Sort(want)
 	if !slices.Equal(granted, want) {
 		t.Fatalf("evidence staff roles %v differ from the result review grants %v", granted, want)
 	}

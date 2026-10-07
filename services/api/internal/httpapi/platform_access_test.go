@@ -2,21 +2,27 @@ package httpapi
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
 func TestPlatformRolePermissionsAreSeparated(t *testing.T) {
 	every := []platformPermission{
-		platformRefundView, platformRefundManage, platformVerificationManage, platformPaymentReviewManage,
-		platformResultReviewManage, platformPlayerStrikeRevoke,
+		platformOverviewView, platformRefundView, platformRefundManage, platformVerificationManage,
+		platformPaymentReviewManage, platformResultReviewManage, platformPlayerStrikeRevoke,
+		platformCompetitionManage, platformStaffManage, platformFinanceView,
 	}
 	cases := []struct {
 		role string
 		want []platformPermission
 	}{
 		{role: "admin", want: every},
-		{role: "support", want: []platformPermission{platformRefundView}},
-		{role: "reviewer", want: []platformPermission{platformVerificationManage, platformResultReviewManage}},
+		// Every staff role runs competitions; none sees money.
+		{role: "support", want: []platformPermission{platformOverviewView, platformCompetitionManage}},
+		{role: "reviewer", want: []platformPermission{platformOverviewView, platformCompetitionManage,
+			platformVerificationManage, platformResultReviewManage}},
+		{role: "operator", want: []platformPermission{platformOverviewView, platformCompetitionManage,
+			platformVerificationManage, platformResultReviewManage, platformPlayerStrikeRevoke}},
 		// Organization roles and unknown values never reach a platform queue.
 		{role: "owner"},
 		{role: "referee"},
@@ -28,5 +34,23 @@ func TestPlatformRolePermissionsAreSeparated(t *testing.T) {
 				t.Errorf("platformRoleCan(%q, %s) = %v, want %v", testCase.role, permission, got, expected)
 			}
 		}
+	}
+}
+
+func TestOnlyAdminsGrantStaffRolesOrSeeMoney(t *testing.T) {
+	for _, role := range platformRoles {
+		for _, permission := range []platformPermission{platformStaffManage, platformFinanceView,
+			platformRefundView, platformRefundManage, platformPaymentReviewManage} {
+			if got := platformRoleCan(role, permission); got != (role == "admin") {
+				t.Errorf("platformRoleCan(%q, %s) = %v", role, permission, got)
+			}
+		}
+	}
+	if len(platformRoles) != len(platformRolePermissions) {
+		t.Fatalf("platformRoles %v and platformRolePermissions disagree", platformRoles)
+	}
+	migration := readSourceFile(t, "../../migrations/000001_accounts.up.sql")
+	if !strings.Contains(migration, "CHECK ((role = ANY (ARRAY['support'::text, 'reviewer'::text, 'operator'::text, 'admin'::text])))") {
+		t.Fatal("platform_staff_roles does not allow exactly the platform roles")
 	}
 }

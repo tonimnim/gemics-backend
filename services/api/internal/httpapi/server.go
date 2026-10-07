@@ -122,6 +122,7 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	s.registerResultReviewRoutes(mux)
 	s.registerGameAccountVerificationRoutes(mux)
 	s.registerCompetitionPolicyRoutes(mux)
+	s.registerAdminRoutes(mux)
 
 	s.http = &http.Server{
 		Addr:              cfg.HTTPAddr,

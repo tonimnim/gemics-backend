@@ -47,6 +47,17 @@ func (s *Server) requireOrgPermission(permission organizer.Permission, next http
 			FROM organization_members member
 			JOIN organizations organization ON organization.id=member.organization_id
 			WHERE member.organization_id=$1 AND member.user_id=$2`, organizationID, userID).Scan(&role, &status)
+		if errors.Is(err, pgx.ErrNoRows) && organizationID == gamicsOrganizationID {
+			// Gamics runs its own competitions: staff who may manage
+			// competitions act as admins of the Gamics organization.
+			var staff bool
+			staff, err = s.staffCan(r.Context(), userID, platformCompetitionManage)
+			if err == nil && staff {
+				role, status = string(organizer.RoleAdmin), "active"
+			} else if err == nil {
+				err = pgx.ErrNoRows
+			}
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Non-members are told the organization does not exist. Answering
 			// 403 here would confirm the identifier and let anyone enumerate

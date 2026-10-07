@@ -19,6 +19,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
     -o /out/gamics-migrate ./cmd/migrate
 
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    -o /out/gamics-staff ./cmd/staff
+
 FROM alpine:3.22 AS runtime
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S gamics \
@@ -27,6 +30,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 COPY --from=build /out/gamics-api /usr/local/bin/gamics-api
 COPY --from=build /out/gamics-evidence-worker /usr/local/bin/gamics-evidence-worker
 COPY --from=build /out/gamics-migrate /usr/local/bin/gamics-migrate
+COPY --from=build /out/gamics-staff /usr/local/bin/gamics-staff
 
 USER gamics
 EXPOSE 8080

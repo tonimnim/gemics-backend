@@ -75,7 +75,7 @@ func (s *Server) getEvidenceAccess(w http.ResponseWriter, r *http.Request) {
 			OR (EXISTS (
 				SELECT 1 FROM platform_staff_roles staff JOIN users player ON player.id=staff.user_id
 				WHERE staff.user_id=$2 AND staff.revoked_at IS NULL AND player.status='active'
-				  AND staff.role IN ('reviewer','admin'))
+				  AND staff.role IN ('reviewer','operator','admin'))
 			  AND ((evidence.bound_kind IS NOT NULL AND NOT EXISTS (
 					SELECT 1 FROM match_result_reports report
 					JOIN matches bound_match ON bound_match.id=report.match_id
