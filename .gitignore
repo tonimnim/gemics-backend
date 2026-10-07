@@ -27,3 +27,6 @@ bin/
 
 # Brand kit handoff archive; brand/ is the source.
 gamics-brand-kit.zip
+
+# Python bytecode from local tooling.
+__pycache__/
