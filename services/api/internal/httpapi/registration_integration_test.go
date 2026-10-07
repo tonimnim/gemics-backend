@@ -205,6 +205,18 @@ func TestIntegrationContactDetailsAndPasswordRecovery(t *testing.T) {
 	if !strings.Contains(saved.Body.String(), `"phoneNumber":"+919812345678"`) {
 		t.Fatalf("after saving the phone = %s", saved.Body)
 	}
+	if !strings.Contains(saved.Body.String(), `"countryCode":"IN"`) {
+		t.Fatalf("an Indian phone did not set the country: %s", saved.Body)
+	}
+	// A country the player chose is never overridden by a later phone.
+	h.expect(h.call(h.server.patchMe, http.MethodPatch, "/v1/me", `{"countryCode":"GB"}`, userID), http.StatusOK, "")
+	kept := h.call(h.server.putPhone, http.MethodPut, "/v1/me/phone", `{"phoneNumber":"+254 712 000 111"}`, userID)
+	h.expect(kept, http.StatusOK, "")
+	if !strings.Contains(kept.Body.String(), `"countryCode":"GB"`) {
+		t.Fatalf("a later phone replaced the chosen country: %s", kept.Body)
+	}
+	h.expect(h.call(h.server.putPhone, http.MethodPut, "/v1/me/phone", `{"phoneNumber":"+919812345678"}`, userID),
+		http.StatusOK, "")
 	other := h.session(h.call(h.server.register, http.MethodPost, "/v1/auth/register",
 		`{"username":"Otieno_`+suffix+`","konamiId":"WXYZ-`+strings.ToUpper(suffix)+`-0002","password":"other password"}`, ""), http.StatusCreated)
 	h.expect(h.call(h.server.putPhone, http.MethodPut, "/v1/me/phone", `{"phoneNumber":"+919812345678"}`, other.Player.ID),

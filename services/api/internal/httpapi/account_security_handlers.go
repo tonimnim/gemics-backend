@@ -295,7 +295,7 @@ func (s *Server) executeAccountDeletion(w http.ResponseWriter, r *http.Request) 
 		{`UPDATE competition_entries SET display_name='Deleted player',updated_at=now() WHERE captain_user_id=$1`, []any{current.UserID}},
 		{`UPDATE payment_intents SET entry_display_name='Deleted player',updated_at=now() WHERE user_id=$1`, []any{current.UserID}},
 		{`UPDATE payment_refunds SET player_note='',updated_at=now() WHERE user_id=$1`, []any{current.UserID}},
-		{`UPDATE users SET email=$2,email_verified_at=NULL,phone_e164=NULL,display_name='Deleted player',country_code='ZZ',
+		{`UPDATE users SET email=$2,email_verified_at=NULL,phone_e164=NULL,display_name='Deleted player',country_code='ZZ',country_chosen_at=NULL,
 			birth_date=NULL,password_hash=NULL,password_changed_at=NULL,registration_ip=NULL,
 			status='deleted',terms_accepted_at=NULL,privacy_accepted_at=NULL,updated_at=now() WHERE id=$1`, []any{current.UserID, syntheticEmail}},
 	}

@@ -171,3 +171,37 @@ func TestEntryGateNeedsOnlyARegisteredPlayer(t *testing.T) {
 		assertFileOmits(t, path, "display_name_set_at")
 	}
 }
+
+func TestCountryFromPhone(t *testing.T) {
+	cases := map[string]string{
+		"+254712345678":  "KE",
+		"+919812345678":  "IN",
+		"+447911123456":  "GB",
+		"+2348031234567": "NG",
+		"+256712345678":  "UG",
+		"+27821234567":   "ZA",
+		"+971501234567":  "AE",
+		"+79161234567":   "RU",
+		"+77011234567":   "KZ",
+		"+14155550100":   "",
+		"+999123456789":  "",
+		"254712345678":   "",
+	}
+	for phone, want := range cases {
+		got, ok := countryFromPhone(phone)
+		if got != want || ok != (want != "") {
+			t.Errorf("countryFromPhone(%q) = %q, %v; want %q", phone, got, ok, want)
+		}
+	}
+	// Calling codes are prefix-free, so no code may extend another.
+	for code := range callingCodeCountries {
+		for other := range callingCodeCountries {
+			if code != other && strings.HasPrefix(other, code) {
+				t.Errorf("calling code %s is a prefix of %s", code, other)
+			}
+		}
+		if strings.HasPrefix(code, "1") || strings.HasPrefix(code, "7") {
+			t.Errorf("calling code %s overlaps +1 or +7", code)
+		}
+	}
+}

@@ -61,7 +61,10 @@ signed-in account, when they matter.
   `+919812345678` (India). Players from any country are accepted. One number belongs
   to one account (`409 phone_taken`). It is not verified by SMS. M-Pesa uses it when a
   payment request omits `phoneNumber`; M-Pesa itself accepts only Kenyan Safaricom
-  numbers. `DELETE /v1/me/phone` removes it.
+  numbers. `DELETE /v1/me/phone` removes it. Saving a phone sets `countryCode` from
+  its calling code (`+254` → `KE`, `+91` → `IN`), unless the player picked a country
+  with `PATCH /v1/me`. `+1` numbers leave the country unchanged, since the US, Canada
+  and much of the Caribbean share that code.
 - **Password**: `POST /v1/me/password` with `{currentPassword, newPassword}` keeps
   this device signed in and signs every other device out.
 - **Forgotten password**: `POST /v1/auth/password-reset/request` with `{konamiId}`
@@ -72,7 +75,7 @@ signed-in account, when they matter.
 - `GET /v1/me` returns the player: `username`, `konamiId`, `displayName`, `email`,
   `emailVerified`, `phoneNumber`, `countryCode`, `birthDate` and `profile`.
 - `PATCH /v1/me` optionally changes `displayName` (2-80 characters), `countryCode` and
-  `birthDate`. A birth date is needed only for a competition with a minimum age, which
+  `birthDate`. A country chosen here is kept when a phone number is saved later. A birth date is needed only for a competition with a minimum age, which
   reports `age_required`.
 - When the terms or privacy notice change, `GET /v1/competitions/{id}/eligibility`
   reports `profile_incomplete`; record the new versions with

@@ -319,6 +319,7 @@ paths:
                 countryCode:
                   type: string
                   pattern: ^[A-Z]{2}$
+                  description: A chosen country is kept when the player later saves a phone number.
                 birthDate:
                   type: string
                   format: date
@@ -480,7 +481,9 @@ paths:
       description: >-
         International E.164 format with the country code, for example +254712345678 or +919812345678. One phone
         number belongs to one account. The number is not verified by SMS. M-Pesa uses it when a payment request
-        omits phoneNumber, and M-Pesa itself accepts only Kenyan Safaricom numbers.
+        omits phoneNumber, and M-Pesa itself accepts only Kenyan Safaricom numbers. Saving it sets countryCode from
+        the calling code (+254 KE, +91 IN, and so on) unless the player chose a country with PATCH /v1/me; +1 is
+        shared by several countries and leaves the country unchanged.
       security:
         - bearerAuth: []
       requestBody:
@@ -4927,6 +4930,9 @@ components:
           description: E.164, null until saved with PUT /v1/me/phone.
         countryCode:
           type: string
+          description: >-
+            ISO 3166-1 alpha-2. KE until the player saves a phone number, whose calling code sets it, or chooses one
+            with PATCH /v1/me, which then takes precedence.
         birthDate:
           type:
             - string

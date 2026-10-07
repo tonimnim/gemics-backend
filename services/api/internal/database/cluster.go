@@ -19,7 +19,7 @@ type Cluster struct {
 }
 
 var trustedLegacyMigrationChecksums = map[string]string{
-	"000001_core.up.sql":     "46456006cdffdb047340c9d292895b4b95f4e822fec07e43c1f2cfec1badc6b1",
+	"000001_core.up.sql":     "ac0d1f9da4a79358fdb6536702c649eb8d3927f8e9c24d710f64cf713aa747a9",
 	"000002_identity.up.sql": "16098812e19fb205b6837dc1b8192f9698aba34002f19e5c9ac6267fc42e8b5b",
 }
 

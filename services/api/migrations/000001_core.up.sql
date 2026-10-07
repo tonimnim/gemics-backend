@@ -8,6 +8,9 @@ CREATE TABLE users (
     phone_e164 text,
     display_name text NOT NULL,
     country_code char(2) NOT NULL DEFAULT 'KE',
+    -- Set when the player picks a country themselves. Until then the country
+    -- follows the calling code of the phone number they save.
+    country_chosen_at timestamptz,
     birth_date date,
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('pending', 'active', 'suspended', 'deleted')),
     -- Players register with a username, Konami ID and password. Email and

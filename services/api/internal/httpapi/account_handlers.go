@@ -104,6 +104,7 @@ func (s *Server) patchMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		appendValue("country_code", value)
+		assignments = append(assignments, "country_chosen_at=now()")
 	}
 	if input.BirthDate != nil {
 		value, err := time.Parse("2006-01-02", *input.BirthDate)
