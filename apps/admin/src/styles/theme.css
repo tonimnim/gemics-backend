@@ -1,0 +1,116 @@
+:root {
+  /* Tonits light, the dashboard default: a soft grey canvas, white rounded
+     cards and an indigo accent with lavender tints. */
+  --radius: 1rem;
+  --background: #f4f5fa;
+  --foreground: #1b1d3a;
+  --card: #ffffff;
+  --card-foreground: #1b1d3a;
+  --popover: #ffffff;
+  --popover-foreground: #1b1d3a;
+  --primary: #5b5bd6;
+  --primary-foreground: #ffffff;
+  --secondary: #eef0fb;
+  --secondary-foreground: #3f40b5;
+  --muted: #f1f2f8;
+  --muted-foreground: #858aa3;
+  --accent: #eef0fb;
+  --accent-foreground: #3f40b5;
+  --destructive: #e5484d;
+  --border: #eceef5;
+  --input: #e3e5ef;
+  --ring: #8b8cf0;
+  --chart-1: #5b5bd6;
+  --chart-2: #a5a6f6;
+  --chart-3: #2ed3b7;
+  --chart-4: #ff8a65;
+  --chart-5: #ffc84a;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #4a4e6b;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: #eef0fb;
+  --sidebar-accent-foreground: #4b4cd1;
+  --sidebar-border: #eceef5;
+  --sidebar-ring: var(--ring);
+}
+
+.dark {
+  /* Dark mode keeps the same indigo accent on a deep navy canvas. */
+  --background: #0f1022;
+  --foreground: #eceefe;
+  --card: #17182e;
+  --card-foreground: #eceefe;
+  --popover: #17182e;
+  --popover-foreground: #eceefe;
+  --primary: #7c7cf0;
+  --primary-foreground: #ffffff;
+  --secondary: #23244a;
+  --secondary-foreground: #d7d8ff;
+  --muted: #1f2040;
+  --muted-foreground: #9396b8;
+  --accent: #23244a;
+  --accent-foreground: #d7d8ff;
+  --destructive: #ff6369;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: #7c7cf0;
+  --chart-1: #7c7cf0;
+  --chart-2: #4b4c9e;
+  --chart-3: #2ed3b7;
+  --chart-4: #ff8a65;
+  --chart-5: #ffc84a;
+
+  --sidebar: #141529;
+  --sidebar-foreground: #c3c5e0;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: #23244a;
+  --sidebar-accent-foreground: #d7d8ff;
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --sidebar-ring: var(--ring);
+}
+
+@theme inline {
+  --font-geist: 'Geist', 'sans-serif';
+  --font-brand: 'Alexandria', 'Geist', sans-serif;
+  --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
