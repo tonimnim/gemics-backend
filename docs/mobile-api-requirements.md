@@ -61,7 +61,8 @@ signed-in account, when they matter.
   `+919812345678` (India). Players from any country are accepted. One number belongs
   to one account (`409 phone_taken`). It is not verified by SMS. M-Pesa uses it when a
   payment request omits `phoneNumber`; M-Pesa itself accepts only Kenyan Safaricom
-  numbers. `DELETE /v1/me/phone` removes it. Saving a phone sets `countryCode` from
+  numbers, so paid competitions are open to players in Kenya only (`country_not_allowed`
+  otherwise). `DELETE /v1/me/phone` removes it. Saving a phone sets `countryCode` from
   its calling code (`+254` → `KE`, `+91` → `IN`), unless the player picked a country
   with `PATCH /v1/me`. `+1` numbers leave the country unchanged, since the US, Canada
   and much of the Caribbean share that code.

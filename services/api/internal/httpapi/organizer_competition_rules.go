@@ -262,6 +262,11 @@ func validateCompetitionDraft(draft *competitionDraft, now time.Time, previous *
 		return fault(http.StatusBadRequest, "unsupported_currency",
 			"Paid entry is only supported in KES today.")
 	}
+	if draft.EntryFeeMinor%100 != 0 {
+		// M-Pesa collects whole shillings, so a fee with cents could never be paid.
+		return fault(http.StatusBadRequest, "invalid_entry_fee",
+			"The entry fee must be a whole number of shillings.")
+	}
 	if draft.PrizeAmountMinor < 0 || draft.PrizeAmountMinor > maxCompetitionPrizeMinor {
 		return fault(http.StatusBadRequest, "invalid_prize", "The prize amount is outside the allowed range.")
 	}

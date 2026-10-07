@@ -13,7 +13,7 @@ func eligibilityStrikesFacts(now time.Time, activeStrikes, threshold int) compet
 	return competitionEligibilityFacts{
 		CompetitionID: "competition", GameID: gameID, Status: "registration_open", MaxEntries: 32, Currency: "KES",
 		RegistrationOpensAt: now.Add(-time.Hour), RegistrationClosesAt: now.Add(time.Hour), StartsAt: now.Add(24 * time.Hour),
-		ProfileComplete: true, GameAccountID: &accountID, GameAccountGameID: &gameID,
+		ProfileComplete: true, CountryCode: "KE", GameAccountID: &accountID, GameAccountGameID: &gameID,
 		ActiveStrikes: activeStrikes, StrikeBanThreshold: threshold,
 	}
 }

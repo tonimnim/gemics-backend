@@ -59,6 +59,7 @@ func TestCompetitionInputRejectsInvalidCombinations(t *testing.T) {
 		{"one entrant", func(in *organizerCompetitionInput) { in.MaxEntries = 1 }, "invalid_capacity"},
 		{"oversized field", func(in *organizerCompetitionInput) { in.MaxEntries = 4096 }, "invalid_capacity"},
 		{"negative fee", func(in *organizerCompetitionInput) { in.EntryFeeMinor = -1 }, "invalid_entry_fee"},
+		{"fee with cents", func(in *organizerCompetitionInput) { in.EntryFeeMinor = 10_050 }, "invalid_entry_fee"},
 		{"uncollectable currency", func(in *organizerCompetitionInput) {
 			in.EntryFeeMinor = 10_000
 			in.Currency = "USD"

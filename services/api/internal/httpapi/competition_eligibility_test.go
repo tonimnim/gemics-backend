@@ -78,7 +78,7 @@ func TestCompetitionEligibilitySeparatesPaidActionFromEligibility(t *testing.T) 
 	accountID, gameID, status := "account", "efootball-mobile", "unverified"
 	facts := competitionEligibilityFacts{
 		CompetitionID: "competition", GameID: gameID, Status: "registration_open",
-		MaxEntries: 32, EntryFeeMinor: 10_000, Currency: "KES", ProfileComplete: true,
+		MaxEntries: 32, EntryFeeMinor: 10_000, Currency: "KES", ProfileComplete: true, CountryCode: "KE",
 		RegistrationOpensAt: now.Add(-time.Hour), RegistrationClosesAt: now.Add(time.Hour), StartsAt: now.Add(48 * time.Hour),
 		GameAccountID: &accountID, GameAccountGameID: &gameID, GameAccountStatus: &status,
 	}
@@ -210,5 +210,43 @@ func TestMatchVerificationRulesAreTolerantOnRead(t *testing.T) {
 				t.Fatalf("settings = %+v, want %+v", settings, test.wantSettings)
 			}
 		})
+	}
+}
+
+// Paid entry is collected through M-Pesa only, so a paid competition is open
+// to players in Kenya alone; free competitions stay open to every country.
+func TestCompetitionEligibilityLimitsPaidEntryToKenya(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	accountID, gameID, status := "account", "efootball-mobile", "unverified"
+	facts := competitionEligibilityFacts{
+		CompetitionID: "competition", GameID: gameID, Status: "registration_open",
+		MaxEntries: 32, EntryFeeMinor: 10_000, Currency: "KES", ProfileComplete: true, CountryCode: "IN",
+		RegistrationOpensAt: now.Add(-time.Hour), RegistrationClosesAt: now.Add(time.Hour), StartsAt: now.Add(48 * time.Hour),
+		GameAccountID: &accountID, GameAccountGameID: &gameID, GameAccountStatus: &status,
+	}
+	open := competitionEligibilityRules{AllowedCountries: []string{}}
+	result := assessCompetitionEligibility(facts, open, now)
+	if result.Eligible || len(result.Issues) == 0 || result.Issues[0].Code != "country_not_allowed" ||
+		!strings.Contains(result.Issues[0].Message, "M-Pesa") {
+		t.Fatalf("an Indian player could enter a paid competition: %+v", result)
+	}
+	// An explicit country list that excludes the player reports only once.
+	result = assessCompetitionEligibility(facts, competitionEligibilityRules{AllowedCountries: []string{"KE"}}, now)
+	countryIssues := 0
+	for _, issue := range result.Issues {
+		if issue.Code == "country_not_allowed" {
+			countryIssues++
+		}
+	}
+	if countryIssues != 1 {
+		t.Fatalf("country issues = %d, want 1: %+v", countryIssues, result.Issues)
+	}
+	facts.CountryCode = "ke"
+	if result = assessCompetitionEligibility(facts, open, now); !result.Eligible {
+		t.Fatalf("a Kenyan player cannot enter a paid competition: %+v", result)
+	}
+	facts.CountryCode, facts.EntryFeeMinor = "IN", 0
+	if result = assessCompetitionEligibility(facts, open, now); !result.Eligible || !result.CanRegisterNow {
+		t.Fatalf("an Indian player cannot enter a free competition: %+v", result)
 	}
 }

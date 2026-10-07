@@ -309,6 +309,10 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 	}
 	if len(policy.AllowedCountries) > 0 && !slices.Contains(policy.AllowedCountries, strings.ToUpper(facts.CountryCode)) {
 		blocking("country_not_allowed", "country", "This competition is not open to the player's country.")
+	} else if facts.EntryFeeMinor > 0 && !strings.EqualFold(facts.CountryCode, "KE") {
+		// Paid entry is collected only through M-Pesa, which serves Kenya, so a
+		// paid competition is open to players in Kenya alone.
+		blocking("country_not_allowed", "country", "Paid entry uses M-Pesa, which is only available to players in Kenya.")
 	}
 	if policy.MinimumRating != nil {
 		if facts.Rating == nil {
