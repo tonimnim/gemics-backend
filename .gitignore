@@ -24,3 +24,6 @@ bin/
 .idea/
 .vscode/
 .DS_Store
+
+# Brand kit handoff archive; brand/ is the source.
+gamics-brand-kit.zip
