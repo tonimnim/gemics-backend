@@ -30,7 +30,7 @@ func TestClientIPTrustsForwardingOnlyFromConfiguredProxy(t *testing.T) {
 }
 
 func TestCallbackPathIsRedactedForLogs(t *testing.T) {
-	if actual := safeLogPath("/v1/payments/mpesa/callback/super-secret"); actual != "/v1/payments/mpesa/callback/[redacted]" {
+	if actual := safeLogPath("/v1/payments/callbacks/stk/super-secret"); actual != "/v1/payments/callbacks/stk/[redacted]" {
 		t.Fatalf("callback token was not redacted: %s", actual)
 	}
 }

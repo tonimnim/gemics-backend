@@ -106,7 +106,9 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	mux.Handle("POST /v1/matches/{matchId}/check-ins", s.requireAuth(http.HandlerFunc(s.checkInMatch)))
 	mux.Handle("POST /v1/payments/mpesa/stk-push", s.requireAuth(http.HandlerFunc(s.initiateMPesa)))
 	mux.Handle("GET /v1/payments/{id}", s.requireAuth(http.HandlerFunc(s.getPayment)))
-	mux.HandleFunc("POST /v1/payments/mpesa/callback/{token}", s.mpesaCallback)
+	// Daraja drops callbacks whose URL contains "mpesa", "safaricom", "exec",
+	// "cmd", "sql" or "query", so this path avoids every one of them.
+	mux.HandleFunc("POST /v1/payments/callbacks/stk/{token}", s.mpesaCallback)
 	mux.Handle("POST /v1/evidence/uploads", s.requireAuth(http.HandlerFunc(s.createEvidenceUpload)))
 	mux.Handle("POST /v1/evidence/uploads/{id}/complete", s.requireAuth(http.HandlerFunc(s.completeEvidenceUpload)))
 	mux.Handle("GET /v1/evidence/{id}", s.requireAuth(http.HandlerFunc(s.getEvidenceAccess)))
@@ -294,8 +296,8 @@ func sensitivePath(path string) bool {
 }
 
 func safeLogPath(path string) string {
-	if strings.HasPrefix(path, "/v1/payments/mpesa/callback/") {
-		return "/v1/payments/mpesa/callback/[redacted]"
+	if strings.HasPrefix(path, "/v1/payments/callbacks/stk/") {
+		return "/v1/payments/callbacks/stk/[redacted]"
 	}
 	return path
 }

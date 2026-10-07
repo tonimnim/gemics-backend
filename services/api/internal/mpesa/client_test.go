@@ -29,8 +29,10 @@ func TestInitiateCachesTokenAndBuildsDarajaRequest(t *testing.T) {
 			}
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			expectedPassword := base64.StdEncoding.EncodeToString([]byte("174379passkey20260809112233"))
-			if body["Password"] != expectedPassword || body["Amount"].(float64) != 250 || body["PhoneNumber"] != "254712345678" {
+			expectedPassword := base64.StdEncoding.EncodeToString([]byte("174379passkey20260809142233"))
+			// 11:22:33 UTC is 14:22:33 in Nairobi, the clock Daraja expects.
+			if body["Password"] != expectedPassword || body["Timestamp"] != "20260809142233" ||
+				body["Amount"].(float64) != 250 || body["PhoneNumber"] != "254712345678" {
 				t.Errorf("unexpected STK request: %+v", body)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{

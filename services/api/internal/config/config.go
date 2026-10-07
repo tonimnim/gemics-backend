@@ -384,6 +384,9 @@ func Load() (Config, error) {
 		if err != nil || callbackURL.Scheme != "https" || callbackURL.Host == "" || callbackURL.User != nil || callbackURL.RawQuery != "" || callbackURL.Fragment != "" || (callbackURL.Path != "" && callbackURL.Path != "/") || !publicCallbackHost(callbackURL.Hostname()) {
 			return Config{}, fmt.Errorf("MPESA_CALLBACK_BASE_URL must be a public HTTPS origin without a path")
 		}
+		if word, blocked := darajaBlockedWord(cfg.MPesaCallbackBaseURL + "/" + cfg.MPesaCallbackToken); blocked {
+			return Config{}, fmt.Errorf("MPESA_CALLBACK_BASE_URL and MPESA_CALLBACK_TOKEN must not contain %q: Daraja drops callbacks to such URLs", word)
+		}
 		if cfg.MPesaTransactionType != "CustomerPayBillOnline" && cfg.MPesaTransactionType != "CustomerBuyGoodsOnline" {
 			return Config{}, fmt.Errorf("unsupported MPESA_TRANSACTION_TYPE")
 		}
@@ -544,6 +547,22 @@ func boolean(key string, fallback bool) (bool, error) {
 		return false, fmt.Errorf("%s: %w", key, err)
 	}
 	return result, nil
+}
+
+// darajaCallbackBlockedWords are the words Safaricom documents as forbidden
+// anywhere in a callback URL, in any case; "exe" also covers "exec". The
+// hyphen-less "mpesa" also matches "m-pesa" once hyphens are removed.
+var darajaCallbackBlockedWords = []string{"mpesa", "safaricom", "exe", "cmd", "sql", "query"}
+
+// darajaBlockedWord reports the first forbidden word in a callback URL.
+func darajaBlockedWord(callbackURL string) (string, bool) {
+	folded := strings.ReplaceAll(strings.ToLower(callbackURL), "-", "")
+	for _, word := range darajaCallbackBlockedWords {
+		if strings.Contains(folded, word) {
+			return word, true
+		}
+	}
+	return "", false
 }
 
 func publicCallbackHost(host string) bool {

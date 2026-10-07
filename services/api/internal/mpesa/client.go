@@ -53,6 +53,16 @@ type QueryResponse struct {
 	ResultDesc          string       `json:"ResultDesc"`
 }
 
+// nairobi is East Africa Time. Daraja checks the STK password against a
+// timestamp in Kenyan local time; Kenya has no daylight saving, so a fixed
+// offset is exact and needs no tzdata in the container.
+var nairobi = time.FixedZone("EAT", 3*60*60)
+
+// darajaTimestamp is the YYYYMMDDHHmmss timestamp Daraja expects.
+func (c *Client) darajaTimestamp() string {
+	return c.now().In(nairobi).Format("20060102150405")
+}
+
 type darajaString string
 
 func (value *darajaString) UnmarshalJSON(raw []byte) error {
@@ -111,7 +121,7 @@ func (c *Client) Initiate(ctx context.Context, request InitiateRequest) (Initiat
 	if request.AmountKES < 1 || len(request.AccountReference) < 1 || len(request.AccountReference) > 12 || len(request.Description) < 1 || len(request.Description) > 13 {
 		return InitiateResponse{}, errors.New("invalid M-Pesa STK request amount or reference fields")
 	}
-	timestamp := c.now().UTC().Format("20060102150405")
+	timestamp := c.darajaTimestamp()
 	password := base64.StdEncoding.EncodeToString([]byte(c.config.ShortCode + c.config.Passkey + timestamp))
 	payload := map[string]any{
 		"BusinessShortCode": c.config.ShortCode,
@@ -140,7 +150,7 @@ func (c *Client) Query(ctx context.Context, checkoutRequestID string) (QueryResp
 	if strings.TrimSpace(checkoutRequestID) == "" {
 		return QueryResponse{}, errors.New("M-Pesa checkout request ID is required")
 	}
-	timestamp := c.now().UTC().Format("20060102150405")
+	timestamp := c.darajaTimestamp()
 	password := base64.StdEncoding.EncodeToString([]byte(c.config.ShortCode + c.config.Passkey + timestamp))
 	payload := map[string]any{"BusinessShortCode": c.config.ShortCode, "Password": password, "Timestamp": timestamp, "CheckoutRequestID": checkoutRequestID}
 	var response QueryResponse

@@ -13,6 +13,44 @@ success callback is consistent with the stored amount, phone and request IDs and
 authenticated STK Query confirms the same checkout. The payment and competition
 entry then commit together.
 
+## Going live with a PayBill
+
+Do these in order. Nothing in the code needs to change; only configuration.
+
+1. **Safaricom PayBill.** Once the PayBill number is issued, ask Safaricom to enable
+   **Lipa na M-Pesa Online (M-Pesa Express / STK Push)** on it. That request returns
+   the **passkey** used to sign STK requests.
+2. **Daraja 3.0 portal** (developer.safaricom.co.ke, two-factor login). Create an
+   app with M-Pesa Express. Test against the sandbox first: sandbox shortcode
+   `174379` and its published passkey, with the app's sandbox consumer key/secret.
+3. **Public HTTPS callback.** Expose the API on a public HTTPS domain, for example
+   `https://api.gamics.io`. Safaricom drops callbacks to URLs containing `mpesa`,
+   `m-pesa`, `safaricom`, `exe`/`exec`, `cmd`, `sql` or `query` in any case, so the
+   callback path is `/v1/payments/callbacks/stk/<token>` and the API refuses to start
+   if the domain or token contains one of those words. Generate the token with
+   `openssl rand -hex 24` (hex can never spell a blocked word).
+4. **Sandbox test.** Set the values below with `MPESA_ENVIRONMENT=sandbox`, restart
+   the API, register a player, create a paid KES competition and pay from a
+   Safaricom number. Check that the payment reaches `succeeded` and the player is
+   registered. Sandbox callbacks can take several minutes; the reconciler queries
+   Daraja every 15 seconds meanwhile.
+5. **Go live** in the Daraja portal (self-service in Daraja 3.0): link the app to the
+   PayBill, enter the production callback origin, and copy the production consumer
+   key/secret. Switch to `MPESA_ENVIRONMENT=production`, `MPESA_SHORT_CODE=<PayBill>`,
+   the production passkey and `MPESA_TRANSACTION_TYPE=CustomerPayBillOnline`.
+6. **First live payment.** Pay a small real fee (for example KES 10) end to end before
+   announcing paid competitions.
+
+Players see the PayBill name on the STK prompt and an account reference such as
+`GM1A2B3C4D5E` (the payment ID), which also appears on the M-Pesa statement for
+reconciliation. Entry fees are whole shillings: `entryFeeMinor` is in cents and must
+be a multiple of 100.
+
+Paid competitions are open to players in Kenya only, because M-Pesa is the only
+collection rail. A player whose country is not `KE` (it follows their phone's
+calling code) sees `country_not_allowed` on a paid competition; free competitions
+are open to every country. India payments are planned separately.
+
 ## Required private configuration
 
 Put these values in a deployment secret manager (or the ignored `.env.docker` only
@@ -25,12 +63,12 @@ MPESA_CONSUMER_SECRET=...
 MPESA_SHORT_CODE=...
 MPESA_PASSKEY=...
 MPESA_CALLBACK_BASE_URL=https://api.example.com
-MPESA_CALLBACK_TOKEN=<32-128 random URL-safe characters>
+MPESA_CALLBACK_TOKEN=<openssl rand -hex 24>
 MPESA_TRANSACTION_TYPE=CustomerPayBillOnline
 ```
 
 `MPESA_CALLBACK_BASE_URL` is an HTTPS origin, without a path. Gamics appends
-`/v1/payments/mpesa/callback/<token>`. Rotate the token if it appears in any proxy,
+`/v1/payments/callbacks/stk/<token>`. Rotate the token if it appears in any proxy,
 WAF or historical application log, and configure edge logs to redact that path.
 
 Sandbox uses `https://sandbox.safaricom.co.ke`; production uses

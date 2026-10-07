@@ -132,7 +132,7 @@ MPESA_CALLBACK_BASE_URL=https://your-public-api-origin.example
 ```
 
 The API constructs
-`https://your-public-api-origin.example/v1/payments/mpesa/callback/<token>`.
+`https://your-public-api-origin.example/v1/payments/callbacks/stk/<token>`.
 Do not put the path in `MPESA_CALLBACK_BASE_URL`. Do not enable production mode
 until Safaricom has approved the app, PayBill/Till and callback. Full safeguards
 and required variables are in `mpesa-daraja.md`.

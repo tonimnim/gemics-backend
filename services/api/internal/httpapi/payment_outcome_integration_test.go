@@ -232,7 +232,7 @@ func paymentFlowCallback(t *testing.T, h paymentFlowHarness, paymentID string) {
 		`{"Name":"Amount","Value":%d},{"Name":"MpesaReceiptNumber","Value":%q},`+
 		`{"Name":"TransactionDate","Value":20260929120000},{"Name":"PhoneNumber","Value":%s}]}}}}`,
 		merchantID, checkoutID, amountMinor/100, resultFlowReceipt(), phone)
-	request := httptest.NewRequest(http.MethodPost, "/v1/payments/mpesa/callback/token", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/v1/payments/callbacks/stk/token", strings.NewReader(body))
 	request.SetPathValue("token", paymentFlowCallbackToken)
 	recorder := httptest.NewRecorder()
 	h.Server.mpesaCallback(recorder, request)

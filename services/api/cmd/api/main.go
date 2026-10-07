@@ -87,7 +87,7 @@ func main() {
 
 	var mpesaProvider mpesa.Provider
 	if cfg.MPesaEnabled() {
-		callbackURL, joinErr := url.JoinPath(cfg.MPesaCallbackBaseURL, "v1", "payments", "mpesa", "callback", cfg.MPesaCallbackToken)
+		callbackURL, joinErr := url.JoinPath(cfg.MPesaCallbackBaseURL, "v1", "payments", "callbacks", "stk", cfg.MPesaCallbackToken)
 		if joinErr != nil {
 			logger.Error("build M-Pesa callback URL", "error", joinErr)
 			os.Exit(1)

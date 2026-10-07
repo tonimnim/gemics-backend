@@ -43,7 +43,7 @@ The contract currently covers:
   persistence, knockout/double-elimination/round-robin progression, no-show handling,
   standings, placements, stage completion, and competition completion.
 
-The provider-only `POST /v1/payments/mpesa/callback/{token}` is intentionally in the
+The provider-only `POST /v1/payments/callbacks/stk/{token}` is intentionally in the
 backend contract and must never be called by a player client.
 
 ## Production services still required

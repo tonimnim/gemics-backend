@@ -44,6 +44,32 @@ func TestMPesaRequiresPublicCallbackOrigin(t *testing.T) {
 	}
 }
 
+// Safaricom drops callbacks to URLs containing these words, in any case, so
+// startup refuses them in the origin and in the random token alike.
+func TestMPesaCallbackRejectsDarajaBlockedWords(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("MPESA_ENVIRONMENT", "sandbox")
+	t.Setenv("MPESA_CONSUMER_KEY", "key")
+	t.Setenv("MPESA_CONSUMER_SECRET", "secret")
+	t.Setenv("MPESA_SHORT_CODE", "174379")
+	t.Setenv("MPESA_PASSKEY", "passkey")
+	for _, tc := range []struct{ origin, token string }{
+		{"https://mpesa.gamics.example", "12345678901234567890123456789012"},
+		{"https://api.m-pesa-gamics.example", "12345678901234567890123456789012"},
+		{"https://SAFARICOM-hooks.example", "12345678901234567890123456789012"},
+		{"https://api.gamics.example", "1234567890123456789012345678EXEC"},
+		{"https://api.gamics.example", "12345678901234567890123456789sQl"},
+		{"https://api.gamics.example", "1234567890123456789012345678cmd9"},
+		{"https://query.gamics.example", "12345678901234567890123456789012"},
+	} {
+		t.Setenv("MPESA_CALLBACK_BASE_URL", tc.origin)
+		t.Setenv("MPESA_CALLBACK_TOKEN", tc.token)
+		if _, err := Load(); err == nil {
+			t.Errorf("callback %s/%s was accepted", tc.origin, tc.token)
+		}
+	}
+}
+
 func TestStorageDisabledByDefault(t *testing.T) {
 	t.Setenv("STORAGE_MODE", "")
 	config, err := Load()
