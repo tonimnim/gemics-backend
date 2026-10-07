@@ -82,6 +82,7 @@ func (s *Server) registerPaymentLifecycleRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/competitions/{id}/registrations/me/withdrawal-requests",
 		s.requireAuth(http.HandlerFunc(s.requestPaidWithdrawal)))
 	mux.Handle("GET /v1/admin/refunds", s.platformRoute(platformRefundView, s.listRefundQueue))
+	mux.Handle("GET /v1/admin/refunds/summary", s.platformRoute(platformRefundView, s.getRefundSummary))
 	mux.Handle("POST /v1/admin/refunds/{id}/decisions", s.platformRoute(platformRefundManage, s.decideRefund))
 }
 
@@ -423,16 +424,62 @@ func loadRefundByPayment(r *http.Request, tx pgx.Tx, paymentID, userID string) (
 		ORDER BY refund.requested_at DESC,refund.id DESC LIMIT 1`, paymentID, userID))
 }
 
+// refundStages group refund statuses the way staff work them: what needs a
+// decision or a payout, what is with the provider, and what is finished.
+var refundStages = map[string][]string{
+	"action":     {"requested", "manual_review", "approved", "failed"},
+	"processing": {"processing"},
+	"done":       {"succeeded", "rejected"},
+}
+
+// staffRefundView adds who and what a refund is for, so staff never work from
+// bare payment IDs. Players' own refund views stay as they were.
+type staffRefundView struct {
+	paymentRefundView
+	PlayerDisplayName string  `json:"playerDisplayName"`
+	PlayerHandle      *string `json:"playerHandle"`
+	PhoneNumber       string  `json:"phoneNumber"`
+	CompetitionName   string  `json:"competitionName"`
+}
+
+const staffRefundSelect = `SELECT refund.id,refund.payment_id,refund.entry_id,refund.amount_minor,refund.currency,
+	refund.reason_code,refund.mandatory,refund.player_note,refund.status,refund.provider_receipt,refund.provider_result_description,
+	refund.requested_at,refund.reviewed_at,refund.completed_at,refund.updated_at,
+	player.display_name,profile.handle,payment.phone_e164,COALESCE(competition.name,'')
+	FROM payment_refunds refund
+	JOIN payment_intents payment ON payment.id=refund.payment_id
+	JOIN users player ON player.id=refund.user_id
+	LEFT JOIN player_profiles profile ON profile.user_id=player.id
+	LEFT JOIN competitions competition ON competition.id=payment.competition_id `
+
+// listRefundQueue lists refunds by stage (action, processing, done) or by a
+// single status. Open stages list oldest first, so the longest wait is on
+// top; finished refunds list newest first.
 func (s *Server) listRefundQueue(w http.ResponseWriter, r *http.Request) {
+	stage := strings.TrimSpace(r.URL.Query().Get("stage"))
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
-	if status == "" {
-		status = "requested"
+	var statuses []string
+	scope := ""
+	switch {
+	case stage != "":
+		statuses = refundStages[stage]
+		if statuses == nil {
+			writeError(w, http.StatusBadRequest, "invalid_stage", "Choose action, processing or done.")
+			return
+		}
+		scope = "stage:" + stage
+	default:
+		if status == "" {
+			status = "requested"
+		}
+		if _, valid := refundStatuses[status]; !valid {
+			writeError(w, http.StatusBadRequest, "invalid_status", "Choose a valid refund status.")
+			return
+		}
+		statuses, scope = []string{status}, status
 	}
-	if _, valid := refundStatuses[status]; !valid {
-		writeError(w, http.StatusBadRequest, "invalid_status", "Choose a valid refund status.")
-		return
-	}
-	limit, cursor, ok := s.staffQueuePageInput(w, r, "refund-queue", status)
+	newestFirst := stage == "done"
+	limit, cursor, ok := s.staffQueuePageInput(w, r, "refund-queue", scope)
 	if !ok {
 		return
 	}
@@ -442,24 +489,25 @@ func (s *Server) listRefundQueue(w http.ResponseWriter, r *http.Request) {
 		value := cursorTime(cursor.SortTime)
 		afterTime, afterID = &value, &cursor.ID
 	}
-	rows, err := s.db.Writer.Query(r.Context(), refundSelect+`WHERE refund.status=$1
-		AND ($2::timestamptz IS NULL OR (refund.requested_at,refund.id)>($2,$3::uuid))
-		ORDER BY refund.requested_at,refund.id LIMIT $4`, status, afterTime, afterID, limit+1)
+	order := `AND ($2::timestamptz IS NULL OR (refund.requested_at,refund.id)>($2,$3::uuid))
+		ORDER BY refund.requested_at,refund.id`
+	if newestFirst {
+		order = `AND ($2::timestamptz IS NULL OR (refund.requested_at,refund.id)<($2,$3::uuid))
+		ORDER BY refund.requested_at DESC,refund.id DESC`
+	}
+	rows, err := s.db.Writer.Query(r.Context(), staffRefundSelect+`WHERE refund.status=ANY($1::text[]) `+order+` LIMIT $4`,
+		statuses, afterTime, afterID, limit+1)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the refund queue.")
 		return
 	}
-	defer rows.Close()
-	data := []paymentRefundView{}
-	for rows.Next() {
-		value, scanErr := scanRefund(rows)
-		if scanErr != nil {
-			writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the refund queue.")
-			return
-		}
-		data = append(data, value)
-	}
-	if rows.Err() != nil {
+	data, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (staffRefundView, error) {
+		var value staffRefundView
+		targets := append(refundScanTargets(&value.paymentRefundView),
+			&value.PlayerDisplayName, &value.PlayerHandle, &value.PhoneNumber, &value.CompetitionName)
+		return value, row.Scan(targets...)
+	})
+	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the refund queue.")
 		return
 	}
@@ -468,7 +516,7 @@ func (s *Server) listRefundQueue(w http.ResponseWriter, r *http.Request) {
 		data = data[:limit]
 		page.HasMore = true
 		last := data[len(data)-1]
-		next, encodeErr := s.encodeStaffQueueCursor("refund-queue", status,
+		next, encodeErr := s.encodeStaffQueueCursor("refund-queue", scope,
 			identityFromContext(r.Context()).UserID, last.RequestedAt, last.ID)
 		if encodeErr != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Unable to paginate the refund queue.")
@@ -477,6 +525,33 @@ func (s *Server) listRefundQueue(w http.ResponseWriter, r *http.Request) {
 		page.NextCursor = &next
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data, "page": page})
+}
+
+type refundStageSummary struct {
+	Count       int   `json:"count"`
+	AmountMinor int64 `json:"amountMinor"`
+}
+
+// getRefundSummary returns the count and total of each stage. Completed is
+// limited to the last 30 days.
+func (s *Server) getRefundSummary(w http.ResponseWriter, r *http.Request) {
+	var action, processing, done refundStageSummary
+	err := s.db.Writer.QueryRow(r.Context(), `SELECT
+		count(*) FILTER (WHERE status=ANY($1::text[])),
+		COALESCE(sum(amount_minor) FILTER (WHERE status=ANY($1::text[])),0),
+		count(*) FILTER (WHERE status='processing'),
+		COALESCE(sum(amount_minor) FILTER (WHERE status='processing'),0),
+		count(*) FILTER (WHERE status='succeeded' AND completed_at>now()-interval '30 days'),
+		COALESCE(sum(amount_minor) FILTER (WHERE status='succeeded' AND completed_at>now()-interval '30 days'),0)
+		FROM payment_refunds`, refundStages["action"]).Scan(&action.Count, &action.AmountMinor,
+		&processing.Count, &processing.AmountMinor, &done.Count, &done.AmountMinor)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the refund summary.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"action": action, "processing": processing, "refundedLast30Days": done, "currency": "KES",
+	})
 }
 
 func (s *Server) staffQueuePageInput(w http.ResponseWriter, r *http.Request, kind, status string) (int, *publicCursor, bool) {
