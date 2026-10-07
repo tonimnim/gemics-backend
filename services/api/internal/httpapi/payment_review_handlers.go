@@ -174,8 +174,12 @@ func (s *Server) listPaymentReviews(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var beforeTime *time.Time
+	var afterKey *int64
 	var beforeID *string
-	if cursor != nil {
+	everyStatus := filters.Status == "all"
+	if cursor != nil && everyStatus {
+		afterKey, beforeID = &cursor.SortTime, &cursor.ID
+	} else if cursor != nil {
 		value := cursorTime(cursor.SortTime)
 		beforeTime, beforeID = &value, &cursor.ID
 	}
@@ -183,14 +187,22 @@ func (s *Server) listPaymentReviews(w http.ResponseWriter, r *http.Request) {
 	if filters.CompetitionID != "" {
 		competitionID = filters.CompetitionID
 	}
-	rows, err := s.db.Writer.Query(r.Context(), paymentReviewSelect+`WHERE payment.status=$1
+	filtersSQL := `($1='all' OR payment.status=$1)
 		AND ($2::uuid IS NULL OR payment.competition_id=$2::uuid)
 		AND ($3='any' OR ($3='present' AND payment.checkout_request_id IS NOT NULL)
 			OR ($3='missing' AND payment.checkout_request_id IS NULL))
-		AND payment.query_attempts>=$4
+		AND payment.query_attempts>=$4`
+	query := paymentReviewSelect + `WHERE ` + filtersSQL + `
 		AND ($5::timestamptz IS NULL OR (payment.updated_at,payment.id)<($5,$6::uuid))
-		ORDER BY payment.updated_at DESC,payment.id DESC LIMIT $7`, filters.Status, competitionID,
-		filters.Checkout, filters.MinAttempts, beforeTime, beforeID, limit+1)
+		ORDER BY payment.updated_at DESC,payment.id DESC LIMIT $7`
+	args := []any{filters.Status, competitionID, filters.Checkout, filters.MinAttempts, beforeTime, beforeID, limit + 1}
+	if everyStatus {
+		query = paymentReviewSelect + `WHERE ` + filtersSQL + `
+		AND ($5::bigint IS NULL OR (` + paymentReviewOrderSQL + `,payment.id)>($5,$6::uuid))
+		ORDER BY ` + paymentReviewOrderSQL + `,payment.id LIMIT $7`
+		args[4] = afterKey
+	}
+	rows, err := s.db.Writer.Query(r.Context(), query, args...)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the payment review queue.")
 		return
@@ -217,7 +229,7 @@ func (s *Server) listPaymentReviews(w http.ResponseWriter, r *http.Request) {
 		token, encodeErr := encodePublicCursor(publicCursor{
 			Kind: paymentReviewCursorKind, ExpiresAt: time.Now().Add(paymentCursorTTL).Unix(),
 			Query: identityFromContext(r.Context()).UserID, Scope: filters.scope(),
-			SortTime: last.UpdatedAt.UnixNano(), ID: last.ID,
+			SortTime: paymentReviewSortValue(last, everyStatus), ID: last.ID,
 		}, s.config.AccessTokenSecret)
 		if encodeErr != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Unable to paginate the payment review queue.")
@@ -229,6 +241,20 @@ func (s *Server) listPaymentReviews(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": items, "page": page})
 }
 
+// paymentReviewOrderSQL orders every payment: unsettled ones (in flight or in
+// review) first, oldest first, then settled ones, newest first.
+var paymentReviewOrderSQL = staffQueueOrderKey(
+	"payment.status IN ('initiating','pending','callback_received','review')", "payment.created_at",
+	"COALESCE(payment.completed_at,payment.updated_at)")
+
+func paymentReviewSortValue(item paymentReviewItem, everyStatus bool) int64 {
+	if !everyStatus {
+		return item.UpdatedAt.UnixNano()
+	}
+	open := item.Status != "succeeded" && item.Status != "failed"
+	return staffQueueKey(open, item.CreatedAt, timeOr(item.CompletedAt, item.UpdatedAt))
+}
+
 func (s *Server) paymentReviewPageInput(w http.ResponseWriter, r *http.Request) (paymentReviewFilters, int, *publicCursor, bool) {
 	filters := paymentReviewFilters{
 		Status:        strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status"))),
@@ -238,7 +264,7 @@ func (s *Server) paymentReviewPageInput(w http.ResponseWriter, r *http.Request) 
 	if filters.Status == "" {
 		filters.Status = "review"
 	}
-	if _, valid := paymentHistoryStatuses[filters.Status]; !valid {
+	if _, valid := paymentHistoryStatuses[filters.Status]; !valid && filters.Status != "all" {
 		writeError(w, http.StatusBadRequest, "invalid_status", "Choose a valid payment status.")
 		return paymentReviewFilters{}, 0, nil, false
 	}

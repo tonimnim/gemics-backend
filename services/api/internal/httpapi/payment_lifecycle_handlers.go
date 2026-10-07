@@ -432,6 +432,19 @@ var refundStages = map[string][]string{
 	"done":       {"succeeded", "rejected"},
 }
 
+// refundAllStatuses is every refund status, for status=all.
+var refundAllStatuses = []string{"requested", "manual_review", "approved", "failed", "processing", "succeeded", "rejected"}
+
+// refundOrderSQL orders every refund: open ones (needing action or with the
+// provider) first, oldest first, then finished ones, newest first.
+var refundOrderSQL = staffQueueOrderKey("refund.status NOT IN ('succeeded','rejected')", "refund.requested_at",
+	"COALESCE(refund.completed_at,refund.updated_at)")
+
+func refundOrderKey(view paymentRefundView) int64 {
+	open := view.Status != "succeeded" && view.Status != "rejected"
+	return staffQueueKey(open, view.RequestedAt, timeOr(view.CompletedAt, view.UpdatedAt))
+}
+
 // staffRefundView adds who and what a refund is for, so staff never work from
 // bare payment IDs. Players' own refund views stay as they were.
 type staffRefundView struct {
@@ -468,6 +481,8 @@ func (s *Server) listRefundQueue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		scope = "stage:" + stage
+	case status == "all":
+		statuses, scope = refundAllStatuses, "all"
 	default:
 		if status == "" {
 			status = "requested"
@@ -478,14 +493,17 @@ func (s *Server) listRefundQueue(w http.ResponseWriter, r *http.Request) {
 		}
 		statuses, scope = []string{status}, status
 	}
-	newestFirst := stage == "done"
+	newestFirst, everyStatus := stage == "done", scope == "all"
 	limit, cursor, ok := s.staffQueuePageInput(w, r, "refund-queue", scope)
 	if !ok {
 		return
 	}
 	var afterTime *time.Time
+	var afterKey *int64
 	var afterID *string
-	if cursor != nil {
+	if cursor != nil && everyStatus {
+		afterKey, afterID = &cursor.SortTime, &cursor.ID
+	} else if cursor != nil {
 		value := cursorTime(cursor.SortTime)
 		afterTime, afterID = &value, &cursor.ID
 	}
@@ -495,8 +513,14 @@ func (s *Server) listRefundQueue(w http.ResponseWriter, r *http.Request) {
 		order = `AND ($2::timestamptz IS NULL OR (refund.requested_at,refund.id)<($2,$3::uuid))
 		ORDER BY refund.requested_at DESC,refund.id DESC`
 	}
+	args := []any{statuses, afterTime, afterID, limit + 1}
+	if everyStatus {
+		order = `AND ($2::bigint IS NULL OR (` + refundOrderSQL + `,refund.id)>($2,$3::uuid))
+		ORDER BY ` + refundOrderSQL + `,refund.id`
+		args = []any{statuses, afterKey, afterID, limit + 1}
+	}
 	rows, err := s.db.Writer.Query(r.Context(), staffRefundSelect+`WHERE refund.status=ANY($1::text[]) `+order+` LIMIT $4`,
-		statuses, afterTime, afterID, limit+1)
+		args...)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the refund queue.")
 		return
@@ -516,8 +540,15 @@ func (s *Server) listRefundQueue(w http.ResponseWriter, r *http.Request) {
 		data = data[:limit]
 		page.HasMore = true
 		last := data[len(data)-1]
-		next, encodeErr := s.encodeStaffQueueCursor("refund-queue", scope,
-			identityFromContext(r.Context()).UserID, last.RequestedAt, last.ID)
+		var next string
+		var encodeErr error
+		if everyStatus {
+			next, encodeErr = s.encodeStaffQueueKeyCursor("refund-queue", scope,
+				identityFromContext(r.Context()).UserID, refundOrderKey(last.paymentRefundView), last.ID)
+		} else {
+			next, encodeErr = s.encodeStaffQueueCursor("refund-queue", scope,
+				identityFromContext(r.Context()).UserID, last.RequestedAt, last.ID)
+		}
 		if encodeErr != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Unable to paginate the refund queue.")
 			return

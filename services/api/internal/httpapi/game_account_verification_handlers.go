@@ -278,7 +278,7 @@ func (s *Server) listGameAccountVerificationQueue(w http.ResponseWriter, r *http
 	if status == "" {
 		status = "requested"
 	}
-	if status != "requested" && status != "under_review" && status != "approved" && status != "rejected" {
+	if status != "requested" && status != "under_review" && status != "approved" && status != "rejected" && status != "all" {
 		writeError(w, http.StatusBadRequest, "invalid_status", "Choose a valid verification status.")
 		return
 	}
@@ -287,14 +287,24 @@ func (s *Server) listGameAccountVerificationQueue(w http.ResponseWriter, r *http
 		return
 	}
 	var afterTime *time.Time
+	var afterKey *int64
 	var afterID *string
-	if cursor != nil {
+	if cursor != nil && status == "all" {
+		afterKey, afterID = &cursor.SortTime, &cursor.ID
+	} else if cursor != nil {
 		value := cursorTime(cursor.SortTime)
 		afterTime, afterID = &value, &cursor.ID
 	}
-	rows, err := s.db.Writer.Query(r.Context(), verificationSelect+`WHERE request.status=$1
+	query := verificationSelect + `WHERE request.status=$1
 		AND ($2::timestamptz IS NULL OR (request.requested_at,request.id)>($2,$3::uuid))
-		ORDER BY request.requested_at,request.id LIMIT $4`, status, afterTime, afterID, limit+1)
+		ORDER BY request.requested_at,request.id LIMIT $4`
+	args := []any{status, afterTime, afterID, limit + 1}
+	if status == "all" {
+		query = verificationSelect + `WHERE ($1::bigint IS NULL OR (` + verificationOrderSQL + `,request.id)>($1,$2::uuid))
+			ORDER BY ` + verificationOrderSQL + `,request.id LIMIT $3`
+		args = []any{afterKey, afterID, limit + 1}
+	}
+	rows, err := s.db.Writer.Query(r.Context(), query, args...)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the verification queue.")
 		return
@@ -318,8 +328,15 @@ func (s *Server) listGameAccountVerificationQueue(w http.ResponseWriter, r *http
 		data = data[:limit]
 		page.HasMore = true
 		last := data[len(data)-1]
-		next, encodeErr := s.encodeStaffQueueCursor("game-account-verification-queue", status,
-			identityFromContext(r.Context()).UserID, last.RequestedAt, last.ID)
+		var next string
+		var encodeErr error
+		if status == "all" {
+			next, encodeErr = s.encodeStaffQueueKeyCursor("game-account-verification-queue", status,
+				identityFromContext(r.Context()).UserID, verificationOrderKey(last), last.ID)
+		} else {
+			next, encodeErr = s.encodeStaffQueueCursor("game-account-verification-queue", status,
+				identityFromContext(r.Context()).UserID, last.RequestedAt, last.ID)
+		}
 		if encodeErr != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Unable to paginate the verification queue.")
 			return
@@ -327,6 +344,16 @@ func (s *Server) listGameAccountVerificationQueue(w http.ResponseWriter, r *http
 		page.NextCursor = &next
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data, "page": page})
+}
+
+// verificationOrderSQL orders every request: waiting ones first, oldest first,
+// then decided and withdrawn ones, newest first.
+var verificationOrderSQL = staffQueueOrderKey("request.status IN ('requested','under_review')",
+	"request.requested_at", "COALESCE(request.reviewed_at,request.updated_at)")
+
+func verificationOrderKey(view gameAccountVerificationView) int64 {
+	open := view.Status == "requested" || view.Status == "under_review"
+	return staffQueueKey(open, view.RequestedAt, timeOr(view.ReviewedAt, view.UpdatedAt))
 }
 
 func (s *Server) decideGameAccountVerification(w http.ResponseWriter, r *http.Request) {

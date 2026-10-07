@@ -177,11 +177,18 @@ func (s *Server) listResultReviews(w http.ResponseWriter, r *http.Request) {
 		items = items[:limit]
 		page.HasMore = true
 		last := items[len(items)-1]
-		sortTime := last.QueuedAt
-		if filters.Status != "queued" && last.DecidedAt != nil {
-			sortTime = *last.DecidedAt
+		var next string
+		var encodeErr error
+		if filters.Status == "all" {
+			next, encodeErr = s.encodeStaffQueueKeyCursor(resultReviewCursorKind, filters.scope(), actorID,
+				resultReviewOrderKey(last), last.ID)
+		} else {
+			sortTime := last.QueuedAt
+			if filters.Status != "queued" && last.DecidedAt != nil {
+				sortTime = *last.DecidedAt
+			}
+			next, encodeErr = s.encodeStaffQueueCursor(resultReviewCursorKind, filters.scope(), actorID, sortTime, last.ID)
 		}
-		next, encodeErr := s.encodeStaffQueueCursor(resultReviewCursorKind, filters.scope(), actorID, sortTime, last.ID)
 		if encodeErr != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "Unable to paginate the result review queue.")
 			return
@@ -202,8 +209,8 @@ func (s *Server) resultReviewPageInput(w http.ResponseWriter, r *http.Request) (
 	if filters.Status == "" {
 		filters.Status = "queued"
 	}
-	if filters.Status != "queued" && filters.Status != "decided" && filters.Status != "closed" {
-		writeError(w, http.StatusBadRequest, "invalid_status", "Choose queued, decided or closed.")
+	if filters.Status != "queued" && filters.Status != "decided" && filters.Status != "closed" && filters.Status != "all" {
+		writeError(w, http.StatusBadRequest, "invalid_status", "Choose queued, decided, closed or all.")
 		return resultReviewFilters{}, 0, nil, false
 	}
 	if filters.CompetitionID != "" && !uuidPattern.MatchString(filters.CompetitionID) {
@@ -225,6 +232,9 @@ func queryResultReviewPage(ctx context.Context, queryer rowsQueryer, filters res
 	if filters.CompetitionID != "" {
 		competitionID = filters.CompetitionID
 	}
+	if filters.Status == "all" {
+		return queryAllResultReviews(ctx, queryer, competitionID, actorID, cursor, limit)
+	}
 	var afterTime *time.Time
 	var afterID *string
 	if cursor != nil {
@@ -241,6 +251,44 @@ func queryResultReviewPage(ctx context.Context, queryer rowsQueryer, filters res
 		WHERE review.status=$1 AND ($2::uuid IS NULL OR review.competition_id=$2::uuid)
 		AND NOT `+resultReviewConflictClause("m", "$3::uuid")+order,
 		filters.Status, competitionID, actorID, afterTime, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	items := make([]resultReviewSummary, 0, limit)
+	for result.Next() {
+		var item resultReviewSummary
+		if err = result.Scan(resultReviewSummaryTargets(&item)...); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, result.Err()
+}
+
+// resultReviewOrderSQL orders every review: queued ones first, oldest first,
+// then decided and closed ones, newest first.
+var resultReviewOrderSQL = staffQueueOrderKey("review.status='queued'", "review.queued_at",
+	"COALESCE(review.decided_at,review.queued_at)")
+
+func resultReviewOrderKey(item resultReviewSummary) int64 {
+	return staffQueueKey(item.Status == "queued", item.QueuedAt, timeOr(item.DecidedAt, item.QueuedAt))
+}
+
+// queryAllResultReviews reads one keyset page of reviews in every status.
+func queryAllResultReviews(ctx context.Context, queryer rowsQueryer, competitionID any, actorID string,
+	cursor *publicCursor, limit int) ([]resultReviewSummary, error) {
+	var afterKey *int64
+	var afterID *string
+	if cursor != nil {
+		afterKey, afterID = &cursor.SortTime, &cursor.ID
+	}
+	result, err := queryer.Query(ctx, `SELECT `+resultReviewSummaryColumns+resultReviewFrom+`
+		WHERE ($1::uuid IS NULL OR review.competition_id=$1::uuid)
+		AND NOT `+resultReviewConflictClause("m", "$2::uuid")+`
+		AND ($3::bigint IS NULL OR (`+resultReviewOrderSQL+`,review.id)>($3,$4::uuid))
+		ORDER BY `+resultReviewOrderSQL+`,review.id LIMIT $5`,
+		competitionID, actorID, afterKey, afterID, limit)
 	if err != nil {
 		return nil, err
 	}
