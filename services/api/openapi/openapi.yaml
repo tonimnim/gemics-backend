@@ -611,7 +611,8 @@ paths:
         - Payments
       summary: Reserve a competition place and send an M-Pesa STK prompt.
       description: >-
-        A confirmed provider payment creates the competition entry atomically. Reuse the same Idempotency-Key when
+        Paid entry is collected through M-Pesa, so it is open to players in Kenya only. A confirmed provider
+        payment creates the competition entry atomically. Reuse the same Idempotency-Key when
         retrying the same request. Poll GET /v1/payments/{id} until status is succeeded, failed or review, then read
         registrationStatus: a verified payment that completes after its place is gone reads succeeded with
         registrationStatus refund_pending and a mandatory refund.
@@ -739,7 +740,7 @@ paths:
         '503':
           $ref: '#/components/responses/Error'
           description: database_unavailable, session_check_unavailable.
-  /v1/payments/mpesa/callback/{token}:
+  /v1/payments/callbacks/stk/{token}:
     post:
       operationId: receiveMPesaCallback
       tags:
@@ -3166,6 +3167,163 @@ paths:
         '503':
           $ref: '#/components/responses/Error'
           description: database_unavailable, session_check_unavailable.
+  /v1/admin/me:
+    get:
+      operationId: getStaffSelf
+      tags:
+        - Staff
+      summary: The signed-in staff member, their role and permissions.
+      description: >-
+        Staff sign in with an ordinary Gamics account (Konami ID and password). A player without a staff role gets
+        403 platform_access_denied. gamicsOrganizationId is the organization staff with competition.manage run
+        competitions under, through the organization competition endpoints.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Staff member.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [userId, username, displayName, role, permissions, gamicsOrganizationId]
+                properties:
+                  userId: { type: string, format: uuid }
+                  username: { type: [string, 'null'] }
+                  displayName: { type: string }
+                  role: { $ref: '#/components/schemas/StaffRole' }
+                  permissions:
+                    type: array
+                    items: { $ref: '#/components/schemas/StaffPermission' }
+                  gamicsOrganizationId: { type: string, format: uuid }
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+          description: platform_access_denied.
+  /v1/admin/overview:
+    get:
+      operationId: getAdminOverview
+      tags:
+        - Staff
+      summary: Dashboard counts. Requires overview.view (every staff role).
+      description: finance is null unless the caller holds finance.view (admins only).
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Overview.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [players, competitions, queues, finance]
+                properties:
+                  players:
+                    type: object
+                    required: [total, newLast7Days]
+                    properties:
+                      total: { type: integer }
+                      newLast7Days: { type: integer }
+                  competitions:
+                    type: object
+                    required: [registrationOpen, running, draft]
+                    properties:
+                      registrationOpen: { type: integer }
+                      running: { type: integer }
+                      draft: { type: integer }
+                  queues:
+                    type: object
+                    required: [resultReviews, accountVerifications]
+                    properties:
+                      resultReviews: { type: integer }
+                      accountVerifications: { type: integer }
+                  finance:
+                    oneOf:
+                      - type: 'null'
+                      - type: object
+                        required: [paymentReviews, refunds, succeededLast30Days, collectedMinorLast30Days, currency]
+                        properties:
+                          paymentReviews: { type: integer }
+                          refunds: { type: integer }
+                          succeededLast30Days: { type: integer }
+                          collectedMinorLast30Days: { type: integer, format: int64 }
+                          currency: { type: string, const: KES }
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/admin/staff:
+    get:
+      operationId: listStaff
+      tags:
+        - Staff
+      summary: Active staff and their roles. Requires staff.manage (admins).
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Staff list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffList'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: grantStaffRole
+      tags:
+        - Staff
+      summary: Grant or change a registered player's staff role. Requires staff.manage.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [konamiId, role]
+              properties:
+                konamiId: { type: string }
+                role: { $ref: '#/components/schemas/StaffRole' }
+      responses:
+        '200':
+          description: Updated staff list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffList'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_role, invalid_konami_id.
+        '404':
+          $ref: '#/components/responses/Error'
+          description: player_not_found (register the account first).
+        '409':
+          $ref: '#/components/responses/Error'
+          description: cannot_change_own_role.
+  /v1/admin/staff/{userId}:
+    delete:
+      operationId: revokeStaffRole
+      tags:
+        - Staff
+      summary: Remove a staff role. Requires staff.manage; nobody can remove their own.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Removed; takes effect on the staff member's next request.
+        '404':
+          $ref: '#/components/responses/Error'
+          description: staff_not_found.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: cannot_change_own_role.
   /v1/admin/refunds:
     get:
       operationId: listRefundQueue
@@ -3174,7 +3332,17 @@ paths:
       summary: List the platform-staff refund queue.
       security:
         - bearerAuth: []
+      description: >-
+        Pass stage instead of status to list refunds the way staff work them: action (requested, manual_review,
+        approved, failed), processing, or done (succeeded, rejected; newest first). Each row also carries the
+        player's name and handle, the M-Pesa number to pay and the competition name.
       parameters:
+        - name: stage
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [action, processing, done]
         - name: status
           in: query
           schema:
@@ -3213,6 +3381,29 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
         '503':
+          $ref: '#/components/responses/Error'
+  /v1/admin/refunds/summary:
+    get:
+      operationId: getRefundSummary
+      tags:
+        - Payments
+      summary: Count and total of each refund stage; refundedLast30Days covers succeeded refunds only.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [action, processing, refundedLast30Days, currency]
+                properties:
+                  action: { $ref: '#/components/schemas/RefundStageSummary' }
+                  processing: { $ref: '#/components/schemas/RefundStageSummary' }
+                  refundedLast30Days: { $ref: '#/components/schemas/RefundStageSummary' }
+                  currency: { type: string, const: KES }
+        '403':
           $ref: '#/components/responses/Error'
   /v1/admin/refunds/{id}/decisions:
     post:
@@ -4316,6 +4507,52 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    RefundStageSummary:
+      type: object
+      required: [count, amountMinor]
+      properties:
+        count: { type: integer }
+        amountMinor: { type: integer, format: int64 }
+    StaffRole:
+      type: string
+      description: >-
+        support: overview, create and run competitions, see registrations. reviewer: support plus result reviews
+        and account verifications. operator: reviewer plus revoking strikes. admin: everything, including finance,
+        payment reviews, refunds and staff roles.
+      enum: [support, reviewer, operator, admin]
+    StaffPermission:
+      type: string
+      enum:
+        - overview.view
+        - refund.view
+        - refund.manage
+        - game_account_verification.manage
+        - payment_review.manage
+        - result_review.manage
+        - player_strike.revoke
+        - competition.manage
+        - staff.manage
+        - finance.view
+    StaffList:
+      type: object
+      required: [data, roles]
+      properties:
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/StaffRole' }
+        data:
+          type: array
+          items:
+            type: object
+            required: [userId, username, displayName, konamiId, role, grantedAt, grantedBy]
+            properties:
+              userId: { type: string, format: uuid }
+              username: { type: [string, 'null'] }
+              displayName: { type: string }
+              konamiId: { type: [string, 'null'] }
+              role: { $ref: '#/components/schemas/StaffRole' }
+              grantedAt: { type: string, format: date-time }
+              grantedBy: { type: [string, 'null'], description: Username of the admin who granted it. }
     OrganizationRole:
       type: string
       enum:
@@ -7636,6 +7873,8 @@ components:
             - competition_cancelled
           description: >-
             profile_incomplete means the player has not accepted the current terms and privacy notice.
+            country_not_allowed also blocks a player outside Kenya (countryCode not KE) from a paid
+            competition, because paid entry is collected through M-Pesa only.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
             competition_cancelled (category registration) blocks every new entry once the competition is cancelled

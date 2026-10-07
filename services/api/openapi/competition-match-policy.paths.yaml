@@ -219,6 +219,8 @@ components:
             - competition_cancelled
           description: >-
             profile_incomplete means the player has not accepted the current terms and privacy notice.
+            country_not_allowed also blocks a player outside Kenya (countryCode not KE) from a paid
+            competition, because paid entry is collected through M-Pesa only.
             conduct_suspended blocks new registrations while the player holds at least the platform's
             active conduct strike threshold (3 by default). Existing entries are unaffected.
             competition_cancelled (category registration) blocks every new entry once the competition is cancelled
