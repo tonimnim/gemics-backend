@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gamics-io/gamics/services/api/internal/bracket"
 )
 
 func progressionTestString(value string) *string { return &value }
@@ -495,6 +498,608 @@ func TestEliminationPlacementsNeverLiftBronzeOrInventAChampion(t *testing.T) {
 	}
 }
 
+type eliminationPlacementCase struct {
+	name    string
+	format  string
+	entries []progressionPlacementEntry
+	matches []progressionMatchForPlacement
+	want    map[string]int
+}
+
+func runEliminationPlacementCases(t *testing.T, cases []eliminationPlacementCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			placements, err := rankEliminationPlacements(tc.entries, tc.matches, tc.format)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := progressionTestPlacements(placements); !maps.Equal(got, tc.want) {
+				t.Fatalf("placements = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// progressionTestMatch is a terminal match; winner "" means no winner, and an
+// empty home or away is a voided slot.
+func progressionTestMatch(id, bracketName string, round, rank int, state, home, away, winner string,
+	reason string, voided ...string) progressionMatchForPlacement {
+	optional := func(value string) *string {
+		if value == "" {
+			return nil
+		}
+		return progressionTestString(value)
+	}
+	return progressionMatchForPlacement{ID: id, Bracket: bracketName, RoundNumber: round, GraphRank: rank,
+		State: state, HomeEntryID: optional(home), AwayEntryID: optional(away), WinnerEntryID: optional(winner),
+		CompletionReason: optional(reason), VoidedEntryIDs: voided}
+}
+
+// The generator numbers main-bracket rounds over the full power-of-two tree,
+// but bye pruning leaves matches of one round at different graph ranks. These
+// shapes are what bracket.Emit produces for 5 and 10 entries with a bronze.
+func TestSingleEliminationPlacementsRankByRoundInByeBrackets(t *testing.T) {
+	fiveField := []string{"p01", "p02", "p03", "p04", "p05"}
+	fiveEarlyRounds := []progressionMatchForPlacement{
+		progressionTestMatch("r1m2", "main", 1, 1, "completed", "p04", "p05", "p04", ""),
+		progressionTestMatch("r2m1", "main", 2, 2, "completed", "p01", "p04", "p04", ""),
+		progressionTestMatch("r2m2", "main", 2, 1, "completed", "p02", "p03", "p02", ""),
+	}
+	tenField := []string{"p01", "p02", "p03", "p04", "p05", "p06", "p07", "p08", "p09", "p10"}
+	runEliminationPlacementCases(t, []eliminationPlacementCase{
+		{
+			name: "five entries, cancelled bronze: semifinal losers share third", format: "single_elimination",
+			entries: progressionTestField(fiveField),
+			matches: slices.Concat(fiveEarlyRounds, []progressionMatchForPlacement{
+				progressionTestMatch("final", "main", 3, 3, "completed", "p04", "p02", "p04", ""),
+				progressionTestMatch("bronze", "bronze", 3, 3, "cancelled", "p01", "p03", "", "double_no_show"),
+			}),
+			want: map[string]int{"p01": 3, "p02": 2, "p03": 3, "p04": 1, "p05": 5},
+		},
+		{
+			name: "five entries, played bronze: the first-round loser stays fifth", format: "single_elimination",
+			entries: progressionTestField(fiveField),
+			matches: slices.Concat(fiveEarlyRounds, []progressionMatchForPlacement{
+				progressionTestMatch("final", "main", 3, 3, "completed", "p04", "p02", "p02", ""),
+				progressionTestMatch("bronze", "bronze", 3, 3, "completed", "p01", "p03", "p01", ""),
+			}),
+			want: map[string]int{"p01": 3, "p02": 1, "p03": 4, "p04": 2, "p05": 5},
+		},
+		{
+			name: "five entries, bronze won on a timeout forfeit", format: "single_elimination",
+			entries: progressionTestField(fiveField),
+			matches: slices.Concat(fiveEarlyRounds, []progressionMatchForPlacement{
+				progressionTestMatch("final", "main", 3, 3, "completed", "p04", "p02", "p04", ""),
+				progressionTestMatch("bronze", "bronze", 3, 3, "forfeit", "p01", "p03", "p03", "timeout_forfeit"),
+			}),
+			want: map[string]int{"p01": 4, "p02": 2, "p03": 3, "p04": 1, "p05": 5},
+		},
+		{
+			name: "five entries without a bronze match", format: "single_elimination",
+			entries: progressionTestField(fiveField),
+			matches: slices.Concat(fiveEarlyRounds, []progressionMatchForPlacement{
+				progressionTestMatch("final", "main", 3, 3, "completed", "p04", "p02", "p04", ""),
+			}),
+			want: map[string]int{"p01": 3, "p02": 2, "p03": 3, "p04": 1, "p05": 5},
+		},
+		{
+			name: "ten entries, cancelled bronze: quarterfinal losers share fifth", format: "single_elimination",
+			entries: progressionTestField(tenField),
+			matches: []progressionMatchForPlacement{
+				progressionTestMatch("r1m2", "main", 1, 1, "completed", "p08", "p09", "p08", ""),
+				progressionTestMatch("r1m6", "main", 1, 1, "completed", "p07", "p10", "p07", ""),
+				progressionTestMatch("r2m1", "main", 2, 2, "completed", "p01", "p08", "p01", ""),
+				progressionTestMatch("r2m2", "main", 2, 1, "completed", "p04", "p05", "p04", ""),
+				progressionTestMatch("r2m3", "main", 2, 2, "completed", "p02", "p07", "p02", ""),
+				progressionTestMatch("r2m4", "main", 2, 1, "completed", "p03", "p06", "p03", ""),
+				progressionTestMatch("r3m1", "main", 3, 3, "completed", "p01", "p04", "p01", ""),
+				progressionTestMatch("r3m2", "main", 3, 3, "completed", "p02", "p03", "p02", ""),
+				progressionTestMatch("final", "main", 4, 4, "completed", "p01", "p02", "p01", ""),
+				progressionTestMatch("bronze", "bronze", 4, 4, "cancelled", "p04", "p03", "", "double_no_show"),
+			},
+			want: map[string]int{"p01": 1, "p02": 2, "p03": 3, "p04": 3, "p05": 5, "p06": 5, "p07": 5, "p08": 5,
+				"p09": 9, "p10": 9},
+		},
+	})
+}
+
+// progressionTestDropsTo records the round a winners match's loser drops into,
+// as the stored graph reports it.
+func progressionTestDropsTo(match progressionMatchForPlacement, bracketName string,
+	round int) progressionMatchForPlacement {
+	match.LoserDrop = &progressionPlacementRound{Bracket: bracketName, Round: round}
+	return match
+}
+
+// progressionTestWith replaces the matches that share an id with a
+// replacement, and appends a replacement no match shares an id with.
+func progressionTestWith(matches []progressionMatchForPlacement,
+	replacements ...progressionMatchForPlacement) []progressionMatchForPlacement {
+	result := slices.Clone(matches)
+	for _, replacement := range replacements {
+		index := slices.IndexFunc(result, func(match progressionMatchForPlacement) bool {
+			return match.ID == replacement.ID
+		})
+		if index < 0 {
+			result = append(result, replacement)
+			continue
+		}
+		result[index] = replacement
+	}
+	return result
+}
+
+// progressionTestDoubleEliminationEight is an eight-entry double elimination
+// up to its grand final, wired as bracket.Emit wires it. a wins the winners
+// bracket, b the losers bracket; c goes out in the losers final, d in losers
+// round 3, e and f in losers round 2, and g and h in losers round 1.
+func progressionTestDoubleEliminationEight() []progressionMatchForPlacement {
+	return []progressionMatchForPlacement{
+		progressionTestDropsTo(progressionTestMatch("w1m1", "winners", 1, 1, "completed", "a", "h", "a", ""), "losers", 1),
+		progressionTestDropsTo(progressionTestMatch("w1m2", "winners", 1, 1, "completed", "d", "e", "d", ""), "losers", 1),
+		progressionTestDropsTo(progressionTestMatch("w1m3", "winners", 1, 1, "completed", "b", "g", "b", ""), "losers", 1),
+		progressionTestDropsTo(progressionTestMatch("w1m4", "winners", 1, 1, "completed", "c", "f", "c", ""), "losers", 1),
+		progressionTestDropsTo(progressionTestMatch("w2m1", "winners", 2, 2, "completed", "a", "d", "a", ""), "losers", 2),
+		progressionTestDropsTo(progressionTestMatch("w2m2", "winners", 2, 2, "completed", "b", "c", "b", ""), "losers", 2),
+		progressionTestDropsTo(progressionTestMatch("w3m1", "winners", 3, 3, "completed", "a", "b", "a", ""), "losers", 4),
+		progressionTestMatch("l1m1", "losers", 1, 2, "completed", "h", "e", "e", ""),
+		progressionTestMatch("l1m2", "losers", 1, 2, "completed", "g", "f", "f", ""),
+		progressionTestMatch("l2m1", "losers", 2, 3, "completed", "e", "c", "c", ""),
+		progressionTestMatch("l2m2", "losers", 2, 3, "completed", "f", "d", "d", ""),
+		progressionTestMatch("l3m1", "losers", 3, 4, "completed", "c", "d", "c", ""),
+		progressionTestMatch("l4m1", "losers", 4, 5, "completed", "c", "b", "b", ""),
+	}
+}
+
+// Without a champion nobody is first, the finalists share second, and every
+// other entry keeps the place it would have had with a champion: the exits
+// below the championship are always competition-ranked from third.
+func TestEliminationPlacementsWithoutAChampionNeverPlaceFirst(t *testing.T) {
+	eightField := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	quarterfinals := []progressionMatchForPlacement{
+		progressionTestMatch("q1", "main", 1, 1, "completed", "a", "h", "a", ""),
+		progressionTestMatch("q2", "main", 1, 1, "completed", "d", "e", "d", ""),
+		progressionTestMatch("q3", "main", 1, 1, "completed", "b", "g", "b", ""),
+		progressionTestMatch("q4", "main", 1, 1, "completed", "c", "f", "c", ""),
+	}
+	fourSemifinalNoShows := []progressionMatchForPlacement{
+		progressionTestMatch("s1", "main", 1, 1, "cancelled", "a", "d", "", "double_no_show"),
+		progressionTestMatch("s2", "main", 1, 1, "cancelled", "b", "c", "", "double_no_show"),
+		progressionTestMatch("final", "main", 2, 2, "cancelled", "", "", "", "double_no_show"),
+	}
+	doubleEliminationToTheGrandFinal := []progressionMatchForPlacement{
+		progressionTestMatch("w1", "winners", 1, 1, "completed", "a", "d", "a", ""),
+		progressionTestMatch("w2", "winners", 1, 1, "completed", "b", "c", "b", ""),
+		progressionTestMatch("wf", "winners", 2, 2, "completed", "a", "b", "a", ""),
+		progressionTestMatch("l1", "losers", 1, 2, "completed", "d", "c", "c", ""),
+		progressionTestMatch("lf", "losers", 2, 3, "completed", "c", "b", "b", ""),
+	}
+	withChampion := map[string]int{"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 5, "g": 7, "h": 7}
+	runEliminationPlacementCases(t, []eliminationPlacementCase{
+		{
+			// Both semifinals are double no-shows, so nobody reached the final.
+			// Nobody is first, and the four semifinal exits share second.
+			name: "empty final after two cancelled semifinals in a four-entry draw", format: "single_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d"}),
+			matches: fourSemifinalNoShows,
+			want:    map[string]int{"a": 2, "b": 2, "c": 2, "d": 2},
+		},
+		{
+			// Four semifinal exits share second, and the quarterfinal losers
+			// keep their competition rank, fifth.
+			name: "empty final after two cancelled semifinals", format: "single_elimination",
+			entries: progressionTestField(eightField),
+			matches: slices.Concat(quarterfinals, []progressionMatchForPlacement{
+				progressionTestMatch("s1", "main", 2, 2, "cancelled", "a", "d", "", "double_no_show"),
+				progressionTestMatch("s2", "main", 2, 2, "cancelled", "b", "c", "", "double_no_show"),
+				progressionTestMatch("final", "main", 3, 3, "cancelled", "", "", "", "double_no_show"),
+			}),
+			want: map[string]int{"a": 2, "b": 2, "c": 2, "d": 2, "e": 5, "f": 5, "g": 5, "h": 5},
+		},
+		{
+			// b won its semifinal and was removed while waiting; the other
+			// semifinal was a double no-show. Without a champion nobody is
+			// first, so b and the three semifinal exits all share second.
+			// Holding a place apart for b would cost a placement beyond the
+			// field in smaller draws, which competition ranks never allow.
+			name: "a lone removed finalist without a champion shares second", format: "single_elimination",
+			entries: progressionTestField(eightField, "b"),
+			matches: slices.Concat(quarterfinals, []progressionMatchForPlacement{
+				progressionTestMatch("s1", "main", 2, 2, "cancelled", "a", "d", "", "double_no_show"),
+				progressionTestMatch("s2", "main", 2, 2, "completed", "b", "c", "b", ""),
+				progressionTestMatch("final", "main", 3, 3, "cancelled", "", "", "", "double_no_show", "b"),
+			}),
+			want: map[string]int{"a": 2, "c": 2, "d": 2, "e": 5, "f": 5, "g": 5, "h": 5},
+		},
+		{
+			name: "grand finalists removed while waiting keep the top places", format: "double_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d"}, "a", "b"),
+			matches: slices.Concat(doubleEliminationToTheGrandFinal, []progressionMatchForPlacement{
+				progressionTestMatch("gf1", "grand_final", 1, 4, "cancelled", "", "", "", "double_no_show", "a", "b"),
+				progressionTestMatch("gf2", "grand_final", 2, 5, "cancelled", "", "", "", "reset_not_required"),
+			}),
+			want: map[string]int{"c": 3, "d": 4},
+		},
+		{
+			name: "eight-entry double elimination with a champion", format: "double_elimination",
+			entries: progressionTestField(eightField),
+			matches: slices.Concat(progressionTestDoubleEliminationEight(), []progressionMatchForPlacement{
+				progressionTestMatch("gf1", "grand_final", 1, 6, "completed", "a", "b", "a", ""),
+				progressionTestMatch("gf2", "grand_final", 2, 7, "cancelled", "", "", "", "reset_not_required"),
+			}),
+			want: withChampion,
+		},
+		{
+			// a is removed before the grand final, whose walkover to b
+			// activates the reset; b is removed before the reset. Each
+			// finalist reached a grand final, so both hold second, and
+			// everyone else keeps the place the champion draw gives them.
+			name: "grand finalists removed one at a time keep everyone else's places", format: "double_elimination",
+			entries: progressionTestField(eightField, "a", "b"),
+			matches: slices.Concat(progressionTestDoubleEliminationEight(), []progressionMatchForPlacement{
+				progressionTestMatch("gf1", "grand_final", 1, 6, "forfeit", "", "b", "b", "walkover", "a"),
+				progressionTestMatch("gf2", "grand_final", 2, 7, "cancelled", "", "", "", "double_no_show", "b"),
+			}),
+			want: map[string]int{"c": 3, "d": 4, "e": 5, "f": 5, "g": 7, "h": 7},
+		},
+		{
+			name: "grand finalists removed together keep everyone else's places", format: "double_elimination",
+			entries: progressionTestField(eightField, "a", "b"),
+			matches: slices.Concat(progressionTestDoubleEliminationEight(), []progressionMatchForPlacement{
+				progressionTestMatch("gf1", "grand_final", 1, 6, "cancelled", "", "", "", "double_no_show", "a", "b"),
+				progressionTestMatch("gf2", "grand_final", 2, 7, "cancelled", "", "", "", "reset_not_required"),
+			}),
+			want: map[string]int{"c": 3, "d": 4, "e": 5, "f": 5, "g": 7, "h": 7},
+		},
+		{
+			name: "live grand finalists of a cancelled reset share second", format: "double_elimination",
+			entries: progressionTestField(eightField),
+			matches: slices.Concat(progressionTestDoubleEliminationEight(), []progressionMatchForPlacement{
+				progressionTestMatch("gf1", "grand_final", 1, 6, "completed", "a", "b", "b", ""),
+				progressionTestMatch("gf2", "grand_final", 2, 7, "cancelled", "a", "b", "", "double_no_show"),
+			}),
+			want: map[string]int{"a": 2, "b": 2, "c": 3, "d": 4, "e": 5, "f": 5, "g": 7, "h": 7},
+		},
+	})
+}
+
+func TestEliminationPlacementsKeepRemovedEntriesWhereTheyWereDue(t *testing.T) {
+	fourField := []string{"a", "b", "c", "d"}
+	eightField := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	grandFinalWonByA := []progressionMatchForPlacement{
+		progressionTestMatch("gf1", "grand_final", 1, 6, "completed", "a", "b", "a", ""),
+		progressionTestMatch("gf2", "grand_final", 2, 7, "cancelled", "", "", "", "reset_not_required"),
+	}
+	doubleEliminationOpening := []progressionMatchForPlacement{
+		progressionTestMatch("w1", "winners", 1, 1, "completed", "a", "d", "a", ""),
+		progressionTestMatch("w2", "winners", 1, 1, "completed", "b", "c", "b", ""),
+		progressionTestMatch("wf", "winners", 2, 2, "completed", "a", "b", "a", ""),
+		progressionTestMatch("l1", "losers", 1, 2, "completed", "d", "c", "c", ""),
+	}
+	runEliminationPlacementCases(t, []eliminationPlacementCase{
+		{
+			// c beat b in the losers final and was removed before the grand
+			// final. c was due in it, so b stays third and d fourth.
+			name: "removed losers champion keeps second", format: "double_elimination",
+			entries: progressionTestField(fourField, "c"),
+			matches: slices.Concat(doubleEliminationOpening, []progressionMatchForPlacement{
+				progressionTestMatch("lf", "losers", 2, 3, "completed", "c", "b", "c", ""),
+				progressionTestMatch("gf1", "grand_final", 1, 4, "forfeit", "a", "", "a", "walkover", "c"),
+				progressionTestMatch("gf2", "grand_final", 2, 5, "cancelled", "", "", "", "reset_not_required"),
+			}),
+			want: map[string]int{"a": 1, "b": 3, "d": 4},
+		},
+		{
+			// a won the winners final and was removed before the grand final. The
+			// walkover to the losers champion activates the reset, which has no
+			// one in its other slot; a still holds second.
+			name: "removed winners champion keeps second through the reset", format: "double_elimination",
+			entries: progressionTestField(fourField, "a"),
+			matches: slices.Concat(doubleEliminationOpening, []progressionMatchForPlacement{
+				progressionTestMatch("lf", "losers", 2, 3, "completed", "c", "b", "b", ""),
+				progressionTestMatch("gf1", "grand_final", 1, 4, "forfeit", "", "b", "b", "walkover", "a"),
+				progressionTestMatch("gf2", "grand_final", 2, 5, "forfeit", "", "b", "b", "walkover"),
+			}),
+			want: map[string]int{"b": 1, "c": 3, "d": 4},
+		},
+		{
+			// b won its semifinal and was removed before the final, which e won by
+			// walkover. The bronze still decides third and fourth, and d, out in
+			// the first round, stays fifth.
+			name: "removed semifinal winner keeps second", format: "single_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d", "e"}, "b"),
+			matches: []progressionMatchForPlacement{
+				progressionTestMatch("r1m2", "main", 1, 1, "completed", "d", "e", "e", ""),
+				progressionTestMatch("r2m1", "main", 2, 2, "completed", "a", "e", "e", ""),
+				progressionTestMatch("r2m2", "main", 2, 1, "completed", "b", "c", "b", ""),
+				progressionTestMatch("final", "main", 3, 3, "forfeit", "e", "", "e", "walkover", "b"),
+				progressionTestMatch("bronze", "bronze", 3, 3, "completed", "a", "c", "a", ""),
+			},
+			want: map[string]int{"a": 3, "c": 4, "d": 5, "e": 1},
+		},
+		{
+			// p02 had a first-round bye and was removed before its semifinal, so
+			// it never played. It still holds a semifinal place.
+			name: "removed entry that never played keeps its first match's place", format: "single_elimination",
+			entries: progressionTestField([]string{"p01", "p02", "p03", "p04", "p05"}, "p02"),
+			matches: []progressionMatchForPlacement{
+				progressionTestMatch("r1m2", "main", 1, 1, "completed", "p04", "p05", "p04", ""),
+				progressionTestMatch("r2m1", "main", 2, 2, "completed", "p01", "p04", "p01", ""),
+				progressionTestMatch("r2m2", "main", 2, 1, "forfeit", "", "p03", "p03", "walkover", "p02"),
+				progressionTestMatch("final", "main", 3, 3, "completed", "p01", "p03", "p01", ""),
+			},
+			want: map[string]int{"p01": 1, "p03": 2, "p04": 3, "p05": 5},
+		},
+		{
+			// d won its first winners match and was removed before the next.
+			// Losing that match would have dropped d into losers round 2, so d
+			// holds a losers-round-2 place and shares fifth with e, who went
+			// out there; the losers-round-1 exits stay seventh.
+			name: "removed unbeaten winners entry holds the losers round it would drop into", format: "double_elimination",
+			entries: progressionTestField(eightField, "d"),
+			matches: progressionTestWith(progressionTestDoubleEliminationEight(), slices.Concat(
+				[]progressionMatchForPlacement{
+					progressionTestDropsTo(progressionTestMatch("w2m1", "winners", 2, 2, "forfeit", "a", "", "a", "walkover", "d"),
+						"losers", 2),
+					progressionTestMatch("l2m2", "losers", 2, 3, "forfeit", "f", "", "f", "walkover"),
+					progressionTestMatch("l3m1", "losers", 3, 4, "completed", "c", "f", "c", ""),
+				}, grandFinalWonByA)...),
+			want: map[string]int{"a": 1, "b": 2, "c": 3, "e": 5, "f": 4, "g": 7, "h": 7},
+		},
+		{
+			// The same removal after d lost that winners match: d is voided
+			// from losers round 2 itself, and every place is the same.
+			name: "removed winners loser holds the losers round it dropped into", format: "double_elimination",
+			entries: progressionTestField(eightField, "d"),
+			matches: progressionTestWith(progressionTestDoubleEliminationEight(), slices.Concat(
+				[]progressionMatchForPlacement{
+					progressionTestMatch("l2m2", "losers", 2, 3, "forfeit", "f", "", "f", "walkover", "d"),
+					progressionTestMatch("l3m1", "losers", 3, 4, "completed", "c", "f", "c", ""),
+				}, grandFinalWonByA)...),
+			want: map[string]int{"a": 1, "b": 2, "c": 3, "e": 5, "f": 4, "g": 7, "h": 7},
+		},
+		{
+			// bracket.Emit's five-entry draw: byes prune losers round 1 and the
+			// second losers round 2 match, so the loser of winners round 2
+			// match 1 drops straight into losers round 3. e04, removed before
+			// that match, holds the losers-round-3 place the stored graph
+			// names, not the losers-round-2 place of the unpruned mapping, so
+			// e03, out in losers round 2, stays fifth.
+			name: "removed winners entry follows a drop that byes moved", format: "double_elimination",
+			entries: progressionTestField([]string{"e01", "e02", "e03", "e04", "e05"}, "e04"),
+			matches: []progressionMatchForPlacement{
+				progressionTestDropsTo(progressionTestMatch("w1m2", "winners", 1, 1, "completed", "e04", "e05", "e04", ""),
+					"losers", 2),
+				progressionTestDropsTo(progressionTestMatch("w2m1", "winners", 2, 2, "forfeit", "e01", "", "e01", "walkover",
+					"e04"), "losers", 3),
+				progressionTestDropsTo(progressionTestMatch("w2m2", "winners", 2, 1, "completed", "e02", "e03", "e02", ""),
+					"losers", 2),
+				progressionTestDropsTo(progressionTestMatch("w3m1", "winners", 3, 3, "completed", "e01", "e02", "e01", ""),
+					"losers", 4),
+				progressionTestMatch("l2m1", "losers", 2, 2, "completed", "e05", "e03", "e05", ""),
+				progressionTestMatch("l3m1", "losers", 3, 3, "forfeit", "e05", "", "e05", "walkover"),
+				progressionTestMatch("l4m1", "losers", 4, 4, "completed", "e05", "e02", "e05", ""),
+				progressionTestMatch("gf1", "grand_final", 1, 5, "completed", "e01", "e05", "e01", ""),
+				progressionTestMatch("gf2", "grand_final", 2, 6, "cancelled", "", "", "", "reset_not_required"),
+			},
+			want: map[string]int{"e01": 1, "e02": 3, "e03": 5, "e05": 2},
+		},
+	})
+}
+
+// When nobody reached the championship's other slot, not even a removed
+// entry, the deepest remaining exits share second: placements stay competition
+// ranks and never exceed the field.
+func TestSingleEliminationFinalWithoutRunnerUp(t *testing.T) {
+	eightField := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	quarterfinals := []progressionMatchForPlacement{
+		progressionTestMatch("q1", "main", 1, 1, "completed", "a", "h", "a", ""),
+		progressionTestMatch("q2", "main", 1, 1, "completed", "d", "e", "d", ""),
+		progressionTestMatch("q3", "main", 1, 1, "completed", "b", "g", "b", ""),
+		progressionTestMatch("q4", "main", 1, 1, "completed", "c", "f", "c", ""),
+	}
+	runEliminationPlacementCases(t, []eliminationPlacementCase{
+		{
+			name: "semifinal double no-show: the semifinal exits share second", format: "single_elimination",
+			entries: progressionTestField(eightField),
+			matches: slices.Concat(quarterfinals, []progressionMatchForPlacement{
+				progressionTestMatch("s1", "main", 2, 2, "cancelled", "a", "d", "", "double_no_show"),
+				progressionTestMatch("s2", "main", 2, 2, "completed", "b", "c", "b", ""),
+				progressionTestMatch("final", "main", 3, 3, "forfeit", "", "b", "b", "walkover"),
+			}),
+			want: map[string]int{"a": 2, "b": 1, "c": 2, "d": 2, "e": 5, "f": 5, "g": 5, "h": 5},
+		},
+		{
+			name: "removed semifinal winner holds second", format: "single_elimination",
+			entries: progressionTestField(eightField, "a"),
+			matches: slices.Concat(quarterfinals, []progressionMatchForPlacement{
+				progressionTestMatch("s1", "main", 2, 2, "completed", "a", "d", "a", ""),
+				progressionTestMatch("s2", "main", 2, 2, "completed", "b", "c", "b", ""),
+				progressionTestMatch("final", "main", 3, 3, "forfeit", "", "b", "b", "walkover", "a"),
+			}),
+			want: map[string]int{"b": 1, "c": 3, "d": 3, "e": 5, "f": 5, "g": 5, "h": 5},
+		},
+		{
+			// e01 had a bye to the final; the other first-round match was a
+			// double no-show.
+			name: "three entries: first-round no-shows behind a bye", format: "single_elimination",
+			entries: progressionTestField([]string{"e01", "e02", "e03"}),
+			matches: []progressionMatchForPlacement{
+				progressionTestMatch("r1m2", "main", 1, 1, "cancelled", "e02", "e03", "", "double_no_show"),
+				progressionTestMatch("final", "main", 2, 2, "forfeit", "e01", "", "e01", "walkover"),
+			},
+			want: map[string]int{"e01": 1, "e02": 2, "e03": 2},
+		},
+		{
+			// The bronze walkover has no loser, so it overrides nothing, and
+			// c shares second with the semifinal no-shows.
+			name: "semifinal no-shows and a bronze walkover", format: "single_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d"}),
+			matches: []progressionMatchForPlacement{
+				progressionTestMatch("s1", "main", 1, 1, "cancelled", "a", "d", "", "double_no_show"),
+				progressionTestMatch("s2", "main", 1, 1, "completed", "b", "c", "b", ""),
+				progressionTestMatch("final", "main", 2, 2, "forfeit", "", "b", "b", "walkover"),
+				progressionTestMatch("bronze", "bronze", 2, 2, "forfeit", "", "c", "c", "walkover"),
+			},
+			want: map[string]int{"a": 2, "b": 1, "c": 2, "d": 2},
+		},
+		{
+			// A five-entry draw with a bye: nobody is placed beyond fifth.
+			name: "five entries: a semifinal double no-show never places anyone sixth", format: "single_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d", "e"}),
+			matches: []progressionMatchForPlacement{
+				progressionTestMatch("r1m2", "main", 1, 1, "completed", "d", "e", "d", ""),
+				progressionTestMatch("s1", "main", 2, 2, "cancelled", "a", "d", "", "double_no_show"),
+				progressionTestMatch("s2", "main", 2, 1, "completed", "b", "c", "c", ""),
+				progressionTestMatch("final", "main", 3, 3, "forfeit", "", "c", "c", "walkover"),
+			},
+			want: map[string]int{"a": 2, "b": 2, "c": 1, "d": 2, "e": 5},
+		},
+		{
+			// The losers final is a double no-show, so the grand final is a
+			// walkover; c, out in losers round one, is fourth of four.
+			name: "four-entry double elimination never places anyone fifth", format: "double_elimination",
+			entries: progressionTestField([]string{"a", "b", "c", "d"}),
+			matches: []progressionMatchForPlacement{
+				progressionTestDropsTo(progressionTestMatch("w1", "winners", 1, 1, "completed", "a", "d", "a", ""), "losers", 1),
+				progressionTestDropsTo(progressionTestMatch("w2", "winners", 1, 1, "completed", "b", "c", "b", ""), "losers", 1),
+				progressionTestMatch("l1", "losers", 1, 2, "completed", "d", "c", "d", ""),
+				progressionTestDropsTo(progressionTestMatch("wf", "winners", 2, 2, "completed", "a", "b", "a", ""), "losers", 2),
+				progressionTestMatch("lf", "losers", 2, 3, "cancelled", "d", "b", "", "double_no_show"),
+				progressionTestMatch("gf1", "grand_final", 1, 4, "forfeit", "a", "", "a", "walkover"),
+				progressionTestMatch("gf2", "grand_final", 2, 5, "cancelled", "", "", "", "reset_not_required"),
+			},
+			want: map[string]int{"a": 1, "b": 2, "c": 4, "d": 2},
+		},
+	})
+}
+
+// progressionTestPlayHomeWins plays a bracket.Emit draw in which every home
+// side wins, stored as progression stores it: each slot resolves from its
+// source, the reset is cancelled as not required, and every match records the
+// round its loser drops into.
+func progressionTestPlayHomeWins(t *testing.T, format bracket.Format,
+	entryCount int) ([]string, []progressionMatchForPlacement) {
+	t.Helper()
+	draw := make([]bracket.DrawEntry, entryCount)
+	entryIDs := make([]string, entryCount)
+	for index := range draw {
+		entryIDs[index] = fmt.Sprintf("e%02d", index+1)
+		draw[index] = bracket.DrawEntry{EntryID: entryIDs[index], SeedKey: index + 1}
+	}
+	graph, err := bracket.Emit(bracket.DrawInput{Format: format, Entries: draw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drops := make(map[bracket.LocalRef]*progressionPlacementRound)
+	for _, node := range graph.Nodes {
+		for _, slot := range []bracket.Slot{node.Home, node.Away} {
+			if slot.Kind == bracket.SourceLoserOf {
+				drops[slot.Src] = &progressionPlacementRound{Bracket: node.Ref.Bracket, Round: node.Ref.Round}
+			}
+		}
+	}
+	nodes := slices.Clone(graph.Nodes)
+	slices.SortStableFunc(nodes, func(left, right bracket.Node) int { return left.Rank - right.Rank })
+	winners, losers := map[bracket.LocalRef]string{}, map[bracket.LocalRef]string{}
+	resolve := func(slot bracket.Slot) string {
+		switch slot.Kind {
+		case bracket.SourceWinnerOf:
+			return winners[slot.Src]
+		case bracket.SourceLoserOf:
+			return losers[slot.Src]
+		}
+		return slot.EntryID
+	}
+	matches := make([]progressionMatchForPlacement, 0, len(nodes))
+	for _, node := range nodes {
+		id, name, round := node.Ref.String(), node.Ref.Bracket, node.Ref.Round
+		match := progressionTestMatch(id, name, round, node.Rank, "cancelled", "", "", "", "reset_not_required")
+		if node.Activation == bracket.ActivationUnconditional {
+			home, away := resolve(node.Home), resolve(node.Away)
+			match = progressionTestMatch(id, name, round, node.Rank, "completed", home, away, home, "")
+			winners[node.Ref], losers[node.Ref] = home, away
+		}
+		match.LoserDrop = drops[node.Ref]
+		matches = append(matches, match)
+	}
+	return entryIDs, matches
+}
+
+// Byes leave the matches of one round at different graph ranks, in the losers
+// bracket as much as in the main one. Everyone knocked out in the same round
+// shares a place, a later round always places better, and places are
+// competition ranks.
+func TestEliminationPlacementsShareAPlacePerKnockoutRound(t *testing.T) {
+	const grandFinal = 1 << 20
+	for _, format := range []bracket.Format{bracket.SingleElimination, bracket.DoubleElimination} {
+		for entryCount := 2; entryCount <= 40; entryCount++ {
+			entryIDs, matches := progressionTestPlayHomeWins(t, format, entryCount)
+			placements, err := rankEliminationPlacements(progressionTestField(entryIDs), matches, string(format))
+			if err != nil {
+				t.Fatalf("%s with %d entries: %v", format, entryCount, err)
+			}
+			// A main, losers or grand final loss knocks its loser out; a
+			// winners loss only drops it into the losers bracket.
+			knockedOut := make(map[string]int, entryCount)
+			for _, match := range matches {
+				if match.WinnerEntryID == nil || match.Bracket == "winners" {
+					continue
+				}
+				round := match.RoundNumber
+				if match.Bracket == "grand_final" {
+					round = grandFinal
+				}
+				knockedOut[*losingEntry(match.HomeEntryID, match.AwayEntryID, match.WinnerEntryID)] = round
+			}
+			want := make(map[string]int, entryCount)
+			for _, entryID := range entryIDs {
+				round, out := knockedOut[entryID]
+				want[entryID] = 1
+				for _, other := range entryIDs {
+					otherRound, otherOut := knockedOut[other]
+					if out && (!otherOut || otherRound > round) {
+						want[entryID]++
+					}
+				}
+			}
+			if got := progressionTestPlacements(placements); !maps.Equal(got, want) {
+				t.Fatalf("%s with %d entries: placements = %v, want %v", format, entryCount, got, want)
+			}
+		}
+	}
+	// The draw the bug was found in: e05 goes out in losers round 2 match 3,
+	// at graph rank 2, and e06 and e08 in matches 1 and 4, at graph rank 3.
+	entryIDs, matches := progressionTestPlayHomeWins(t, bracket.DoubleElimination, 11)
+	placements, err := rankEliminationPlacements(progressionTestField(entryIDs), matches, "double_elimination")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := progressionTestPlacements(placements)
+	for _, entryID := range []string{"e05", "e06", "e08"} {
+		if got[entryID] != 9 {
+			t.Errorf("%s placement = %d, want 9 (all: %v)", entryID, got[entryID], got)
+		}
+	}
+}
+
+func TestEliminationPlacementRuleDescribesTheRanking(t *testing.T) {
+	rule := progressionPlacementRule("single_elimination")
+	if other := progressionPlacementRule("double_elimination"); other != rule {
+		t.Fatalf("double elimination rule = %q, want %q", other, rule)
+	}
+	for _, want := range []string{
+		"voided from", "main-bracket round", "losers round", "drops into", "bronze excluded",
+		"competition_rank", "no champion: nobody first", "bronze result overrides third/fourth",
+		"non-live (removed) entries receive no placement",
+	} {
+		if !strings.Contains(rule, want) {
+			t.Errorf("rule %q does not mention %q", rule, want)
+		}
+	}
+}
+
 func TestProgressionOutcomeHashIsStableAndDetectsMaterialChanges(t *testing.T) {
 	winner := progressionTestString("entry-a")
 	home, away := progressionTestInt(2), progressionTestInt(1)
@@ -610,5 +1215,73 @@ func TestProgressionRoundReleaseRunsToAFixpointBeforeStageCompletion(t *testing.
 	}
 	if got := strings.Count(string(rounds), "AND version=$7 AND state='pending'"); got != 2 {
 		t.Fatalf("readied and settled fixture updates with a version and state guard = %d, want 2", got)
+	}
+}
+
+// TestIntegrationPlacementMatchesRecoverVoidedEntriesAndLoserDrops reads a
+// stored double-elimination draw: every winners match knows the round its
+// loser drops into, and a voided slot still names the entry it belonged to.
+func TestIntegrationPlacementMatchesRecoverVoidedEntriesAndLoserDrops(t *testing.T) {
+	pool := openMigratedIntegrationDatabase(t)
+	seeded := seedIntegrationCompetition(t, pool, integrationSeedOptions{Format: "double_elimination", Entries: 5})
+	ctx := t.Context()
+	load := func() map[string]progressionMatchForPlacement {
+		t.Helper()
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck
+		matches, err := loadProgressionPlacementMatches(ctx, tx, seeded.StageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byID := map[string]progressionMatchForPlacement{}
+		for _, match := range matches {
+			byID[match.ID] = match
+		}
+		return byID
+	}
+	var played string
+	for id, match := range load() {
+		if match.Bracket == "winners" && (match.LoserDrop == nil || match.LoserDrop.Round <= 0 ||
+			match.LoserDrop.Bracket != "losers" && match.LoserDrop.Bracket != "grand_final") {
+			t.Fatalf("winners match %s has no loser drop: %+v", id, match.LoserDrop)
+		}
+		if match.Bracket == "winners" && match.HomeEntryID != nil && match.AwayEntryID != nil && played == "" {
+			played = id
+		}
+	}
+	if played == "" {
+		t.Fatal("no ready winners match")
+	}
+	// Play it, then void both slots it feeds, as removing its two players would.
+	var winner, loser string
+	if err := pool.QueryRow(ctx, `UPDATE matches SET state='completed',winner_entry_id=home_entry_id,
+		completion_reason='played',completed_at=now() WHERE id=$1
+		RETURNING home_entry_id::text,away_entry_id::text`, played).Scan(&winner, &loser); err != nil {
+		t.Fatal(err)
+	}
+	var winnerNext, loserNext string
+	if err := pool.QueryRow(ctx, `SELECT
+		(SELECT match_id::text FROM match_slots WHERE source_match_id=$1 AND source_kind='winner_of'),
+		(SELECT match_id::text FROM match_slots WHERE source_match_id=$1 AND source_kind='loser_of')`, played).
+		Scan(&winnerNext, &loserNext); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE match_slots SET voided_at=now() WHERE source_match_id=$1`, played); err != nil {
+		t.Fatal(err)
+	}
+	matches := load()
+	if got := matches[winnerNext].VoidedEntryIDs; !slices.Equal(got, []string{winner}) {
+		t.Fatalf("winner's next match voided %v, want [%s]", got, winner)
+	}
+	if got := matches[loserNext].VoidedEntryIDs; !slices.Equal(got, []string{loser}) {
+		t.Fatalf("loser's next match voided %v, want [%s]", got, loser)
+	}
+	for id, match := range matches {
+		if id != winnerNext && id != loserNext && len(match.VoidedEntryIDs) != 0 {
+			t.Fatalf("match %s names voided entries %v", id, match.VoidedEntryIDs)
+		}
 	}
 }

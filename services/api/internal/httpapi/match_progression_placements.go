@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -37,6 +38,22 @@ type progressionMatchForPlacement struct {
 	AwayEntryID      *string
 	WinnerEntryID    *string
 	CompletionReason *string
+	// VoidedEntryIDs are the entries that were due to play this match but whose
+	// slot was voided because they were no longer live. Placement counts them as
+	// having played the match without winning it, so a removed entry keeps the
+	// place it had reached and nobody is promoted into it.
+	VoidedEntryIDs []string
+	// LoserDrop is the round this match's loser is sent to, if any: in double
+	// elimination a winners match drops its loser into the losers bracket, or,
+	// in a two-entry draw, into the grand final. It comes from the stored graph
+	// because pruned byes can send a loser past the round the generator's drop
+	// mapping names.
+	LoserDrop *progressionPlacementRound
+}
+
+type progressionPlacementRound struct {
+	Bracket string
+	Round   int
 }
 
 // rankRoundRobinPlacements requires standings for the whole frozen field, then
@@ -106,13 +123,17 @@ func sameRoundRobinPlacementScore(left, right progressionStandingForPlacement) b
 		left.GoalsFor == right.GoalsFor
 }
 
-// rankEliminationPlacements ranks the whole frozen field by exit depth, then
-// omits non-live entries. Nobody is promoted into a removed entry's place, so a
-// final cancelled between two removed entries leaves no first place. A bronze
-// match shares the final's graph rank, so it never sets an exit depth: its
-// semifinal losers exit at the semifinal, and only a bronze winner overrides
-// them to third and fourth. Without a champion nobody is placed first: the
-// finalists share second, and every other placement is unchanged.
+// rankEliminationPlacements ranks the whole frozen field by exit depth (see
+// placementDepths), then omits non-live entries. An entry exits at the deepest
+// match it played and did not win, counting a match it was voided from as one
+// it did not win, so a removed entry keeps the place it had reached and nobody
+// is promoted into it; a final cancelled between two removed entries leaves no
+// first place. Placements are competition ranks: one plus the number of
+// entries that went deeper, so they never exceed the field. A bronze match
+// never sets an exit depth: its semifinal losers exit at the semifinal, and
+// only a bronze winner overrides them to third and fourth. Without a champion
+// nobody is placed first: the finalists share second, and every other
+// placement is unchanged.
 func rankEliminationPlacements(entries []progressionPlacementEntry, matches []progressionMatchForPlacement,
 	format string) ([]progressionPlacement, error) {
 	if len(entries) < 2 || len(matches) == 0 {
@@ -150,6 +171,7 @@ func rankEliminationPlacements(entries []progressionPlacementEntry, matches []pr
 		}
 	}
 
+	depthOf := placementDepths(matches, format)
 	type exit struct {
 		EntryID string
 		Rank    int
@@ -162,16 +184,16 @@ func rankEliminationPlacements(entries []progressionPlacementEntry, matches []pr
 		}
 		exitRank, participationRank := -1, -1
 		for _, match := range matches {
-			if match.Bracket == "bronze" || !isProgressionTerminal(match.State) ||
-				match.CompletionReason != nil && *match.CompletionReason == "reset_not_required" ||
-				!entryParticipated(entryID, match) {
+			if !setsPlacementDepth(match) || !placementParticipant(entryID, match) {
 				continue
 			}
-			depth := placementDepth(match, format)
+			depth := depthOf(match)
 			if depth > participationRank {
 				participationRank = depth
 			}
-			if (match.WinnerEntryID == nil || *match.WinnerEntryID != entryID) && depth > exitRank {
+			// A voided entry never won the match it was voided from.
+			won := match.WinnerEntryID != nil && *match.WinnerEntryID == entryID
+			if !won && depth > exitRank {
 				exitRank = depth
 			}
 		}
@@ -228,20 +250,67 @@ func rankEliminationPlacements(entries []progressionPlacementEntry, matches []pr
 	return placed, nil
 }
 
-// placementDepth is how deep an exit sits. Every match in a single-elimination
-// round is the same depth, even when byes give some of them a shorter path
-// through the graph, so single elimination ranks by round. Double elimination
-// ranks by graph rank, which orders the winners and losers brackets together.
-func placementDepth(match progressionMatchForPlacement, format string) int {
-	if format == "single_elimination" {
-		return match.RoundNumber
+// placementDepths says how deep an exit at each match sits. Depth is by round,
+// never by graph rank: byes give some matches of a round a shorter path
+// through the graph, but round numbers are counted over the full power-of-two
+// tree and never renumbered by pruning, so every exit in one round shares a
+// depth.
+//
+// Single elimination ranks by main-bracket round. Double elimination ranks by
+// losers round, with the grand final above the losers final. A winners match
+// knocks nobody out, so it counts at the round its loser drops into: an entry
+// voided from it was guaranteed that round, and it ties with the entries that
+// went out there instead of with earlier exits.
+func placementDepths(matches []progressionMatchForPlacement, format string) func(progressionMatchForPlacement) int {
+	if format != "double_elimination" {
+		return func(match progressionMatchForPlacement) int { return match.RoundNumber }
 	}
-	return match.GraphRank
+	losersRounds := 0
+	for _, match := range matches {
+		if match.Bracket == "losers" {
+			losersRounds = max(losersRounds, match.RoundNumber)
+		}
+	}
+	grandFinal := losersRounds + 1
+	roundDepth := func(bracket string, round int) int {
+		if bracket == "losers" {
+			return round
+		}
+		return grandFinal
+	}
+	return func(match progressionMatchForPlacement) int {
+		switch {
+		case match.Bracket != "winners":
+			return roundDepth(match.Bracket, match.RoundNumber)
+		case match.LoserDrop != nil:
+			return roundDepth(match.LoserDrop.Bracket, match.LoserDrop.Round)
+		}
+		// Without the stored drop, use the generator's unpruned mapping:
+		// winners round 1 drops into losers round 1, winners round r into
+		// losers round 2r-2, and a draw with no losers bracket into the grand
+		// final.
+		if drop := max(1, 2*match.RoundNumber-2); drop <= losersRounds {
+			return drop
+		}
+		return grandFinal
+	}
 }
 
-func entryParticipated(entryID string, match progressionMatchForPlacement) bool {
+// setsPlacementDepth excludes the matches that must not move an exit: an
+// unfinished match, an unneeded bracket reset, and the bronze match, which is
+// played alongside the final and would otherwise lift both semifinal losers
+// to the final loser's depth.
+func setsPlacementDepth(match progressionMatchForPlacement) bool {
+	return match.Bracket != "bronze" && isProgressionTerminal(match.State) &&
+		(match.CompletionReason == nil || *match.CompletionReason != "reset_not_required")
+}
+
+// placementParticipant reports whether the entry played the match or was due
+// to play it before its slot was voided.
+func placementParticipant(entryID string, match progressionMatchForPlacement) bool {
 	return match.HomeEntryID != nil && *match.HomeEntryID == entryID ||
-		match.AwayEntryID != nil && *match.AwayEntryID == entryID
+		match.AwayEntryID != nil && *match.AwayEntryID == entryID ||
+		slices.Contains(match.VoidedEntryIDs, entryID)
 }
 
 func placementMatchLater(left, right progressionMatchForPlacement) bool {
@@ -350,7 +419,10 @@ func progressionPlacementRule(format string) string {
 	if format == "round_robin" {
 		return "competition_rank(points,goal_difference,goals_for); exact metric ties share placement" + omitted
 	}
-	return "champion_then_competition_rank_by_exit_depth; bronze result overrides third/fourth" + omitted
+	return "champion first, then competition_rank by exit depth (no champion: nobody first, the deepest exits " +
+		"share second); exit depth = deepest match played or voided from and not won (single_elimination: " +
+		"main-bracket round; double_elimination: losers round, a winners match at the round its loser drops " +
+		"into, grand final above the losers final), bronze excluded; bronze result overrides third/fourth" + omitted
 }
 
 func loadProgressionPlacementEntries(ctx context.Context, tx pgx.Tx,
@@ -395,11 +467,35 @@ func loadProgressionPlacementStandings(ctx context.Context, tx pgx.Tx,
 	return result, rows.Err()
 }
 
+// loadProgressionPlacementMatches also recovers who each voided slot belonged
+// to. A slot is voided either because its source produced nobody (a match with
+// no winner, or no loser) or because the entry it resolved to was no longer
+// live, and only the second names an entry: the slot's own entry, or the
+// source match's winner or loser. It also reads where each match's loser drops:
+// match_slots_one_consumer_uidx allows at most one loser_of consumer, so the
+// join never repeats a match.
 func loadProgressionPlacementMatches(ctx context.Context, tx pgx.Tx,
 	stageID string) ([]progressionMatchForPlacement, error) {
-	rows, err := tx.Query(ctx, `SELECT id::text,bracket,round_number,graph_rank,state,
-		home_entry_id::text,away_entry_id::text,winner_entry_id::text,completion_reason
-		FROM matches WHERE stage_id=$1 ORDER BY graph_rank,id`, stageID)
+	rows, err := tx.Query(ctx, `SELECT target.id::text,target.bracket,target.round_number,target.graph_rank,
+		target.state,target.home_entry_id::text,target.away_entry_id::text,target.winner_entry_id::text,
+		target.completion_reason,
+		ARRAY(SELECT voided.entry_id FROM (
+			SELECT slot.slot,CASE slot.source_kind
+				WHEN 'entry' THEN slot.source_entry_id
+				WHEN 'winner_of' THEN source.winner_entry_id
+				WHEN 'loser_of' THEN CASE source.winner_entry_id
+					WHEN source.home_entry_id THEN source.away_entry_id
+					WHEN source.away_entry_id THEN source.home_entry_id END
+				END::text AS entry_id
+			FROM match_slots slot
+			LEFT JOIN matches source ON source.id=slot.source_match_id
+			WHERE slot.match_id=target.id AND slot.voided_at IS NOT NULL) voided
+			WHERE voided.entry_id IS NOT NULL ORDER BY voided.slot),
+		loser_drop.bracket,loser_drop.round_number
+		FROM matches target
+		LEFT JOIN match_slots drop_slot ON drop_slot.source_match_id=target.id AND drop_slot.source_kind='loser_of'
+		LEFT JOIN matches loser_drop ON loser_drop.id=drop_slot.match_id
+		WHERE target.stage_id=$1 ORDER BY target.graph_rank,target.id`, stageID)
 	if err != nil {
 		return nil, err
 	}
@@ -407,9 +503,15 @@ func loadProgressionPlacementMatches(ctx context.Context, tx pgx.Tx,
 	result := make([]progressionMatchForPlacement, 0)
 	for rows.Next() {
 		var match progressionMatchForPlacement
+		var dropBracket *string
+		var dropRound *int
 		if err = rows.Scan(&match.ID, &match.Bracket, &match.RoundNumber, &match.GraphRank, &match.State,
-			&match.HomeEntryID, &match.AwayEntryID, &match.WinnerEntryID, &match.CompletionReason); err != nil {
+			&match.HomeEntryID, &match.AwayEntryID, &match.WinnerEntryID, &match.CompletionReason,
+			&match.VoidedEntryIDs, &dropBracket, &dropRound); err != nil {
 			return nil, err
+		}
+		if dropBracket != nil && dropRound != nil {
+			match.LoserDrop = &progressionPlacementRound{Bracket: *dropBracket, Round: *dropRound}
 		}
 		result = append(result, match)
 	}
