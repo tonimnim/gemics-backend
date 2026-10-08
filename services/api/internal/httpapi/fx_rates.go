@@ -30,8 +30,11 @@ import (
 //   - totals are summed per currency, then in USD; amounts in different
 //     currencies are never added together.
 //
-// Rates are fetched daily from FX_RATES_URL. An admin can enter one by hand
-// when the provider is down; a fetch never overwrites a manual rate.
+// Rates are fetched daily from FX_RATES_URL, by default Frankfurter: free,
+// keyless, and sourced from central banks, with each rate dated by its
+// source. When a payment's own day has no rate, its exact day is fetched from
+// the provider's history. An admin can enter a rate by hand when the provider
+// is down; a fetch never overwrites a manual rate.
 
 const (
 	fxFetchTimeout     = 15 * time.Second
@@ -149,10 +152,13 @@ func (s *Server) runFXRateRefresher(ctx context.Context) {
 
 func (s *Server) refreshFXRates(ctx context.Context) {
 	if s.config.FXRatesURL != "" {
-		if count, err := s.fetchFXRates(ctx); err != nil {
+		if count, err := s.fetchFXRates(ctx, s.config.FXRatesURL); err != nil {
 			s.logger.Warn("fetch exchange rates", "error", err)
 		} else {
 			s.logger.Info("exchange rates updated", "currencies", count)
+		}
+		if err := s.fetchMissingFXDays(ctx); err != nil && ctx.Err() == nil {
+			s.logger.Warn("fetch historical exchange rates", "error", err)
 		}
 	}
 	if err := s.backfillUSD(ctx); err != nil && ctx.Err() == nil {
@@ -160,7 +166,55 @@ func (s *Server) refreshFXRates(ctx context.Context) {
 	}
 }
 
-// fxProviderResponse reads the common shape of USD-based rate APIs
+// fxMissingDaysPerRefresh bounds how many past days one refresh asks the
+// provider for.
+const fxMissingDaysPerRefresh = 10
+
+// fetchMissingFXDays asks a provider that serves history (Frankfurter) for the
+// exact days of unconverted payments that have no rate from the week before
+// them, so a payment made while rates were unavailable still converts at its
+// own day's rate rather than a later one.
+func (s *Server) fetchMissingFXDays(ctx context.Context) error {
+	if _, ok := fxHistoryURL(s.config.FXRatesURL, time.Now()); !ok {
+		return nil
+	}
+	rows, err := s.db.Writer.Query(ctx, `SELECT DISTINCT (payment.completed_at AT TIME ZONE 'UTC')::date
+		FROM payment_intents payment
+		WHERE payment.status='succeeded' AND payment.amount_usd_minor IS NULL AND payment.currency<>'USD'
+		  AND NOT EXISTS (SELECT 1 FROM fx_rates fx WHERE fx.currency=payment.currency
+			AND fx.rate_date<=(payment.completed_at AT TIME ZONE 'UTC')::date
+			AND fx.rate_date>=(payment.completed_at AT TIME ZONE 'UTC')::date-7)
+		ORDER BY 1 LIMIT $1`, fxMissingDaysPerRefresh)
+	if err != nil {
+		return err
+	}
+	days, err := pgx.CollectRows(rows, pgx.RowTo[time.Time])
+	if err != nil {
+		return err
+	}
+	for _, day := range days {
+		historyURL, _ := fxHistoryURL(s.config.FXRatesURL, day)
+		if _, err := s.fetchFXRates(ctx, historyURL); err != nil {
+			return fmt.Errorf("%s: %w", day.Format(time.DateOnly), err)
+		}
+	}
+	return nil
+}
+
+// fxHistoryURL returns the URL for one day's rates when the provider is a
+// Frankfurter v2 rates endpoint (public or self-hosted), which takes a date.
+func fxHistoryURL(rawURL string, day time.Time) (string, bool) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/v2/rates") {
+		return "", false
+	}
+	query := parsed.Query()
+	query.Set("date", day.UTC().Format(time.DateOnly))
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), true
+}
+
+// fxProviderResponse reads the single-date shape of USD-based rate APIs
 // (ExchangeRate-API, Open Exchange Rates, Fixer): a base currency, a time and
 // a rates object of units per base unit.
 type fxProviderResponse struct {
@@ -173,29 +227,44 @@ type fxProviderResponse struct {
 	Rates              map[string]json.Number `json:"rates"`
 }
 
+// fxProviderRow is one row of Frankfurter's v2 rates: each rate carries the
+// day its source published it, which can differ between currencies.
+type fxProviderRow struct {
+	Date  string      `json:"date"`
+	Base  string      `json:"base"`
+	Quote string      `json:"quote"`
+	Rate  json.Number `json:"rate"`
+}
+
 type fxQuote struct {
 	Currency    string
+	Day         time.Time
 	UnitsPerUSD string
 }
 
-// parseFXRates validates a provider response and returns the day it is for
-// and a quote for every supported currency it includes.
-func parseFXRates(body []byte, now time.Time) (time.Time, []fxQuote, error) {
+// parseFXRates validates a provider response and returns a quote, with its
+// day, for every supported currency it includes. It reads Frankfurter's v2
+// array of dated rows and the single-date object other providers return.
+func parseFXRates(body []byte, now time.Time) ([]fxQuote, error) {
+	trimmed := strings.TrimSpace(string(body))
+	if strings.HasPrefix(trimmed, "[") {
+		return parseFXRows(trimmed, now)
+	}
 	var response fxProviderResponse
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
 	decoder.UseNumber()
 	if err := decoder.Decode(&response); err != nil {
-		return time.Time{}, nil, fmt.Errorf("decode rates: %w", err)
+		return nil, fmt.Errorf("decode rates: %w", err)
 	}
 	if response.Result != "" && response.Result != "success" {
-		return time.Time{}, nil, fmt.Errorf("provider result %q", response.Result)
+		return nil, fmt.Errorf("provider result %q", response.Result)
 	}
 	base := strings.ToUpper(strings.TrimSpace(response.BaseCode))
 	if base == "" {
 		base = strings.ToUpper(strings.TrimSpace(response.Base))
 	}
 	if base != reportingCurrency {
-		return time.Time{}, nil, fmt.Errorf("rates are based on %q, not USD", base)
+		return nil, fmt.Errorf("rates are based on %q, not USD", base)
 	}
 	day := now.UTC()
 	switch {
@@ -206,36 +275,73 @@ func parseFXRates(body []byte, now time.Time) (time.Time, []fxQuote, error) {
 	case response.Date != "":
 		parsed, err := time.Parse(time.DateOnly, response.Date)
 		if err != nil {
-			return time.Time{}, nil, fmt.Errorf("rate date %q: %w", response.Date, err)
+			return nil, fmt.Errorf("rate date %q: %w", response.Date, err)
 		}
 		day = parsed
 	}
-	day = time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
-	if day.After(now.UTC().Add(24 * time.Hour)) {
-		return time.Time{}, nil, fmt.Errorf("rate date %s is in the future", day.Format(time.DateOnly))
+	rows := make([]fxProviderRow, 0, len(response.Rates))
+	for code, rate := range response.Rates {
+		rows = append(rows, fxProviderRow{Date: day.Format(time.DateOnly), Base: base, Quote: code, Rate: rate})
 	}
+	return fxQuotesFromRows(rows, now)
+}
+
+func parseFXRows(body string, now time.Time) ([]fxQuote, error) {
+	var rows []fxProviderRow
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&rows); err != nil {
+		return nil, fmt.Errorf("decode rates: %w", err)
+	}
+	for _, row := range rows {
+		if !strings.EqualFold(strings.TrimSpace(row.Base), reportingCurrency) {
+			return nil, fmt.Errorf("rates are based on %q, not USD", row.Base)
+		}
+	}
+	return fxQuotesFromRows(rows, now)
+}
+
+// fxQuotesFromRows keeps the supported currencies, validates each rate and
+// day, and keeps one quote per currency and day.
+func fxQuotesFromRows(rows []fxProviderRow, now time.Time) ([]fxQuote, error) {
+	latest := now.UTC().Add(24 * time.Hour)
+	seen := map[string]bool{}
 	quotes := make([]fxQuote, 0, len(supportedCurrencies))
-	for code := range supportedCurrencies {
-		if code == reportingCurrency {
+	for _, row := range rows {
+		code := strings.ToUpper(strings.TrimSpace(row.Quote))
+		if _, ok := supportedCurrencies[code]; !ok || code == reportingCurrency {
 			continue
 		}
-		raw, ok := response.Rates[code]
-		if !ok {
-			continue
-		}
-		units, err := normalizeFXRate(raw.String())
+		day, err := time.Parse(time.DateOnly, strings.TrimSpace(row.Date))
 		if err != nil {
-			return time.Time{}, nil, fmt.Errorf("%s: %w", code, err)
+			return nil, fmt.Errorf("%s rate date %q: %w", code, row.Date, err)
 		}
-		quotes = append(quotes, fxQuote{Currency: code, UnitsPerUSD: units})
+		if day.After(latest) {
+			return nil, fmt.Errorf("%s rate date %s is in the future", code, row.Date)
+		}
+		units, err := normalizeFXRate(row.Rate.String())
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", code, err)
+		}
+		key := code + day.Format(time.DateOnly)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		quotes = append(quotes, fxQuote{Currency: code, Day: day, UnitsPerUSD: units})
 	}
 	if len(quotes) == 0 {
-		return time.Time{}, nil, errors.New("no supported currency in the response")
+		return nil, errors.New("no supported currency in the response")
 	}
 	// A fixed order makes concurrent upserts from several replicas lock rows
 	// in the same order.
-	sort.Slice(quotes, func(i, j int) bool { return quotes[i].Currency < quotes[j].Currency })
-	return day, quotes, nil
+	sort.Slice(quotes, func(i, j int) bool {
+		if quotes[i].Currency != quotes[j].Currency {
+			return quotes[i].Currency < quotes[j].Currency
+		}
+		return quotes[i].Day.Before(quotes[j].Day)
+	})
+	return quotes, nil
 }
 
 // normalizeFXRate accepts a positive decimal of units per USD and returns it
@@ -253,12 +359,13 @@ func normalizeFXRate(raw string) (string, error) {
 	return formatted, nil
 }
 
-func (s *Server) fetchFXRates(ctx context.Context) (int, error) {
+// fetchFXRates stores every supported rate the provider URL returns.
+func (s *Server) fetchFXRates(ctx context.Context, rawURL string) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, fxFetchTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.config.FXRatesURL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return 0, err
+		return 0, errors.New("rates provider URL is invalid")
 	}
 	request.Header.Set("Accept", "application/json")
 	response, err := http.DefaultClient.Do(request)
@@ -281,12 +388,12 @@ func (s *Server) fetchFXRates(ctx context.Context) (int, error) {
 	if len(body) > fxMaxResponseBytes {
 		return 0, errors.New("rates response is too large")
 	}
-	day, quotes, err := parseFXRates(body, time.Now())
+	quotes, err := parseFXRates(body, time.Now())
 	if err != nil {
 		return 0, err
 	}
 	source := "provider"
-	if parsed, parseErr := url.Parse(s.config.FXRatesURL); parseErr == nil && parsed.Host != "" {
+	if parsed, parseErr := url.Parse(rawURL); parseErr == nil && parsed.Host != "" {
 		source = parsed.Host
 	}
 	batch := &pgx.Batch{}
@@ -294,7 +401,7 @@ func (s *Server) fetchFXRates(ctx context.Context) (int, error) {
 		batch.Queue(`INSERT INTO fx_rates(currency,rate_date,units_per_usd,source) VALUES ($1,$2,$3::numeric,$4)
 			ON CONFLICT (currency,rate_date) DO UPDATE SET units_per_usd=EXCLUDED.units_per_usd,
 				source=EXCLUDED.source,fetched_at=now()
-			WHERE fx_rates.source<>'manual'`, quote.Currency, day, quote.UnitsPerUSD, source)
+			WHERE fx_rates.source<>'manual'`, quote.Currency, quote.Day, quote.UnitsPerUSD, source)
 	}
 	if err := s.db.Writer.SendBatch(ctx, batch).Close(); err != nil {
 		return 0, err

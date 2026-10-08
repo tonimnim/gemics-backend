@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -20,51 +21,72 @@ import (
 
 func TestParseFXRatesReadsCommonProviders(t *testing.T) {
 	now := time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC)
-	exchangeRateAPI := `{"result":"success","base_code":"USD","time_last_update_unix":1791331201,
-		"rates":{"USD":1,"KES":129.25,"JPY":148.1,"IDR":16250.5,"EUR":0.92}}`
-	day, quotes, err := parseFXRates([]byte(exchangeRateAPI), now)
+	quoteMap := func(quotes []fxQuote) map[string]string {
+		got := map[string]string{}
+		for _, quote := range quotes {
+			got[quote.Currency] = quote.Day.Format(time.DateOnly) + " " + quote.UnitsPerUSD
+		}
+		return got
+	}
+
+	// Frankfurter v2: every row carries its own day.
+	frankfurter := `[{"date":"2026-10-08","base":"USD","quote":"KES","rate":129.7},
+		{"date":"2026-10-07","base":"USD","quote":"UGX","rate":4049.48},
+		{"date":"2026-10-08","base":"USD","quote":"EUR","rate":0.89},
+		{"date":"2026-10-08","base":"USD","quote":"JPY","rate":158.23}]`
+	quotes, err := parseFXRates([]byte(frankfurter), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := day.Format(time.DateOnly); got != "2026-10-07" {
-		t.Errorf("rate day = %s", got)
-	}
-	got := map[string]string{}
-	for _, quote := range quotes {
-		got[quote.Currency] = quote.UnitsPerUSD
-	}
-	// USD itself and unsupported currencies are skipped.
-	want := map[string]string{"KES": "129.25", "JPY": "148.1", "IDR": "16250.5"}
-	if len(got) != len(want) {
-		t.Fatalf("quotes = %v, want %v", got, want)
-	}
-	for currency, units := range want {
-		if got[currency] != units {
-			t.Errorf("%s = %s, want %s", currency, got[currency], units)
-		}
+	want := map[string]string{"KES": "2026-10-08 129.7", "UGX": "2026-10-07 4049.48", "JPY": "2026-10-08 158.23"}
+	if got := quoteMap(quotes); !maps.Equal(got, want) {
+		t.Fatalf("Frankfurter quotes = %v, want %v", got, want)
 	}
 
+	// Single-date providers: USD itself and unsupported currencies are skipped.
+	exchangeRateAPI := `{"result":"success","base_code":"USD","time_last_update_unix":1791331201,
+		"rates":{"USD":1,"KES":129.25,"JPY":148.1,"IDR":16250.5,"EUR":0.92}}`
+	quotes, err = parseFXRates([]byte(exchangeRateAPI), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = map[string]string{"KES": "2026-10-07 129.25", "JPY": "2026-10-07 148.1", "IDR": "2026-10-07 16250.5"}
+	if got := quoteMap(quotes); !maps.Equal(got, want) {
+		t.Fatalf("ExchangeRate-API quotes = %v, want %v", got, want)
+	}
 	openExchangeRates := `{"base":"USD","timestamp":1791331201,"rates":{"KES":129.25}}`
-	if _, quotes, err := parseFXRates([]byte(openExchangeRates), now); err != nil || len(quotes) != 1 {
+	if quotes, err := parseFXRates([]byte(openExchangeRates), now); err != nil || len(quotes) != 1 {
 		t.Fatalf("Open Exchange Rates shape = %v, %v", quotes, err)
 	}
 
 	for name, body := range map[string]string{
-		"another base":    `{"base":"EUR","rates":{"KES":140}}`,
-		"no base":         `{"rates":{"KES":140}}`,
-		"failed result":   `{"result":"error","base_code":"USD","rates":{"KES":140}}`,
-		"negative rate":   `{"base":"USD","rates":{"KES":-1}}`,
-		"zero rate":       `{"base":"USD","rates":{"KES":0}}`,
-		"nothing usable":  `{"base":"USD","rates":{"EUR":0.9}}`,
-		"future date":     `{"base":"USD","date":"2026-12-01","rates":{"KES":129}}`,
-		"not json":        `<html>`,
-		"string rate":     `{"base":"USD","rates":{"KES":"lots"}}`,
-		"absurd rate":     `{"base":"USD","rates":{"KES":1e15}}`,
-		"too small to be": `{"base":"USD","rates":{"KES":0.00000000001}}`,
+		"another base":     `{"base":"EUR","rates":{"KES":140}}`,
+		"no base":          `{"rates":{"KES":140}}`,
+		"failed result":    `{"result":"error","base_code":"USD","rates":{"KES":140}}`,
+		"negative rate":    `{"base":"USD","rates":{"KES":-1}}`,
+		"zero rate":        `{"base":"USD","rates":{"KES":0}}`,
+		"nothing usable":   `{"base":"USD","rates":{"EUR":0.9}}`,
+		"future date":      `{"base":"USD","date":"2026-12-01","rates":{"KES":129}}`,
+		"not json":         `<html>`,
+		"string rate":      `{"base":"USD","rates":{"KES":"lots"}}`,
+		"absurd rate":      `{"base":"USD","rates":{"KES":1e15}}`,
+		"too small to be":  `{"base":"USD","rates":{"KES":0.00000000001}}`,
+		"row in EUR":       `[{"date":"2026-10-08","base":"EUR","quote":"KES","rate":145.6}]`,
+		"row in future":    `[{"date":"2026-11-08","base":"USD","quote":"KES","rate":129.7}]`,
+		"row without date": `[{"base":"USD","quote":"KES","rate":129.7}]`,
+		"no rows":          `[]`,
 	} {
-		if _, _, err := parseFXRates([]byte(body), now); err == nil {
+		if _, err := parseFXRates([]byte(body), now); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+
+	if got, ok := fxHistoryURL("https://api.frankfurter.dev/v2/rates?base=USD", now); !ok ||
+		got != "https://api.frankfurter.dev/v2/rates?base=USD&date=2026-10-08" {
+		t.Errorf("history URL = %q, %v", got, ok)
+	}
+	if _, ok := fxHistoryURL("https://open.er-api.com/v6/latest/USD", now); ok {
+		t.Error("a provider without history got a history URL")
 	}
 }
 
@@ -264,7 +286,7 @@ func TestIntegrationExchangeRatesFetchAndManualEntry(t *testing.T) {
 	defer provider.Close()
 	server := fxTestServer(pool)
 	server.config.FXRatesURL = provider.URL
-	if count, err := server.fetchFXRates(t.Context()); err != nil || count != 3 {
+	if count, err := server.fetchFXRates(t.Context(), provider.URL); err != nil || count != 3 {
 		t.Fatalf("fetch = %d, %v", count, err)
 	}
 	rates, err := server.loadFXRates(t.Context())
@@ -318,7 +340,7 @@ func TestIntegrationExchangeRatesFetchAndManualEntry(t *testing.T) {
 		t.Fatalf("admin rate = %d %s", recorder.Code, recorder.Body)
 	}
 	// The next fetch leaves the manual rate alone.
-	if _, err := server.fetchFXRates(t.Context()); err != nil {
+	if _, err := server.fetchFXRates(t.Context(), provider.URL); err != nil {
 		t.Fatal(err)
 	}
 	var source, stored string
@@ -333,5 +355,53 @@ func TestIntegrationExchangeRatesFetchAndManualEntry(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM audit_events WHERE action='fx_rate.set'
 		AND subject_type='fx_rate' AND subject_id='KES' AND actor_user_id=$1`, admin).Scan(&audited); err != nil || audited != 1 {
 		t.Fatalf("audit rows = %d, %v", audited, err)
+	}
+}
+
+// TestIntegrationFrankfurterRatesAndExactDayHistory fetches Frankfurter's
+// dated rows, then converts a payment made while no rate was stored at its
+// own day's rate, fetched from the provider's history.
+func TestIntegrationFrankfurterRatesAndExactDayHistory(t *testing.T) {
+	pool := openMigratedIntegrationDatabase(t)
+	seeded := seedIntegrationCompetition(t, pool, integrationSeedOptions{Format: "single_elimination", Entries: 2})
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	paidOn := today.AddDate(0, 0, -20)
+	var requestedDates []string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/rates" || r.URL.Query().Get("base") != "USD" {
+			http.NotFound(w, r)
+			return
+		}
+		day, rate := today.Format(time.DateOnly), "130"
+		if date := r.URL.Query().Get("date"); date != "" {
+			requestedDates = append(requestedDates, date)
+			day, rate = date, "125"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[{"date":"`+day+`","base":"USD","quote":"KES","rate":`+rate+`},
+			{"date":"`+day+`","base":"USD","quote":"EUR","rate":0.9}]`)
+	}))
+	defer provider.Close()
+	server := fxTestServer(pool)
+	server.config.FXRatesURL = provider.URL + "/v2/rates?base=USD"
+
+	payment := fxInsertSucceededPayment(t, pool, seeded.Entries[0], seeded.ID, 10_000, paidOn.Add(12*time.Hour))
+	server.refreshFXRates(t.Context())
+	if len(requestedDates) != 1 || requestedDates[0] != paidOn.Format(time.DateOnly) {
+		t.Fatalf("history requests = %v, want [%s]", requestedDates, paidOn.Format(time.DateOnly))
+	}
+	// KES 100 at 125 per dollar is 80 cents, at the payment's own day's rate.
+	if stamp := fxReadStamp(t, pool, "payment_intents", payment); !stamp.is(80, "125", paidOn.Format(time.DateOnly)) {
+		t.Fatalf("payment = %+v", stamp)
+	}
+	// With the day covered, the next refresh asks for no history.
+	server.refreshFXRates(t.Context())
+	if len(requestedDates) != 1 {
+		t.Fatalf("history requested again: %v", requestedDates)
+	}
+	var source string
+	if err := pool.QueryRow(t.Context(), `SELECT source FROM fx_rates WHERE currency='KES' AND rate_date=$1`,
+		today.Format(time.DateOnly)).Scan(&source); err != nil || !strings.HasPrefix(source, "127.0.0.1") {
+		t.Fatalf("today's rate source = %q, %v", source, err)
 	}
 }

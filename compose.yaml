@@ -206,7 +206,7 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10s}
       SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-false}
-      FX_RATES_URL: ${FX_RATES_URL:-https://open.er-api.com/v6/latest/USD}
+      FX_RATES_URL: ${FX_RATES_URL:-https://api.frankfurter.dev/v2/rates?base=USD}
       FX_REFRESH_INTERVAL: ${FX_REFRESH_INTERVAL:-6h}
       MPESA_ENVIRONMENT: ${MPESA_ENVIRONMENT:-disabled}
       MPESA_CONSUMER_KEY: ${MPESA_CONSUMER_KEY:-}

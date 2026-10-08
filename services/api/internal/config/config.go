@@ -77,9 +77,10 @@ type Config struct {
 	MPesaUserWindow       time.Duration
 	MPesaPhoneWindow      time.Duration
 	MPesaIPWindow         time.Duration
-	// FXRatesURL returns the day's exchange rates against USD as JSON with a
-	// "rates" object; empty disables fetching (rates can still be entered by
-	// an admin). FXRefreshInterval is how often it is polled.
+	// FXRatesURL returns exchange rates against USD: Frankfurter's v2 rates
+	// (the default) or any provider returning a "rates" object. Empty disables
+	// fetching (rates can still be entered by an admin). FXRefreshInterval is
+	// how often it is polled.
 	FXRatesURL              string
 	FXRefreshInterval       time.Duration
 	StorageMode             string
@@ -238,7 +239,7 @@ func Load() (Config, error) {
 	if fxRefreshInterval < time.Minute {
 		return Config{}, fmt.Errorf("FX_REFRESH_INTERVAL must be at least 1m")
 	}
-	fxRatesURL := value("FX_RATES_URL", "https://open.er-api.com/v6/latest/USD")
+	fxRatesURL := value("FX_RATES_URL", "https://api.frankfurter.dev/v2/rates?base=USD")
 	if strings.EqualFold(fxRatesURL, "off") {
 		fxRatesURL = ""
 	}
