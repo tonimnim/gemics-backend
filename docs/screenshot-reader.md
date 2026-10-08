@@ -67,7 +67,8 @@ Request: the raw image as the body.
 | `X-Evidence-ID` | the upload's UUID, for logs only |
 
 Limits: 25 MiB, one image per request. Go times out after `VISION_TIMEOUT`
-(default 30 s) and retries with backoff.
+(default 2 minutes: a request can wait behind the reader's queue and the
+optional second opinion) and retries with backoff.
 
 Response `200` (sample 2):
 
@@ -329,9 +330,23 @@ until `VISION_AUTO_DECIDE=true`.
 
 **Load.** Screenshots exist only for disputes (blind reports that disagree),
 1–3 per player. Even at 100,000 matches a day with 10% disputed, that is about
-30,000 images a day: 0.35 a second on average, a few a second at peaks. A
-reader process takes 1–4 s per image on CPU, so peak load needs roughly 5–15
-reader processes. That's ordinary horizontal scaling.
+30,000 images a day, 0.35 a second on average. Measured in the container at
+2 CPUs on a busy machine, a read takes 12–15 s (p95 17 s, worst 24 s) and
+peaks at 0.9 GB of memory, so one process reads about 6,000 images a day.
+30,000 a day needs about 5 processes kept busy, so run 8–10 (2 CPUs each)
+for headroom. Peaks don't need matching capacity: the queue lives in Postgres
+and a reading only has to be ready before staff look, so a burst waits there
+for minutes instead of overloading the reader. Faster reads (the reader team's
+main lever) cut the count directly. That's ordinary horizontal scaling.
+
+**Timeouts.** A request can wait behind `VISION_MAX_QUEUE` others, then be
+read, then get the optional second opinion. `VISION_FALLBACK_DEADLINE` counts
+from the request's arrival, so the second opinion ends by then. Keep
+`VISION_TIMEOUT` above both (1 + `VISION_MAX_QUEUE`) × the slowest read and
+`VISION_FALLBACK_DEADLINE`, with the deadline above the first so a queued
+request still gets its second opinion: with the defaults, 3 × 25 s = 75 s <
+90 s < 2 minutes. Otherwise the API gives up on reads the reader still does,
+then asks again.
 
 **Off the critical path.** Nothing in match play waits for the reader.
 Disputes keep their deadlines and go to staff exactly as before; the reader
@@ -342,7 +357,7 @@ a day, the only cost is that staff decide without readings.
 
 | Part | How it scales | Limit to watch |
 |---|---|---|
-| Reader (Python) | Replicas behind one internal URL; one image at a time per process; `VISION_MAX_QUEUE` sheds load with 503 `busy` | CPU; about 2 GB memory per process for the models |
+| Reader (Python) | Replicas behind one internal URL; one image at a time per process; `VISION_MAX_QUEUE` sheds load with 503 `busy` | CPU; under 1 GB memory per process (0.9 GB peak measured; compose allows 2 GB) |
 | Reading worker (Go) | Runs in API processes with `VISION_WORKER=true`. In production run it on one or two dedicated replicas (same image, no public traffic) and turn it off on public replicas, so reading load follows the reader's size, not API traffic | Total in flight = worker replicas × `VISION_CONCURRENCY`; keep it at or below reader capacity |
 | Queue (Postgres) | `FOR UPDATE SKIP LOCKED` claims on a partial index of queued rows; batches the size of free slots | Tens of thousands a day is small for Postgres |
 | Reuse checks | Exact, indexed matches on the stat fingerprint and image hash | Constant cost as history grows |
@@ -405,7 +420,7 @@ set.
 |---|---|---|
 | `VISION_URL` | empty (off) | Base URL of the reader, for example `http://vision:8000` |
 | `VISION_TOKEN` | — | Shared bearer token, 32+ characters |
-| `VISION_TIMEOUT` | `30s` | Per request |
+| `VISION_TIMEOUT` | `2m` | Per request, including the reader's queue and second opinion (see "Timeouts") |
 | `VISION_CONCURRENCY` | `2` | Readings in flight per API replica |
 | `VISION_AUTO_DECIDE` | `false` | Allow automatic decisions |
 | `VISION_AUTO_MIN_CONFIDENCE` | `0.9` | Threshold for automatic decisions (calibrate first) |

@@ -286,7 +286,10 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("VISION_TRAINING_CIDRS contains an invalid CIDR %q", cidr)
 		}
 	}
-	visionTimeout, err := boundedDuration("VISION_TIMEOUT", 30*time.Second, time.Second, 5*time.Minute)
+	// A request may wait behind the reader's queue and an optional second
+	// opinion; a read takes 12-25 s on two CPUs and nothing waits on it, so
+	// a short timeout only wastes reads.
+	visionTimeout, err := boundedDuration("VISION_TIMEOUT", 2*time.Minute, time.Second, 5*time.Minute)
 	if err != nil {
 		return Config{}, err
 	}
