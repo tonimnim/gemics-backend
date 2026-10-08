@@ -3472,6 +3472,125 @@ paths:
           description: invalid_period.
         '403':
           $ref: '#/components/responses/Error'
+  /v1/admin/screenshot-readings/{evidenceId}/retry:
+    post:
+      operationId: retryScreenshotReading
+      tags:
+        - Staff
+      summary: Read a screenshot again, for example after the reader's model improved. Requires result_review.manage.
+      description: >-
+        Refused once the review is decided, so a decision keeps the readings it was made from. A reviewer who plays
+        in or captains the match gets 404 (D27). A read already in flight is discarded. Every retry is audited.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: evidenceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '202':
+          description: Queued for reading.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [evidenceId, status]
+                    properties:
+                      evidenceId: { type: string, format: uuid }
+                      status: { type: string, enum: [queued] }
+        '404':
+          $ref: '#/components/responses/Error'
+          description: screenshot_reading_not_found.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: review_decided.
+  /v1/internal/vision/training-examples:
+    get:
+      operationId: listVisionTrainingExamples
+      tags:
+        - Internal
+      summary: Real screenshots labelled in screen terms from staff decisions, for training the screenshot reader.
+      description: >-
+        Not part of the public API. Authenticated with VISION_TRAINING_TOKEN as a bearer token (never the reader's
+        VISION_TOKEN), optionally limited to VISION_TRAINING_CIDRS; 404 when not configured. A screenshot is
+        exported only when its label can be trusted: a best-of-one match decided by staff, a result screen from
+        each player, all agreeing on every field, none flagged. label is what is printed on the left and right;
+        reader is what the reader returned; downloadUrl is a short-lived signed download.
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: One page of training examples, oldest reading first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  nextCursor: { type: string, nullable: true }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [evidenceId, matchId, downloadUrl, downloadExpiresAt, contentType, label, source, decidedAt, reader, readerCorrect]
+                      properties:
+                        evidenceId: { type: string, format: uuid }
+                        matchId: { type: string, format: uuid }
+                        downloadUrl: { type: string, format: uri }
+                        downloadExpiresAt: { type: string, format: date-time }
+                        contentType: { type: string, enum: [image/jpeg, image/png] }
+                        label:
+                          type: object
+                          required: [screen, left, right, penalties]
+                          properties:
+                            screen: { type: string, enum: [match_result] }
+                            left: { $ref: '#/components/schemas/ScreenshotSide' }
+                            right: { $ref: '#/components/schemas/ScreenshotSide' }
+                            penalties:
+                              type: object
+                              nullable: true
+                              required: [left, right]
+                              properties:
+                                left: { type: integer }
+                                right: { type: integer }
+                        source: { type: string, enum: [staff_decision] }
+                        decidedAt: { type: string, format: date-time }
+                        reader:
+                          type: object
+                          required: [left, right, penalties, stats, confidence, model]
+                          properties:
+                            left: { $ref: '#/components/schemas/ScreenshotSide' }
+                            right: { $ref: '#/components/schemas/ScreenshotSide' }
+                            penalties:
+                              type: object
+                              nullable: true
+                              properties:
+                                left: { type: integer }
+                                right: { type: integer }
+                            stats:
+                              type: object
+                              additionalProperties:
+                                type: array
+                                items: { type: integer }
+                            confidence: { type: number }
+                            model: { type: string }
+                        readerCorrect: { type: boolean, description: The reader's scores equal the label. }
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_limit, invalid_cursor.
+        '401':
+          $ref: '#/components/responses/Error'
+          description: invalid_token.
   /v1/admin/players:
     get:
       operationId: listAdminPlayers
@@ -9412,6 +9531,7 @@ components:
               - mediaType
               - byteSize
               - ready
+              - reading
             properties:
               id:
                 type: string
@@ -9426,6 +9546,10 @@ components:
                 format: int64
               ready:
                 type: boolean
+              reading:
+                oneOf:
+                  - $ref: '#/components/schemas/ScreenshotReading'
+                  - type: 'null'
     ResultReviewEntryReports:
       type: object
       additionalProperties: false
@@ -9545,6 +9669,93 @@ components:
         createdAt:
           type: string
           format: date-time
+    ScreenshotReading:
+      type: object
+      additionalProperties: false
+      description: >-
+        What the screenshot reader made of one screenshot. left/right are as printed on the screen; score is the
+        result in match orientation once the team names are matched to the players (orientation home_left or
+        home_right, or either for a draw without penalties). Flags explain why it can't be trusted on its own:
+        not_read, not_result_screen, low_confidence, teams_unknown, not_full_time, full_time_unknown,
+        reused_stats, stats_incomplete, possession_not_100, on_target_exceeds_shots, goals_exceed_shots_on_target,
+        goals_and_saves_exceed_shots_on_target, successful_exceeds_passes; similar_image (the same image hash in an
+        earlier match) is a hint for staff that never blocks a decision. orientation comes only from team names
+        learned from staff decisions, never from names a player can edit.
+      required: [status, screen, confidence, left, right, penalties, stats, orientation, score, flags, reusedMatchId, error, model]
+      properties:
+        status: { type: string, enum: [queued, read, failed] }
+        screen: { type: [string, "null"], enum: [match_result, unknown, null] }
+        confidence: { type: [number, "null"], minimum: 0, maximum: 1 }
+        left:
+          oneOf:
+            - { $ref: '#/components/schemas/ScreenshotSide' }
+            - { type: "null" }
+        right:
+          oneOf:
+            - { $ref: '#/components/schemas/ScreenshotSide' }
+            - { type: "null" }
+        penalties:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [left, right]
+              properties:
+                left: { type: integer, minimum: 0, maximum: 99 }
+                right: { type: integer, minimum: 0, maximum: 99 }
+            - { type: "null" }
+        stats:
+          type: object
+          description: Stat rows read, each [left, right], under fixed keys (possession, shots, shotsOnTarget, fouls, offsides, cornerKicks, freeKicks, passes, successfulPasses, crosses, interceptions, tackles, saves).
+          additionalProperties:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: { type: integer, minimum: 0 }
+        orientation: { type: string, enum: [home_left, home_right, either, unknown] }
+        score:
+          oneOf:
+            - { $ref: '#/components/schemas/ScreenshotScore' }
+            - { type: "null" }
+        flags: { type: array, items: { type: string } }
+        reusedMatchId: { type: [string, "null"], format: uuid, description: Another match the same image or stats table appeared in. }
+        error: { type: [string, "null"], description: Why the last read failed. }
+        model: { type: [string, "null"], description: The reader's engine and model version. }
+    ScreenshotSide:
+      type: object
+      additionalProperties: false
+      required: [team, score]
+      properties:
+        team: { type: string, maxLength: 80 }
+        score: { type: integer, minimum: 0, maximum: 99 }
+    ScreenshotScore:
+      type: object
+      additionalProperties: false
+      required: [homeScore, awayScore, homePenalties, awayPenalties]
+      properties:
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        homePenalties: { type: [integer, "null"], minimum: 0, maximum: 99 }
+        awayPenalties: { type: [integer, "null"], minimum: 0, maximum: 99 }
+    ScreenshotCheck:
+      type: object
+      additionalProperties: false
+      description: >-
+        The reader's verdict on a review. supports: the screenshots agree and match exactly one claim (decision
+        says which when the reader may settle it itself); neither: they agree but match no claim; conflicting:
+        they disagree (differences names the fields); unreadable: nothing usable was read; inconclusive: they agree
+        but the team names don't match the players yet; pending: still reading.
+      required: [verdict, score, differences, reasons, autoDecide]
+      properties:
+        verdict: { type: string, enum: [pending, supports, neither, conflicting, unreadable, inconclusive] }
+        supportedSide: { type: string, enum: [home, away], description: 'Whose claim the screenshots match, when exactly one.' }
+        autoDecide: { type: boolean, description: 'True when automatic decisions are on, the review is open and decision is set: the reader will settle it.' }
+        score:
+          oneOf:
+            - { $ref: '#/components/schemas/ScreenshotScore' }
+            - { type: "null" }
+        differences: { type: array, items: { type: string } }
+        reasons: { type: array, items: { type: string } }
+        decision: { type: string, enum: [accept_home, accept_away] }
     ResultReviewDetail:
       type: object
       additionalProperties: false
@@ -9567,6 +9778,7 @@ components:
         - responseWindowUploads
         - activeStrikeCounts
         - strikes
+        - screenshotCheck
       properties:
         id:
           type: string
@@ -9667,6 +9879,11 @@ components:
           description: Strikes recorded by this review's decision.
           items:
             $ref: '#/components/schemas/PlayerStrike'
+        screenshotCheck:
+          oneOf:
+            - $ref: '#/components/schemas/ScreenshotCheck'
+            - type: 'null'
+
     ResultReviewDecisionRequest:
       type: object
       additionalProperties: false

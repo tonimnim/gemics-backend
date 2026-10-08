@@ -303,12 +303,16 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [id, mediaType, byteSize, ready]
+            required: [id, mediaType, byteSize, ready, reading]
             properties:
               id: { type: string, format: uuid }
               mediaType: { type: string, enum: [image/jpeg, image/png] }
               byteSize: { type: integer, format: int64 }
               ready: { type: boolean }
+              reading:
+                oneOf:
+                  - { $ref: "#/components/schemas/ScreenshotReading" }
+                  - { type: "null" }
     ResultReviewEntryReports:
       type: object
       additionalProperties: false
@@ -385,6 +389,7 @@ components:
         - responseWindowUploads
         - activeStrikeCounts
         - strikes
+        - screenshotCheck
       properties:
         id: { type: string, format: uuid }
         status: { $ref: "#/components/schemas/ResultReviewStatus" }
@@ -437,6 +442,97 @@ components:
           type: array
           description: Strikes recorded by this review's decision.
           items: { $ref: "#/components/schemas/PlayerStrike" }
+        screenshotCheck:
+          oneOf:
+            - { $ref: "#/components/schemas/ScreenshotCheck" }
+            - { type: "null" }
+    ScreenshotReading:
+      type: object
+      additionalProperties: false
+      description: >-
+        What the screenshot reader made of one screenshot. left/right are as printed on the screen; score is the
+        result in match orientation once the team names are matched to the players (orientation home_left or
+        home_right, or either for a draw without penalties). Flags explain why it can't be trusted on its own:
+        not_read, not_result_screen, low_confidence, teams_unknown, not_full_time, full_time_unknown,
+        reused_stats, stats_incomplete, possession_not_100, on_target_exceeds_shots, goals_exceed_shots_on_target,
+        goals_and_saves_exceed_shots_on_target, successful_exceeds_passes; similar_image (the same image hash in an
+        earlier match) is a hint for staff that never blocks a decision. orientation comes only from team names
+        learned from staff decisions, never from names a player can edit.
+      required: [status, screen, confidence, left, right, penalties, stats, orientation, score, flags, reusedMatchId, error, model]
+      properties:
+        status: { type: string, enum: [queued, read, failed] }
+        screen: { type: [string, "null"], enum: [match_result, unknown, null] }
+        confidence: { type: [number, "null"], minimum: 0, maximum: 1 }
+        left:
+          oneOf:
+            - { $ref: "#/components/schemas/ScreenshotSide" }
+            - { type: "null" }
+        right:
+          oneOf:
+            - { $ref: "#/components/schemas/ScreenshotSide" }
+            - { type: "null" }
+        penalties:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [left, right]
+              properties:
+                left: { type: integer, minimum: 0, maximum: 99 }
+                right: { type: integer, minimum: 0, maximum: 99 }
+            - { type: "null" }
+        stats:
+          type: object
+          description: Stat rows read, each [left, right], under fixed keys (possession, shots, shotsOnTarget, fouls, offsides, cornerKicks, freeKicks, passes, successfulPasses, crosses, interceptions, tackles, saves).
+          additionalProperties:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: { type: integer, minimum: 0 }
+        orientation: { type: string, enum: [home_left, home_right, either, unknown] }
+        score:
+          oneOf:
+            - { $ref: "#/components/schemas/ScreenshotScore" }
+            - { type: "null" }
+        flags: { type: array, items: { type: string } }
+        reusedMatchId: { type: [string, "null"], format: uuid, description: Another match the same image or stats table appeared in. }
+        error: { type: [string, "null"], description: Why the last read failed. }
+        model: { type: [string, "null"], description: The reader's engine and model version. }
+    ScreenshotSide:
+      type: object
+      additionalProperties: false
+      required: [team, score]
+      properties:
+        team: { type: string, maxLength: 80 }
+        score: { type: integer, minimum: 0, maximum: 99 }
+    ScreenshotScore:
+      type: object
+      additionalProperties: false
+      required: [homeScore, awayScore, homePenalties, awayPenalties]
+      properties:
+        homeScore: { type: integer, minimum: 0, maximum: 99 }
+        awayScore: { type: integer, minimum: 0, maximum: 99 }
+        homePenalties: { type: [integer, "null"], minimum: 0, maximum: 99 }
+        awayPenalties: { type: [integer, "null"], minimum: 0, maximum: 99 }
+    ScreenshotCheck:
+      type: object
+      additionalProperties: false
+      description: >-
+        The reader's verdict on a review. supports: the screenshots agree and match exactly one claim (decision
+        says which when the reader may settle it itself); neither: they agree but match no claim; conflicting:
+        they disagree (differences names the fields); unreadable: nothing usable was read; inconclusive: they agree
+        but the team names don't match the players yet; pending: still reading.
+      required: [verdict, score, differences, reasons, autoDecide]
+      properties:
+        verdict: { type: string, enum: [pending, supports, neither, conflicting, unreadable, inconclusive] }
+        supportedSide: { type: string, enum: [home, away], description: 'Whose claim the screenshots match, when exactly one.' }
+        autoDecide: { type: boolean, description: 'True when automatic decisions are on, the review is open and decision is set: the reader will settle it.' }
+        score:
+          oneOf:
+            - { $ref: "#/components/schemas/ScreenshotScore" }
+            - { type: "null" }
+        differences: { type: array, items: { type: string } }
+        reasons: { type: array, items: { type: string } }
+        decision: { type: string, enum: [accept_home, accept_away] }
     ResultReviewDecisionRequest:
       type: object
       additionalProperties: false
