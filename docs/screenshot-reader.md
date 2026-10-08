@@ -92,7 +92,7 @@ Response `200` (sample 2):
   },
   "confidence": 0.96,
   "imageHash": "c3d1f0e0b8a4c2e1",
-  "model": { "engine": "easyocr", "version": "1.7.2+tonits-efootball-3" },
+  "model": { "engine": "easyocr", "version": "1.7.2+tonits-efootball-3", "recognizer": "efootball_v3" },
   "durationMs": 840
 }
 ```
@@ -104,14 +104,17 @@ Response `200` (sample 2):
 | `penalties` | `{ "left": 4, "right": 3 }` when the screen shows a shoot-out, otherwise `null`. |
 | `managers` | Optional coach row; `null` when absent (samples 1 and 3). |
 | `stats` | Fixed keys whatever the label says (`Total Shots` → `shots`). Leave out rows you couldn't read rather than guessing. |
-| `checks` | Plausibility rules (see "Edited and AI-generated screenshots"); a failed check lowers confidence and is shown to staff. |
+| `checks` | The reader's plausibility results (see "Edited and AI-generated screenshots"). Its failures lower `confidence`, except the saves rule, which is informational. Go recomputes the checks from `stats` itself and shows staff what fails. |
 | `confidence` | 0–1. Your belief that **both scores and both team names** are right. Go only auto-decides above `VISION_AUTO_MIN_CONFIDENCE` (default 0.9). |
 | `imageHash` | A 64-bit perceptual hash (pHash, hex). Go uses it to catch one screenshot reused for another match. |
 | `model` | Engine and model version. Go stores it with every reading. |
 
-Errors: `415` wrong type, `413` too large, `422` undecodable image, `401` bad
-token, `503` model not loaded. Body: `{ "error": "code", "message": "…" }`. Go
-retries `5xx` and network errors, and does not retry `4xx`.
+Errors: `415` wrong type, `413` too large, `422` undecodable image or a result
+screen whose banner can't be read (`unreadable_result`), `401` bad token, `503`
+model not loaded, `503 busy` (with `Retry-After`) when the queue is full. Body:
+`{ "error": "code", "message": "…" }`. Go retries `503 busy` and `429` within
+seconds without counting them; other `5xx`, `401` and network errors as an
+outage, with backoff; `4xx` never (the screenshot is failed and staff decide).
 
 ### `GET /healthz`
 
@@ -129,23 +132,21 @@ container healthcheck and by Go before it starts sending work.
 ## Connecting your service
 
 1. **Run it where the API can reach it.** `compose.yaml` has a `vision`
-   service stub behind the `vision` profile. It builds the tonitsOCR repository
+   service behind the `vision` profile. It builds the tonitsOCR repository
    next to this one (`VISION_BUILD_CONTEXT`, default `../tonitsOCR/EasyOCR`)
-   with `VISION_DOCKERFILE` (default `tonits_vision/Dockerfile`), or uses a
+   with its `tonits_vision/Dockerfile` (`VISION_DOCKERFILE`), or uses a
    prebuilt `VISION_IMAGE`. It publishes no port and is hardened like the
-   other services: read-only, no capabilities, 2 GB, `/tmp` writable. The
-   container must run the HTTP server on port 8000, check `VISION_TOKEN`, and
-   answer `GET /healthz` with `200` once the models are loaded. Bake the models
-   into the image (`VISION_DOWNLOAD_MODELS=0`).
+   other services: read-only, no capabilities, non-root, 2 CPUs, 2 GB, `/tmp`
+   writable. The image carries its models and never downloads at runtime;
+   `VISION_RECOGNIZER` is a build argument, so the image and the recognizer it
+   serves can't drift apart.
 
    ```
    docker compose --env-file .env.docker --profile vision up -d --build
    ```
 
-   It passes the reader's own settings: `VISION_RECOGNIZER`,
-   `VISION_MODEL_DIR`, `VISION_USER_NETWORK_DIR`, `VISION_MAX_QUEUE` and, for
-   an optional LLM second opinion, `VISION_FALLBACK_API_KEY` /
-   `VISION_FALLBACK_MODEL` / `VISION_FALLBACK_BELOW`.
+   It also passes `VISION_MAX_QUEUE` and the optional LLM second opinion's
+   `VISION_FALLBACK_*` settings (see "The reader service" below).
 2. **Point the API at it** in `.env.docker` (or the production environment):
 
    ```
@@ -428,19 +429,33 @@ set.
 | `VISION_TRAINING_TOKEN` | — | Separate 32+ character token for the training feed |
 | `VISION_TRAINING_CIDRS` | — | Client networks allowed to call the training feed |
 
-## Suggested Python layout (for the team building it)
+## The reader service (tonitsOCR)
 
-- **Detection:** EasyOCR's CRAFT detector as is.
-- **Recognition:** fine-tune EasyOCR's English recognizer on the eFootball font
-  using the fork's `trainer/`. Start from synthetic screens; real screenshots
-  from `training-examples` replace them over time.
-- **Layout:** anchor on the 13 stat labels, which never change apart from
-  `Shots`/`Total Shots`. The table's centre gives the left and right columns.
-  The two digits nearest the centre above `Full Time` are the score, and the
-  text on the same banner line either side of them is the team names.
-- **Checks:** goals ≤ shots on target, goals + opponent's saves ≤ shots on
-  target, shots on target ≤ shots, successful passes ≤ passes, possession adds
-  up to 100, scores 0–99. These drive `confidence`.
-- **Evaluation:** report exact-score accuracy and team-name accuracy on a held-out
-  set of real screenshots for every model version, and ship a new version only
-  when it beats the last.
+It lives in `tonits_vision/` of the tonitsOCR repository (the EasyOCR fork):
+
+- `server.py`: the HTTP API above. One reading at a time per process, first
+  come first served; `VISION_MAX_QUEUE` readings may wait behind it, and more
+  get `503 busy` before their body is uploaded. A caller that gives up while
+  queued is never read, so a timeout can't leave the reader working for nobody.
+  Torch threads follow the container's CPU limit.
+- `reader.py`, `layout.py`, `glyphs.py`, `checks.py`, `phash.py`: the pipeline.
+  CRAFT finds the text, layout rules anchored on the stat labels pick the
+  fields, and digits are re-read with a digits-only character set.
+- `fallback.py`: the optional LLM second opinion (off without
+  `VISION_FALLBACK_API_KEY`). It can confirm or doubt a reading, never change
+  it, runs only inside `VISION_FALLBACK_DEADLINE` (from the request's
+  arrival), and an agreement lifts confidence only to
+  `VISION_FALLBACK_AGREED_CONFIDENCE` (0.85). Keep that below
+  `VISION_AUTO_MIN_CONFIDENCE` so the LLM's word alone never settles a
+  dispute.
+- `Dockerfile`: CPU-only torch, pinned dependencies
+  (`requirements-server.txt`), models baked in at build time (the build fails
+  if the recognizer can't load offline), non-root, read-only root filesystem.
+  `--build-arg RECOGNIZER=<name>` serves a fine-tuned recognizer exported to
+  `tonits_vision/models`.
+- `training/`: dataset building, fine-tuning, `evaluate.py` and
+  `fetch_examples.py` (the training feed above).
+
+Reader settings: `VISION_TOKEN`, `VISION_MAX_QUEUE` (2 in compose),
+`VISION_TORCH_THREADS` (default: the CPU limit), `VISION_PORT`, and the
+`VISION_FALLBACK_*` settings. The model settings belong to the image.
