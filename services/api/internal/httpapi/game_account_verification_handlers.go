@@ -343,7 +343,77 @@ func (s *Server) listGameAccountVerificationQueue(w http.ResponseWriter, r *http
 		}
 		page.NextCursor = &next
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": data, "page": page})
+	rowsWithPlayers, err := s.withVerificationPlayers(r.Context(), data)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the verification queue.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": rowsWithPlayers, "page": page})
+}
+
+// staffVerificationRow is a queue row with what the reviewer compares the
+// screenshot against: who claims the account and the Konami ID they typed.
+// Players reading their own request never get this block.
+type staffVerificationRow struct {
+	gameAccountVerificationView
+	Player staffVerificationPlayer `json:"player"`
+}
+
+type staffVerificationPlayer struct {
+	Username    *string `json:"username"`
+	DisplayName string  `json:"displayName"`
+	CountryCode string  `json:"countryCode"`
+	KonamiID    *string `json:"konamiId"`
+	InGameName  string  `json:"inGameName"`
+	// PreviousRejections counts this account's earlier rejected requests.
+	PreviousRejections int `json:"previousRejections"`
+}
+
+func (s *Server) withVerificationPlayers(ctx context.Context,
+	views []gameAccountVerificationView) ([]staffVerificationRow, error) {
+	result := make([]staffVerificationRow, len(views))
+	if len(views) == 0 {
+		return result, nil
+	}
+	accountIDs := make([]string, 0, len(views))
+	for _, view := range views {
+		accountIDs = append(accountIDs, view.GameAccountID)
+	}
+	rows, err := s.db.Writer.Query(ctx, `SELECT account.id::text,profile.handle,player.display_name,player.country_code,
+		account.publisher_player_id,account.in_game_name,
+		(SELECT count(*) FROM game_account_verification_requests earlier
+		 WHERE earlier.game_account_id=account.id AND earlier.status='rejected')::integer
+		FROM game_accounts account
+		JOIN users player ON player.id=account.user_id
+		LEFT JOIN player_profiles profile ON profile.user_id=player.id
+		WHERE account.id=ANY($1::uuid[])`, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	players := map[string]staffVerificationPlayer{}
+	for rows.Next() {
+		var accountID string
+		var player staffVerificationPlayer
+		if err = rows.Scan(&accountID, &player.Username, &player.DisplayName, &player.CountryCode,
+			&player.KonamiID, &player.InGameName, &player.PreviousRejections); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		players[accountID] = player
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	for index, view := range views {
+		player := players[view.GameAccountID]
+		// A rejected request counts its own rejection; report only earlier ones.
+		if view.Status == "rejected" && player.PreviousRejections > 0 {
+			player.PreviousRejections--
+		}
+		result[index] = staffVerificationRow{gameAccountVerificationView: view, Player: player}
+	}
+	return result, nil
 }
 
 // verificationOrderSQL orders every request: waiting ones first, oldest first,

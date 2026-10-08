@@ -103,7 +103,11 @@ func TestIntegrationVerificationQueueListsEveryStatus(t *testing.T) {
 		h.expect(recorder, http.StatusOK, "")
 		var body struct {
 			Data []struct {
-				ID string `json:"id"`
+				ID     string `json:"id"`
+				Player struct {
+					Username *string `json:"username"`
+					KonamiID *string `json:"konamiId"`
+				} `json:"player"`
 			} `json:"data"`
 			Page staffQueuePage `json:"page"`
 		}
@@ -112,6 +116,11 @@ func TestIntegrationVerificationQueueListsEveryStatus(t *testing.T) {
 		}
 		for _, item := range body.Data {
 			got = append(got, item.ID)
+			// Reviewers see who claims the account and the Konami ID they typed.
+			if item.Player.KonamiID == nil || !strings.HasPrefix(*item.Player.KonamiID, "QUEU-"+suffix) ||
+				item.Player.Username == nil {
+				t.Fatalf("queue row %s has no claimant: %+v", item.ID, item.Player)
+			}
 		}
 		if !body.Page.HasMore {
 			break
