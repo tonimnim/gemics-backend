@@ -27,6 +27,8 @@ const (
 	// platformFinanceView covers revenue figures. Money queues have their own
 	// permissions, which only admins hold too.
 	platformFinanceView platformPermission = "finance.view"
+	// platformFinanceManage covers entering exchange rates by hand.
+	platformFinanceManage platformPermission = "finance.manage"
 )
 
 // gamicsOrganizationID is the organization Gamics runs its own competitions
@@ -51,7 +53,8 @@ var platformRolePermissions = map[string][]platformPermission{
 		platformResultReviewManage, platformPlayerStrikeRevoke, platformPlayerSuspend},
 	"admin": {platformOverviewView, platformRefundView, platformRefundManage, platformVerificationManage,
 		platformPaymentReviewManage, platformResultReviewManage, platformPlayerStrikeRevoke,
-		platformCompetitionManage, platformStaffManage, platformFinanceView, platformPlayerView, platformPlayerSuspend},
+		platformCompetitionManage, platformStaffManage, platformFinanceView, platformFinanceManage, platformPlayerView,
+		platformPlayerSuspend},
 }
 
 func platformRoleCan(role string, permission platformPermission) bool {

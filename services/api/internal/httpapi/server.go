@@ -124,6 +124,9 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	s.registerCompetitionPolicyRoutes(mux)
 	s.registerAdminRoutes(mux)
 	s.registerAdminPlayerRoutes(mux)
+	s.registerCurrencyRoutes(mux)
+	s.registerFXRateRoutes(mux)
+	s.registerFinanceRoutes(mux)
 
 	s.http = &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -149,6 +152,7 @@ func (s *Server) Run(ctx context.Context) error {
 		go s.runMatchResultVerificationWorker(workerCtx)
 		go s.runLeaderboardProjector(workerCtx)
 		go s.runNotificationPipeline(workerCtx)
+		go s.runFXRateRefresher(workerCtx)
 	}
 	errCh := make(chan error, 1)
 	go func() {

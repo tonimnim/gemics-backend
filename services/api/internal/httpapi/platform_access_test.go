@@ -10,7 +10,8 @@ func TestPlatformRolePermissionsAreSeparated(t *testing.T) {
 	every := []platformPermission{
 		platformOverviewView, platformRefundView, platformRefundManage, platformVerificationManage,
 		platformPaymentReviewManage, platformResultReviewManage, platformPlayerStrikeRevoke,
-		platformCompetitionManage, platformStaffManage, platformFinanceView, platformPlayerView, platformPlayerSuspend,
+		platformCompetitionManage, platformStaffManage, platformFinanceView, platformFinanceManage, platformPlayerView,
+		platformPlayerSuspend,
 	}
 	cases := []struct {
 		role string
@@ -40,7 +41,7 @@ func TestPlatformRolePermissionsAreSeparated(t *testing.T) {
 
 func TestOnlyAdminsGrantStaffRolesOrSeeMoney(t *testing.T) {
 	for _, role := range platformRoles {
-		for _, permission := range []platformPermission{platformStaffManage, platformFinanceView,
+		for _, permission := range []platformPermission{platformStaffManage, platformFinanceView, platformFinanceManage,
 			platformRefundView, platformRefundManage, platformPaymentReviewManage} {
 			if got := platformRoleCan(role, permission); got != (role == "admin") {
 				t.Errorf("platformRoleCan(%q, %s) = %v", role, permission, got)

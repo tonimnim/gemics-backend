@@ -1,6 +1,27 @@
 BEGIN;
 
--- M-Pesa payments, provider callbacks and refunds.
+-- M-Pesa payments, provider callbacks, refunds and exchange rates.
+
+-- fx_rates
+
+-- Units of a currency per US dollar on a day. Payments and refunds stay in the
+-- currency they were paid in; finance reports convert them to USD at the rate
+-- frozen on each row when it succeeded. An admin can enter a rate by hand
+-- (source 'manual'), which a later fetch never overwrites.
+CREATE TABLE fx_rates (
+    currency character(3) NOT NULL,
+    rate_date date NOT NULL,
+    units_per_usd numeric(24,10) NOT NULL,
+    source text NOT NULL,
+    set_by uuid,
+    fetched_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT fx_rates_not_usd_chk CHECK ((currency <> 'USD'::bpchar)),
+    CONSTRAINT fx_rates_units_per_usd_check CHECK ((units_per_usd > (0)::numeric)),
+    CONSTRAINT fx_rates_source_check CHECK (((char_length(source) >= 1) AND (char_length(source) <= 100))),
+    CONSTRAINT fx_rates_manual_chk CHECK (((source = 'manual'::text) = (set_by IS NOT NULL)))
+);
+ALTER TABLE ONLY fx_rates
+    ADD CONSTRAINT fx_rates_pkey PRIMARY KEY (currency, rate_date);
 
 -- payment_intents
 
@@ -33,7 +54,11 @@ CREATE TABLE payment_intents (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     completed_at timestamp with time zone,
+    amount_usd_minor bigint,
+    fx_units_per_usd numeric(24,10),
+    fx_rate_date date,
     CONSTRAINT payment_intents_amount_minor_check CHECK ((amount_minor > 0)),
+    CONSTRAINT payment_intents_usd_chk CHECK ((((amount_usd_minor IS NULL) = (fx_units_per_usd IS NULL)) AND ((fx_units_per_usd IS NULL) = (fx_rate_date IS NULL)) AND ((amount_usd_minor IS NULL) OR (amount_usd_minor >= 0)) AND ((fx_units_per_usd IS NULL) OR (fx_units_per_usd > (0)::numeric)))),
     CONSTRAINT payment_intents_currency_check CHECK ((currency = 'KES'::bpchar)),
     CONSTRAINT payment_intents_entry_display_name_check CHECK (((char_length(entry_display_name) >= 2) AND (char_length(entry_display_name) <= 80))),
     CONSTRAINT payment_intents_idempotency_key_check CHECK (((char_length(idempotency_key) >= 8) AND (char_length(idempotency_key) <= 128))),
@@ -62,6 +87,7 @@ CREATE INDEX payment_intents_phone_created_idx ON payment_intents USING btree (p
 CREATE INDEX payment_intents_reconciliation_idx ON payment_intents USING btree (status, next_query_at, updated_at) WHERE (status = ANY (ARRAY['initiating'::text, 'pending'::text, 'callback_received'::text, 'review'::text]));
 CREATE INDEX payment_intents_succeeded_at_idx ON payment_intents USING btree (completed_at DESC) WHERE (status = 'succeeded'::text);
 CREATE INDEX payment_intents_user_created_idx ON payment_intents USING btree (user_id, created_at DESC);
+CREATE INDEX payment_intents_unconverted_idx ON payment_intents USING btree (completed_at, id) WHERE ((status = 'succeeded'::text) AND (amount_usd_minor IS NULL));
 
 -- payment_callback_events
 
@@ -115,7 +141,11 @@ CREATE TABLE payment_refunds (
     reviewed_at timestamp with time zone,
     completed_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    amount_usd_minor bigint,
+    fx_units_per_usd numeric(24,10),
+    fx_rate_date date,
     CONSTRAINT payment_refunds_amount_minor_check CHECK ((amount_minor > 0)),
+    CONSTRAINT payment_refunds_usd_chk CHECK ((((amount_usd_minor IS NULL) = (fx_units_per_usd IS NULL)) AND ((fx_units_per_usd IS NULL) = (fx_rate_date IS NULL)) AND ((amount_usd_minor IS NULL) OR (amount_usd_minor >= 0)) AND ((fx_units_per_usd IS NULL) OR (fx_units_per_usd > (0)::numeric)))),
     CONSTRAINT payment_refunds_cancelled_mandatory_chk CHECK (((reason_code <> 'competition_cancelled'::text) OR mandatory)),
     CONSTRAINT payment_refunds_currency_check CHECK ((currency = 'KES'::bpchar)),
     CONSTRAINT payment_refunds_mandatory_not_rejected_chk CHECK (((NOT mandatory) OR (status <> 'rejected'::text))),
@@ -138,9 +168,15 @@ ALTER TABLE ONLY payment_refunds
 CREATE UNIQUE INDEX payment_refunds_one_active_per_payment_uidx ON payment_refunds USING btree (payment_id) WHERE (status = ANY (ARRAY['requested'::text, 'approved'::text, 'processing'::text, 'manual_review'::text, 'succeeded'::text]));
 CREATE INDEX payment_refunds_operations_queue_idx ON payment_refunds USING btree (status, requested_at, id);
 CREATE INDEX payment_refunds_user_requested_idx ON payment_refunds USING btree (user_id, requested_at DESC, id DESC);
+CREATE INDEX payment_refunds_succeeded_at_idx ON payment_refunds USING btree (completed_at DESC) WHERE (status = 'succeeded'::text);
+CREATE INDEX payment_refunds_unconverted_idx ON payment_refunds USING btree (completed_at, id) WHERE ((status = 'succeeded'::text) AND (amount_usd_minor IS NULL));
 
 -- Relationships
 
+ALTER TABLE ONLY fx_rates
+    ADD CONSTRAINT fx_rates_currency_fkey FOREIGN KEY (currency) REFERENCES currencies(code);
+ALTER TABLE ONLY fx_rates
+    ADD CONSTRAINT fx_rates_set_by_fkey FOREIGN KEY (set_by) REFERENCES users(id);
 ALTER TABLE ONLY payment_intents
     ADD CONSTRAINT payment_intents_competition_id_fkey FOREIGN KEY (competition_id) REFERENCES competitions(id);
 ALTER TABLE ONLY payment_intents

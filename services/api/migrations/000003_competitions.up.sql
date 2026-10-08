@@ -19,6 +19,34 @@ SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
+-- currencies
+
+-- Every currency Tonits can price a competition in. minor_unit is the ISO 4217
+-- exponent: amounts are stored as integers of 10^-minor_unit (cents for KES,
+-- whole yen for JPY).
+CREATE TABLE currencies (
+    code character(3) NOT NULL,
+    minor_unit smallint NOT NULL,
+    name text NOT NULL,
+    CONSTRAINT currencies_code_check CHECK ((code ~ '^[A-Z]{3}$'::text)),
+    CONSTRAINT currencies_minor_unit_check CHECK (((minor_unit >= 0) AND (minor_unit <= 3)))
+);
+ALTER TABLE ONLY currencies
+    ADD CONSTRAINT currencies_pkey PRIMARY KEY (code);
+INSERT INTO currencies (code, minor_unit, name) VALUES
+    ('USD', 2, 'US dollar'),
+    ('KES', 2, 'Kenyan shilling'),
+    ('INR', 2, 'Indian rupee'),
+    ('SGD', 2, 'Singapore dollar'),
+    ('IDR', 2, 'Indonesian rupiah'),
+    ('BRL', 2, 'Brazilian real'),
+    ('JPY', 0, 'Japanese yen'),
+    ('THB', 2, 'Thai baht'),
+    ('MYR', 2, 'Malaysian ringgit'),
+    ('UGX', 0, 'Ugandan shilling'),
+    ('TZS', 2, 'Tanzanian shilling'),
+    ('NGN', 2, 'Nigerian naira');
+
 -- organizations
 
 CREATE TABLE organizations (
@@ -436,6 +464,8 @@ CREATE INDEX progression_events_competition_idx ON progression_events USING btre
 
 -- Relationships
 
+ALTER TABLE ONLY competitions
+    ADD CONSTRAINT competitions_currency_fkey FOREIGN KEY (currency) REFERENCES currencies(code);
 ALTER TABLE ONLY competition_draw_entries
     ADD CONSTRAINT competition_draw_entries_competition_id_fkey FOREIGN KEY (competition_id) REFERENCES competition_draws(competition_id) ON DELETE CASCADE;
 ALTER TABLE ONLY competition_draw_entries

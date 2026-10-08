@@ -19,4 +19,6 @@ DROP TABLE IF EXISTS organization_members CASCADE;
 DROP TABLE IF EXISTS organizations CASCADE;
 DROP FUNCTION IF EXISTS stamp_competition_published_at();
 
+DROP TABLE IF EXISTS currencies CASCADE;
+
 COMMIT;

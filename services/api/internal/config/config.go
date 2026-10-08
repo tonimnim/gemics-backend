@@ -16,67 +16,72 @@ var callbackTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,128}$`)
 var mpesaShortCodePattern = regexp.MustCompile(`^[0-9]{5,12}$`)
 
 type Config struct {
-	Environment             string
-	HTTPAddr                string
-	DatabaseWriteURL        string
-	DatabaseReadURL         string
-	DatabaseWriteMax        int32
-	DatabaseReadMax         int32
-	DatabaseMaxReplicaLag   time.Duration
-	DatabaseFallbackMax     int
-	RunMigrations           bool
-	RedisURL                string
-	RedisSecurityURL        string
-	RedisCacheURL           string
-	CacheNamespace          string
-	GameCatalogCacheTTL     time.Duration
-	AuthSessionCacheTTL     time.Duration
-	AllowedOrigins          []string
-	TrustedProxyCIDRs       []string
-	ShutdownTimeout         time.Duration
-	ReadHeaderTimeout       time.Duration
-	ReadTimeout             time.Duration
-	WriteTimeout            time.Duration
-	IdleTimeout             time.Duration
-	MaxHeaderBytes          int
-	RequestTimeout          time.Duration
-	AccessTokenSecret       string
-	OTPHashSecret           string
-	AccessTokenTTL          time.Duration
-	OTPTTL                  time.Duration
-	OTPMaxAttempts          int
-	OTPRequestWindow        time.Duration
-	OTPEmailLimit           int
-	OTPIPLimit              int
-	LoginFailureWindow      time.Duration
-	LoginAccountFailures    int
-	LoginIPFailures         int
-	RegistrationWindow      time.Duration
-	RegistrationIPLimit     int
-	EmailMode               string
-	SMTPHost                string
-	SMTPPort                int
-	SMTPUsername            string
-	SMTPPassword            string
-	SMTPFrom                string
-	SMTPTimeout             time.Duration
-	SMTPRequireTLS          bool
-	MPesaEnvironment        string
-	MPesaConsumerKey        string
-	MPesaConsumerSecret     string
-	MPesaShortCode          string
-	MPesaPasskey            string
-	MPesaCallbackBaseURL    string
-	MPesaCallbackToken      string
-	MPesaTransactionType    string
-	MPesaTimeout            time.Duration
-	MPesaMaxAmountMinor     int64
-	MPesaUserLimit          int
-	MPesaPhoneLimit         int
-	MPesaIPLimit            int
-	MPesaUserWindow         time.Duration
-	MPesaPhoneWindow        time.Duration
-	MPesaIPWindow           time.Duration
+	Environment           string
+	HTTPAddr              string
+	DatabaseWriteURL      string
+	DatabaseReadURL       string
+	DatabaseWriteMax      int32
+	DatabaseReadMax       int32
+	DatabaseMaxReplicaLag time.Duration
+	DatabaseFallbackMax   int
+	RunMigrations         bool
+	RedisURL              string
+	RedisSecurityURL      string
+	RedisCacheURL         string
+	CacheNamespace        string
+	GameCatalogCacheTTL   time.Duration
+	AuthSessionCacheTTL   time.Duration
+	AllowedOrigins        []string
+	TrustedProxyCIDRs     []string
+	ShutdownTimeout       time.Duration
+	ReadHeaderTimeout     time.Duration
+	ReadTimeout           time.Duration
+	WriteTimeout          time.Duration
+	IdleTimeout           time.Duration
+	MaxHeaderBytes        int
+	RequestTimeout        time.Duration
+	AccessTokenSecret     string
+	OTPHashSecret         string
+	AccessTokenTTL        time.Duration
+	OTPTTL                time.Duration
+	OTPMaxAttempts        int
+	OTPRequestWindow      time.Duration
+	OTPEmailLimit         int
+	OTPIPLimit            int
+	LoginFailureWindow    time.Duration
+	LoginAccountFailures  int
+	LoginIPFailures       int
+	RegistrationWindow    time.Duration
+	RegistrationIPLimit   int
+	EmailMode             string
+	SMTPHost              string
+	SMTPPort              int
+	SMTPUsername          string
+	SMTPPassword          string
+	SMTPFrom              string
+	SMTPTimeout           time.Duration
+	SMTPRequireTLS        bool
+	MPesaEnvironment      string
+	MPesaConsumerKey      string
+	MPesaConsumerSecret   string
+	MPesaShortCode        string
+	MPesaPasskey          string
+	MPesaCallbackBaseURL  string
+	MPesaCallbackToken    string
+	MPesaTransactionType  string
+	MPesaTimeout          time.Duration
+	MPesaMaxAmountMinor   int64
+	MPesaUserLimit        int
+	MPesaPhoneLimit       int
+	MPesaIPLimit          int
+	MPesaUserWindow       time.Duration
+	MPesaPhoneWindow      time.Duration
+	MPesaIPWindow         time.Duration
+	// FXRatesURL returns the day's exchange rates against USD as JSON with a
+	// "rates" object; empty disables fetching (rates can still be entered by
+	// an admin). FXRefreshInterval is how often it is polled.
+	FXRatesURL              string
+	FXRefreshInterval       time.Duration
 	StorageMode             string
 	StorageS3Endpoint       string
 	StorageS3PublicEndpoint string
@@ -226,6 +231,17 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	fxRefreshInterval, err := duration("FX_REFRESH_INTERVAL", 6*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if fxRefreshInterval < time.Minute {
+		return Config{}, fmt.Errorf("FX_REFRESH_INTERVAL must be at least 1m")
+	}
+	fxRatesURL := value("FX_RATES_URL", "https://open.er-api.com/v6/latest/USD")
+	if strings.EqualFold(fxRatesURL, "off") {
+		fxRatesURL = ""
+	}
 	// Active conduct strikes that block new registrations; 0 disables the ban.
 	// Parsed strictly: a typo must stop the API rather than silently ban every
 	// player with a strike, or nobody.
@@ -300,6 +316,8 @@ func Load() (Config, error) {
 		SMTPFrom:                strings.TrimSpace(os.Getenv("SMTP_FROM")),
 		SMTPTimeout:             smtpTimeout,
 		SMTPRequireTLS:          smtpRequireTLS,
+		FXRatesURL:              fxRatesURL,
+		FXRefreshInterval:       fxRefreshInterval,
 		MPesaEnvironment:        strings.ToLower(value("MPESA_ENVIRONMENT", "disabled")),
 		MPesaConsumerKey:        strings.TrimSpace(os.Getenv("MPESA_CONSUMER_KEY")),
 		MPesaConsumerSecret:     os.Getenv("MPESA_CONSUMER_SECRET"),

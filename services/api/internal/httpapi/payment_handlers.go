@@ -718,6 +718,11 @@ func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transa
 		}
 		return err
 	}
+	// Freeze the payment's USD value at today's rate; without a rate yet, the
+	// rate refresher converts it later.
+	if err = stampPaymentUSD(ctx, tx, paymentID); err != nil {
+		return err
+	}
 	var refundID *string
 	if plan.RefundReason != "" {
 		var value string

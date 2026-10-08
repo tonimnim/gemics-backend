@@ -3,5 +3,6 @@ BEGIN;
 DROP TABLE IF EXISTS payment_refunds CASCADE;
 DROP TABLE IF EXISTS payment_callback_events CASCADE;
 DROP TABLE IF EXISTS payment_intents CASCADE;
+DROP TABLE IF EXISTS fx_rates CASCADE;
 
 COMMIT;

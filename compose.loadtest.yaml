@@ -52,6 +52,7 @@ services:
       SMTP_PORT: "1025"
       SMTP_FROM: loadtest@gamics.test
       SMTP_REQUIRE_TLS: "false"
+      FX_RATES_URL: "off"
       MPESA_ENVIRONMENT: disabled
       EXPO_ACCESS_TOKEN: ""
       GOMEMLIMIT: 384MiB

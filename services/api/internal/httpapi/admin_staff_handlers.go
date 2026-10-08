@@ -74,11 +74,14 @@ func (s *Server) getStaffSelf(w http.ResponseWriter, r *http.Request) {
 }
 
 type overviewFinance struct {
-	PaymentReviews    int    `json:"paymentReviews"`
-	Refunds           int    `json:"refunds"`
-	SucceededLast30d  int    `json:"succeededLast30Days"`
-	CollectedMinor30d int64  `json:"collectedMinorLast30Days"`
-	Currency          string `json:"currency"`
+	PaymentReviews    int   `json:"paymentReviews"`
+	Refunds           int   `json:"refunds"`
+	SucceededLast30d  int   `json:"succeededLast30Days"`
+	CollectedMinor30d int64 `json:"collectedMinorLast30Days"`
+	// Unconverted30d counts the period's payments still waiting for an
+	// exchange rate, which CollectedMinor30d leaves out.
+	Unconverted30d int    `json:"unconvertedLast30Days"`
+	Currency       string `json:"currency"`
 }
 
 // getAdminOverview returns the counts on the dashboard home page: the size of
@@ -133,15 +136,20 @@ func (s *Server) getAdminOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	finance, err := s.staffCan(r.Context(), identityFromContext(r.Context()).UserID, platformFinanceView)
 	if err == nil && finance {
-		overview.Finance = &overviewFinance{Currency: "KES"}
+		// Payments arrive in many currencies; the total is their frozen USD
+		// values, never a sum of mixed amounts.
+		overview.Finance = &overviewFinance{Currency: reportingCurrency}
 		err = s.db.Writer.QueryRow(r.Context(), `SELECT
 			(SELECT count(*) FROM payment_intents WHERE status='review'),
 			(SELECT count(*) FROM payment_refunds WHERE status=ANY($1::text[])),
-			(SELECT count(*) FROM payment_intents WHERE status='succeeded' AND updated_at>now()-interval '30 days'),
-			(SELECT COALESCE(sum(amount_minor),0) FROM payment_intents
-			 WHERE status='succeeded' AND updated_at>now()-interval '30 days')`, refundStages["action"]).Scan(
+			(SELECT count(*) FROM payment_intents WHERE status='succeeded' AND completed_at>now()-interval '30 days'),
+			(SELECT COALESCE(sum(amount_usd_minor),0) FROM payment_intents
+			 WHERE status='succeeded' AND completed_at>now()-interval '30 days'),
+			(SELECT count(*) FROM payment_intents
+			 WHERE status='succeeded' AND completed_at>now()-interval '30 days' AND amount_usd_minor IS NULL)`,
+			refundStages["action"]).Scan(
 			&overview.Finance.PaymentReviews, &overview.Finance.Refunds,
-			&overview.Finance.SucceededLast30d, &overview.Finance.CollectedMinor30d)
+			&overview.Finance.SucceededLast30d, &overview.Finance.CollectedMinor30d, &overview.Finance.Unconverted30d)
 	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the overview.")

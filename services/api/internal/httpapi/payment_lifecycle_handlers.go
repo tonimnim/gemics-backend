@@ -561,27 +561,43 @@ func (s *Server) listRefundQueue(w http.ResponseWriter, r *http.Request) {
 type refundStageSummary struct {
 	Count       int   `json:"count"`
 	AmountMinor int64 `json:"amountMinor"`
+	// Unconverted counts refunds whose payment has no USD value yet, which
+	// AmountMinor leaves out.
+	Unconverted int `json:"unconverted"`
 }
 
 // getRefundSummary returns the count and total of each stage. Completed is
 // limited to the last 30 days.
 func (s *Server) getRefundSummary(w http.ResponseWriter, r *http.Request) {
 	var action, processing, done refundStageSummary
-	err := s.db.Writer.QueryRow(r.Context(), `SELECT
+	// Refunds can be in several currencies, so each stage is totalled in USD:
+	// a refund's own frozen value once it succeeded, otherwise its amount at
+	// the payment's frozen rate.
+	err := s.db.Writer.QueryRow(r.Context(), `WITH valued AS (
+			SELECT refund.status,refund.completed_at,COALESCE(refund.amount_usd_minor,
+				round(refund.amount_minor*100/(power(10::numeric,currency.minor_unit)*payment.fx_units_per_usd))::bigint) AS usd
+			FROM payment_refunds refund
+			JOIN payment_intents payment ON payment.id=refund.payment_id
+			JOIN currencies currency ON currency.code=refund.currency)
+		SELECT
 		count(*) FILTER (WHERE status=ANY($1::text[])),
-		COALESCE(sum(amount_minor) FILTER (WHERE status=ANY($1::text[])),0),
+		COALESCE(sum(usd) FILTER (WHERE status=ANY($1::text[])),0),
+		count(*) FILTER (WHERE status=ANY($1::text[]) AND usd IS NULL),
 		count(*) FILTER (WHERE status='processing'),
-		COALESCE(sum(amount_minor) FILTER (WHERE status='processing'),0),
+		COALESCE(sum(usd) FILTER (WHERE status='processing'),0),
+		count(*) FILTER (WHERE status='processing' AND usd IS NULL),
 		count(*) FILTER (WHERE status='succeeded' AND completed_at>now()-interval '30 days'),
-		COALESCE(sum(amount_minor) FILTER (WHERE status='succeeded' AND completed_at>now()-interval '30 days'),0)
-		FROM payment_refunds`, refundStages["action"]).Scan(&action.Count, &action.AmountMinor,
-		&processing.Count, &processing.AmountMinor, &done.Count, &done.AmountMinor)
+		COALESCE(sum(usd) FILTER (WHERE status='succeeded' AND completed_at>now()-interval '30 days'),0),
+		count(*) FILTER (WHERE status='succeeded' AND completed_at>now()-interval '30 days' AND usd IS NULL)
+		FROM valued`, refundStages["action"]).Scan(&action.Count, &action.AmountMinor, &action.Unconverted,
+		&processing.Count, &processing.AmountMinor, &processing.Unconverted,
+		&done.Count, &done.AmountMinor, &done.Unconverted)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the refund summary.")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"action": action, "processing": processing, "refundedLast30Days": done, "currency": "KES",
+		"action": action, "processing": processing, "refundedLast30Days": done, "currency": reportingCurrency,
 	})
 }
 
@@ -726,6 +742,10 @@ func (s *Server) decideRefund(w http.ResponseWriter, r *http.Request) {
 		// A removed entry stays disqualified; the refund still completes.
 		_, err = tx.Exec(r.Context(), `UPDATE competition_entries SET status='withdrawn',updated_at=now()
 			WHERE id=$1 AND status<>'disqualified'`, refund.EntryID)
+		if err == nil {
+			// The money left at the payment's rate, so a full refund nets to zero.
+			err = stampRefundUSD(r.Context(), tx, refund.ID)
+		}
 		entryChanged = true
 	} else if next == "rejected" && competitionStatus != "cancelled" {
 		_, err = tx.Exec(r.Context(), `UPDATE competition_entries SET status='registered',updated_at=now()
