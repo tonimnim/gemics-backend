@@ -19,8 +19,11 @@ const (
 	maxCompetitionRulesBytes  = 32 << 10
 	// A KES 50,000 ceiling on an administration fee. Anything above it is a
 	// data-entry mistake far more often than a real event.
-	maxCompetitionFeeMinor   = 5_000_000
-	maxCompetitionPrizeMinor = 500_000_000
+	maxCompetitionFeeMinor = 5_000_000
+	// Prizes are priced in many currencies, from yen to rupiah, so the ceiling
+	// is a minor-unit bound rather than an amount; the dashboard shows staff
+	// the USD value of what they type.
+	maxCompetitionPrizeMinor = 1_000_000_000_000
 )
 
 var competitionFormats = []competition.Format{

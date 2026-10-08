@@ -19,14 +19,25 @@ def iso(delta):
     return (now + delta).replace(microsecond=0).isoformat()
 
 
-def create(name, fmt="single_elimination", max_entries=16, fee=0, prize=0, opens=-1, closes=5, starts=7, desc=""):
+# The API prices a competition in its one country's currency, or USD. These
+# mirror its currencies table: JPY and UGX have no minor unit.
+COUNTRY_CURRENCY = {"KE": "KES", "JP": "JPY", "BR": "BRL", "SG": "SGD", "ID": "IDR", "IN": "INR"}
+NO_MINOR_UNIT = {"JPY", "UGX"}
+
+
+def create(name, fmt="single_elimination", max_entries=16, fee=0, prize=0, opens=-1, closes=5, starts=7, desc="",
+           countries=("KE",)):
+    """fee is in KES (paid entry is Kenya-only); prize is in the competition's own currency."""
+    currency = COUNTRY_CURRENCY.get(countries[0], "USD") if len(countries) == 1 else "USD"
+    per_unit = 1 if currency in NO_MINOR_UNIT else 100
     body = {"name": name, "description": desc, "gameId": "efootball-mobile", "format": fmt,
-            "maxEntries": max_entries, "entryFeeMinor": fee * 100, "currency": "KES",
-            "prizeAmountMinor": prize * 100, "prizeFunding": "organizer" if prize else "none",
+            "maxEntries": max_entries, "entryFeeMinor": fee * 100,
+            "prizeAmountMinor": prize * per_unit, "prizeFunding": "organizer" if prize else "none",
             "registrationOpensAt": iso(timedelta(days=opens)), "registrationClosesAt": iso(timedelta(days=closes)),
-            "startsAt": iso(timedelta(days=starts))}
+            "startsAt": iso(timedelta(days=starts)),
+            "rules": {"eligibility": {"allowedCountries": list(countries)}} if countries else {}}
     competition = call("POST", orgs, body, token=admin)["data"]
-    print(f"  {name}: draft")
+    print(f"  {name}: draft, {competition['currency']}")
     return competition
 
 
@@ -90,9 +101,19 @@ move(c, "published", "registration_open")
 register_paid(c, pool[23:34], 100)
 
 c = create("Mumbai eFootball Clash", max_entries=16, prize=0, opens=-1, closes=6, starts=7,
-           desc="Free community cup open to every country.")
+           desc="Free community cup open to every country.", countries=())
 move(c, "published", "registration_open")
 register_free(c, indians[:9] + [p for p in players if p["country"] in ("UG", "TZ", "NG")][:4])
+
+for name, country, prize in [("Tokyo Rising Cup", "JP", 150000), ("Sao Paulo Derby", "BR", 5000),
+                             ("Singapore Night League", "SG", 1500), ("Jakarta Open", "ID", 15000000)]:
+    c = create(name, max_entries=32, prize=prize, opens=2, closes=12, starts=14, countries=(country,),
+               desc="Launch-market cup, priced in local currency.")
+    move(c, "published")
+
+c = create("Tonits World Series", max_entries=64, prize=2000, opens=-1, closes=9, starts=10, countries=(),
+           desc="Open to every country. Prize in USD, funded by Tonits.")
+move(c, "published", "registration_open")
 
 c = create("Eldoret Open", max_entries=16, fee=200, prize=6000, opens=-5, closes=2, starts=3,
            desc="Cancelled: venue partner withdrew.")

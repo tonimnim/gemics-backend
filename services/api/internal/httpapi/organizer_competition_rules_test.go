@@ -9,6 +9,8 @@ import (
 
 var ruleClock = time.Date(2026, 8, 14, 9, 0, 0, 0, time.UTC)
 
+var kenyaOnlyRules = json.RawMessage(`{"eligibility":{"allowedCountries":["KE"]}}`)
+
 func validCompetitionInput() organizerCompetitionInput {
 	return organizerCompetitionInput{
 		Name:                 "Nairobi Sunday Knockout",
@@ -30,7 +32,8 @@ func TestCompetitionInputDerivesSlugFeePurposeAndDefaults(t *testing.T) {
 	if draft.Slug != "nairobi-sunday-knockout" {
 		t.Errorf("unexpected derived slug %q", draft.Slug)
 	}
-	if draft.Currency != "KES" || draft.PrizeFunding != "none" || draft.FeePurpose != "none" {
+	// Open to every country, so priced in USD.
+	if draft.Currency != "USD" || draft.PrizeFunding != "none" || draft.FeePurpose != "none" {
 		t.Errorf("unexpected defaults: %+v", draft)
 	}
 	if string(draft.Rules) != "{}" {
@@ -39,12 +42,13 @@ func TestCompetitionInputDerivesSlugFeePurposeAndDefaults(t *testing.T) {
 
 	paid := validCompetitionInput()
 	paid.EntryFeeMinor = 20_000
+	paid.Rules = kenyaOnlyRules
 	draft, problem = normalizeCompetitionInput(paid, ruleClock)
 	if problem != nil {
 		t.Fatalf("paid input rejected: %+v", problem)
 	}
-	if draft.FeePurpose != "administration" {
-		t.Errorf("a fee must derive the administration purpose, got %q", draft.FeePurpose)
+	if draft.FeePurpose != "administration" || draft.Currency != "KES" {
+		t.Errorf("a Kenyan fee must derive the administration purpose and KES, got %+v", draft)
 	}
 }
 
@@ -59,11 +63,17 @@ func TestCompetitionInputRejectsInvalidCombinations(t *testing.T) {
 		{"one entrant", func(in *organizerCompetitionInput) { in.MaxEntries = 1 }, "invalid_capacity"},
 		{"oversized field", func(in *organizerCompetitionInput) { in.MaxEntries = 4096 }, "invalid_capacity"},
 		{"negative fee", func(in *organizerCompetitionInput) { in.EntryFeeMinor = -1 }, "invalid_entry_fee"},
-		{"fee with cents", func(in *organizerCompetitionInput) { in.EntryFeeMinor = 10_050 }, "invalid_entry_fee"},
-		{"uncollectable currency", func(in *organizerCompetitionInput) {
-			in.EntryFeeMinor = 10_000
-			in.Currency = "USD"
-		}, "unsupported_currency"},
+		{"fee with cents", func(in *organizerCompetitionInput) {
+			in.EntryFeeMinor = 10_050
+			in.Rules = kenyaOnlyRules
+		}, "invalid_entry_fee"},
+		{"paid entry outside Kenya", func(in *organizerCompetitionInput) { in.EntryFeeMinor = 10_000 }, "paid_entry_kenya_only"},
+		{"paid entry in Japan", func(in *organizerCompetitionInput) {
+			in.EntryFeeMinor = 1_000
+			in.Rules = json.RawMessage(`{"eligibility":{"allowedCountries":["JP"]}}`)
+		}, "paid_entry_kenya_only"},
+		{"currency the countries do not use", func(in *organizerCompetitionInput) { in.Currency = "KES" }, "currency_mismatch"},
+		{"unsupported currency", func(in *organizerCompetitionInput) { in.Currency = "EUR" }, "invalid_currency"},
 		{"unfunded prize", func(in *organizerCompetitionInput) { in.PrizeAmountMinor = 50_000 }, "prize_funding_required"},
 		{"funder without prize", func(in *organizerCompetitionInput) { in.PrizeFunding = "sponsor" }, "invalid_prize"},
 		{"backwards registration", func(in *organizerCompetitionInput) {
@@ -117,11 +127,12 @@ func storedDraft() competitionDraft {
 func TestPatchFreezesMoneyAndFormatOnceRegistrationOpens(t *testing.T) {
 	current := storedDraft()
 	frozen := map[string]organizerCompetitionPatch{
-		"format":              {Format: pointerTo("round_robin")},
-		"gameId":              {GameID: pointerTo("efootball-mobile")},
-		"slug":                {Slug: pointerTo("renamed-cup")},
-		"entryFeeMinor":       {EntryFeeMinor: pointerTo(int64(50_000))},
-		"currency":            {Currency: pointerTo("USD")},
+		"format":        {Format: pointerTo("round_robin")},
+		"gameId":        {GameID: pointerTo("efootball-mobile")},
+		"slug":          {Slug: pointerTo("renamed-cup")},
+		"entryFeeMinor": {EntryFeeMinor: pointerTo(int64(50_000))},
+		// Limiting a USD competition to Kenya would reprice it in KES.
+		"currency":            {Rules: pointerTo(kenyaOnlyRules)},
 		"prizeAmountMinor":    {PrizeAmountMinor: pointerTo(int64(10_000))},
 		"prizeFunding":        {PrizeFunding: pointerTo("sponsor")},
 		"registrationOpensAt": {RegistrationOpensAt: pointerTo(ruleClock.Add(2 * time.Hour))},
@@ -233,3 +244,82 @@ func TestPatchAllowsEditingAfterRegistrationClosed(t *testing.T) {
 }
 
 func pointerTo[T any](value T) *T { return &value }
+
+func TestCompetitionCurrencyFollowsItsCountries(t *testing.T) {
+	cases := []struct {
+		rules string
+		want  string
+	}{
+		{`{}`, "USD"},
+		{`{"eligibility":{"allowedCountries":["KE"]}}`, "KES"},
+		{`{"eligibility":{"allowedCountries":["jp"]}}`, "JPY"},
+		{`{"eligibility":{"allowedCountries":["SG"]}}`, "SGD"},
+		{`{"eligibility":{"allowedCountries":["ID"]}}`, "IDR"},
+		{`{"eligibility":{"allowedCountries":["BR"]}}`, "BRL"},
+		{`{"eligibility":{"allowedCountries":["IN"]}}`, "INR"},
+		// Several countries, or one without a supported currency, use USD.
+		{`{"eligibility":{"allowedCountries":["KE","UG"]}}`, "USD"},
+		{`{"eligibility":{"allowedCountries":["GH"]}}`, "USD"},
+	}
+	for _, testCase := range cases {
+		input := validCompetitionInput()
+		input.Rules = json.RawMessage(testCase.rules)
+		draft, problem := normalizeCompetitionInput(input, ruleClock)
+		if problem != nil {
+			t.Fatalf("%s rejected: %+v", testCase.rules, problem)
+		}
+		if draft.Currency != testCase.want {
+			t.Errorf("%s priced in %s, want %s", testCase.rules, draft.Currency, testCase.want)
+		}
+		// Restating the derived currency is accepted.
+		input.Currency = testCase.want
+		if _, problem := normalizeCompetitionInput(input, ruleClock); problem != nil {
+			t.Errorf("restating %s for %s rejected: %+v", testCase.want, testCase.rules, problem)
+		}
+	}
+
+	// A draft follows its countries when they change.
+	draft := storedDraft()
+	updated, _, problem := applyCompetitionPatch(draft, organizerCompetitionPatch{
+		Rules: pointerTo(json.RawMessage(`{"eligibility":{"allowedCountries":["BR"]}}`)),
+	}, "draft", 0, ruleClock)
+	if problem != nil || updated.Currency != "BRL" {
+		t.Fatalf("draft limited to Brazil = %+v, %+v", updated.Currency, problem)
+	}
+	// A prize is never carried into another currency: it must be restated.
+	prized := draft
+	prized.Rules = kenyaOnlyRules
+	prized.Currency = "KES"
+	prized.PrizeAmountMinor = 500_000
+	prized.PrizeFunding = "organizer"
+	japan := pointerTo(json.RawMessage(`{"eligibility":{"allowedCountries":["JP"]}}`))
+	for _, status := range []string{"draft", "published"} {
+		if _, _, problem := applyCompetitionPatch(prized, organizerCompetitionPatch{Rules: japan}, status, 0,
+			ruleClock); problem == nil || problem.Code != "prize_currency_changed" {
+			t.Fatalf("%s: a KES prize was carried into JPY: %+v", status, problem)
+		}
+	}
+	restated, _, problem := applyCompetitionPatch(prized, organizerCompetitionPatch{
+		Rules: japan, PrizeAmountMinor: pointerTo(int64(150_000)),
+	}, "draft", 0, ruleClock)
+	if problem != nil || restated.Currency != "JPY" || restated.PrizeAmountMinor != 150_000 {
+		t.Fatalf("restated JPY prize = %+v, %+v", restated, problem)
+	}
+	// Once registration opens, countries that keep the currency can still widen.
+	kenyan := draft
+	kenyan.Rules = kenyaOnlyRules
+	kenyan.Currency = "KES"
+	if _, _, problem := applyCompetitionPatch(kenyan, organizerCompetitionPatch{
+		Rules: pointerTo(json.RawMessage(`{"eligibility":{"allowedCountries":["KE"],"minimumAge":16}}`)),
+	}, "registration_open", 3, ruleClock); problem != nil {
+		t.Fatalf("a rule change that keeps KES was refused: %+v", problem)
+	}
+}
+
+func TestMinorUnitsFollowEachCurrency(t *testing.T) {
+	for currency, want := range map[string]int64{"KES": 100, "USD": 100, "IDR": 100, "JPY": 1, "UGX": 1} {
+		if got := minorUnitsPerMajor(currency); got != want {
+			t.Errorf("minorUnitsPerMajor(%s) = %d, want %d", currency, got, want)
+		}
+	}
+}

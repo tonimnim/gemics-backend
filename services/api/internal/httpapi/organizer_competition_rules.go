@@ -41,9 +41,6 @@ func normalizeCompetitionInput(input organizerCompetitionInput, now time.Time) (
 	if draft.Slug == "" {
 		draft.Slug = slugify(draft.Name)
 	}
-	if draft.Currency == "" {
-		draft.Currency = "KES"
-	}
 	if draft.PrizeFunding == "" {
 		draft.PrizeFunding = "none"
 	}
@@ -108,11 +105,10 @@ func applyCompetitionPatch(current competitionDraft, patch organizerCompetitionP
 		changed = true
 	}
 	if patch.Currency != nil {
-		if live {
-			return competitionDraft{}, false, locked("currency")
-		}
+		// The currency follows the countries, so it is only ever restated; the
+		// validator rejects a value that disagrees with them.
 		updated.Currency = strings.ToUpper(strings.TrimSpace(*patch.Currency))
-		changed = true
+		changed = changed || updated.Currency != current.Currency
 	}
 	if patch.PrizeAmountMinor != nil {
 		if live {
@@ -182,6 +178,10 @@ func applyCompetitionPatch(current competitionDraft, patch organizerCompetitionP
 		rulesChanged = !bytes.Equal(rules, current.Rules)
 		updated.Rules = rules
 		changed = changed || rulesChanged
+		if rulesChanged && patch.Currency == nil {
+			// New countries may mean a new currency; the validator derives it.
+			updated.Currency = ""
+		}
 	}
 	if !changed {
 		return competitionDraft{}, false, fault(http.StatusBadRequest, "empty_patch",
@@ -196,6 +196,16 @@ func applyCompetitionPatch(current competitionDraft, patch organizerCompetitionP
 	// organizer is moving must still land in the future.
 	if problem := validateCompetitionDraft(&updated, now, &current); problem != nil {
 		return competitionDraft{}, false, problem
+	}
+	if live && updated.Currency != current.Currency {
+		return competitionDraft{}, false, fault(http.StatusConflict, "field_locked",
+			"These countries would change the currency, which cannot change once registration has opened.")
+	}
+	if updated.Currency != current.Currency && updated.PrizeAmountMinor > 0 && patch.PrizeAmountMinor == nil {
+		// A prize amount means nothing in another currency; carrying the
+		// number across would turn KES 5,000 into USD 5,000.
+		return competitionDraft{}, false, fault(http.StatusBadRequest, "prize_currency_changed",
+			"These countries price the competition in "+updated.Currency+"; restate the prize in "+updated.Currency+".")
 	}
 	return updated, rulesChanged, nil
 }
@@ -253,16 +263,31 @@ func validateCompetitionDraft(draft *competitionDraft, now time.Time, previous *
 	if draft.EntryFeeMinor > 0 {
 		draft.FeePurpose = "administration"
 	}
-	if len(draft.Currency) != 3 || strings.ToUpper(draft.Currency) != draft.Currency {
-		return fault(http.StatusBadRequest, "invalid_currency", "Use a three-letter ISO currency code.")
+	// The currency follows the countries the competition is open to: one
+	// country prices in its own currency, anything wider in USD. A client may
+	// restate it but never choose another.
+	policy, err := parseCompetitionEligibilityRules(draft.Rules)
+	if err != nil {
+		return fault(http.StatusBadRequest, "invalid_rules", err.Error())
 	}
-	if draft.EntryFeeMinor > 0 && draft.Currency != "KES" {
-		// M-Pesa is the only collection rail wired up, so a fee in any other
-		// currency would be uncollectable.
-		return fault(http.StatusBadRequest, "unsupported_currency",
-			"Paid entry is only supported in KES today.")
+	expected := competitionCurrencyFor(policy)
+	if draft.Currency == "" {
+		draft.Currency = expected
 	}
-	if draft.EntryFeeMinor%100 != 0 {
+	if _, supported := supportedCurrencies[draft.Currency]; !supported {
+		return fault(http.StatusBadRequest, "invalid_currency", "Use a supported three-letter currency code.")
+	}
+	if draft.Currency != expected {
+		return fault(http.StatusBadRequest, "currency_mismatch",
+			"A competition open to these countries is priced in "+expected+".")
+	}
+	if draft.EntryFeeMinor > 0 && draft.Currency != paidEntryCurrency {
+		// M-Pesa is the only collection rail wired up, so a fee anywhere but
+		// Kenya would be uncollectable.
+		return fault(http.StatusBadRequest, "paid_entry_kenya_only",
+			"Paid entry uses M-Pesa, so limit the competition to Kenya.")
+	}
+	if draft.EntryFeeMinor%minorUnitsPerMajor(draft.Currency) != 0 {
 		// M-Pesa collects whole shillings, so a fee with cents could never be paid.
 		return fault(http.StatusBadRequest, "invalid_entry_fee",
 			"The entry fee must be a whole number of shillings.")

@@ -106,8 +106,9 @@ print("  1 decided (home claim accepted, away player struck); 2 still queued")
 
 step("A finished cup: October Kickoff")
 c = call("POST", orgs, {"name": "October Kickoff", "description": "Four-player opener.", "gameId": "efootball-mobile",
-                        "format": "single_elimination", "maxEntries": 4, "entryFeeMinor": 0, "currency": "KES",
+                        "format": "single_elimination", "maxEntries": 4, "entryFeeMinor": 0,
                         "prizeAmountMinor": 200000, "prizeFunding": "organizer",
+                        "rules": {"eligibility": {"allowedCountries": ["KE"]}},
                         "registrationOpensAt": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
                         .replace(microsecond=0).isoformat(),
                         "registrationClosesAt": (__import__("datetime").datetime.now(__import__("datetime").timezone.utc)
