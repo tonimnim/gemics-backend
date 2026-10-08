@@ -28,7 +28,7 @@ import {
   type Permission,
 } from '@/stores/auth-store'
 import { api, errorMessage } from '@/lib/api'
-import { dateTime, humanize, money } from '@/lib/format'
+import { dateTime, humanize, usd } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -79,11 +79,10 @@ function Highlights({ data }: { data: Overview }) {
     { value: data.competitions.running, label: 'Running now' },
     data.finance
       ? {
-          value: money(
-            data.finance.collectedMinorLast30Days,
-            data.finance.currency
-          ),
-          label: 'Collected, 30 days',
+          value: usd(data.finance.collectedMinorLast30Days),
+          label: data.finance.unconvertedLast30Days
+            ? `Collected, 30 days · ${data.finance.unconvertedLast30Days} awaiting a rate`
+            : 'Collected, 30 days',
         }
       : { value: data.competitions.draft, label: 'Drafts' },
   ]

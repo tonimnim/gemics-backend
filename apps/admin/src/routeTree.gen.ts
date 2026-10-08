@@ -19,6 +19,7 @@ import { Route as errors503RouteImport } from './routes/(errors)/503'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as AuthenticatedCompetitionsIndexRouteImport } from './routes/_authenticated/competitions/index'
 import { Route as AuthenticatedCompetitionsIdRouteImport } from './routes/_authenticated/competitions/$id'
+import { Route as AuthenticatedFinanceIndexRouteImport } from './routes/_authenticated/finance/index'
 import { Route as AuthenticatedPaymentsIndexRouteImport } from './routes/_authenticated/payments/index'
 import { Route as AuthenticatedPlayersIndexRouteImport } from './routes/_authenticated/players/index'
 import { Route as AuthenticatedRefundsIndexRouteImport } from './routes/_authenticated/refunds/index'
@@ -77,6 +78,12 @@ const AuthenticatedCompetitionsIdRoute =
   AuthenticatedCompetitionsIdRouteImport.update({
     id: '/competitions/$id',
     path: '/competitions/$id',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedFinanceIndexRoute =
+  AuthenticatedFinanceIndexRouteImport.update({
+    id: '/finance/',
+    path: '/finance/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedPaymentsIndexRoute =
@@ -138,6 +145,7 @@ export interface FileRoutesByFullPath {
   '/competitions/$id': typeof AuthenticatedCompetitionsIdRoute
   '/result-reviews/$id': typeof AuthenticatedResultReviewsIdRoute
   '/competitions/': typeof AuthenticatedCompetitionsIndexRoute
+  '/finance/': typeof AuthenticatedFinanceIndexRoute
   '/payments/': typeof AuthenticatedPaymentsIndexRoute
   '/players/': typeof AuthenticatedPlayersIndexRoute
   '/refunds/': typeof AuthenticatedRefundsIndexRoute
@@ -157,6 +165,7 @@ export interface FileRoutesByTo {
   '/competitions/$id': typeof AuthenticatedCompetitionsIdRoute
   '/result-reviews/$id': typeof AuthenticatedResultReviewsIdRoute
   '/competitions': typeof AuthenticatedCompetitionsIndexRoute
+  '/finance': typeof AuthenticatedFinanceIndexRoute
   '/payments': typeof AuthenticatedPaymentsIndexRoute
   '/players': typeof AuthenticatedPlayersIndexRoute
   '/refunds': typeof AuthenticatedRefundsIndexRoute
@@ -178,6 +187,7 @@ export interface FileRoutesById {
   '/_authenticated/competitions/$id': typeof AuthenticatedCompetitionsIdRoute
   '/_authenticated/result-reviews/$id': typeof AuthenticatedResultReviewsIdRoute
   '/_authenticated/competitions/': typeof AuthenticatedCompetitionsIndexRoute
+  '/_authenticated/finance/': typeof AuthenticatedFinanceIndexRoute
   '/_authenticated/payments/': typeof AuthenticatedPaymentsIndexRoute
   '/_authenticated/players/': typeof AuthenticatedPlayersIndexRoute
   '/_authenticated/refunds/': typeof AuthenticatedRefundsIndexRoute
@@ -199,6 +209,7 @@ export interface FileRouteTypes {
     | '/competitions/$id'
     | '/result-reviews/$id'
     | '/competitions/'
+    | '/finance/'
     | '/payments/'
     | '/players/'
     | '/refunds/'
@@ -218,6 +229,7 @@ export interface FileRouteTypes {
     | '/competitions/$id'
     | '/result-reviews/$id'
     | '/competitions'
+    | '/finance'
     | '/payments'
     | '/players'
     | '/refunds'
@@ -238,6 +250,7 @@ export interface FileRouteTypes {
     | '/_authenticated/competitions/$id'
     | '/_authenticated/result-reviews/$id'
     | '/_authenticated/competitions/'
+    | '/_authenticated/finance/'
     | '/_authenticated/payments/'
     | '/_authenticated/players/'
     | '/_authenticated/refunds/'
@@ -329,6 +342,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedCompetitionsIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/finance/': {
+      id: '/_authenticated/finance/'
+      path: '/finance'
+      fullPath: '/finance/'
+      preLoaderRoute: typeof AuthenticatedFinanceIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/payments/': {
       id: '/_authenticated/payments/'
       path: '/payments'
@@ -393,6 +413,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedCompetitionsIdRoute: typeof AuthenticatedCompetitionsIdRoute
   AuthenticatedResultReviewsIdRoute: typeof AuthenticatedResultReviewsIdRoute
   AuthenticatedCompetitionsIndexRoute: typeof AuthenticatedCompetitionsIndexRoute
+  AuthenticatedFinanceIndexRoute: typeof AuthenticatedFinanceIndexRoute
   AuthenticatedPaymentsIndexRoute: typeof AuthenticatedPaymentsIndexRoute
   AuthenticatedPlayersIndexRoute: typeof AuthenticatedPlayersIndexRoute
   AuthenticatedRefundsIndexRoute: typeof AuthenticatedRefundsIndexRoute
@@ -407,6 +428,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedCompetitionsIdRoute: AuthenticatedCompetitionsIdRoute,
   AuthenticatedResultReviewsIdRoute: AuthenticatedResultReviewsIdRoute,
   AuthenticatedCompetitionsIndexRoute: AuthenticatedCompetitionsIndexRoute,
+  AuthenticatedFinanceIndexRoute: AuthenticatedFinanceIndexRoute,
   AuthenticatedPaymentsIndexRoute: AuthenticatedPaymentsIndexRoute,
   AuthenticatedPlayersIndexRoute: AuthenticatedPlayersIndexRoute,
   AuthenticatedRefundsIndexRoute: AuthenticatedRefundsIndexRoute,

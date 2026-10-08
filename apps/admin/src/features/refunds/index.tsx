@@ -12,7 +12,7 @@ import {
 import { toast } from 'sonner'
 import { useCan } from '@/stores/auth-store'
 import { api, errorMessage } from '@/lib/api'
-import { ago, dateTime, initials, money } from '@/lib/format'
+import { ago, dateTime, initials, money, usd } from '@/lib/format'
 import { usePagedList } from '@/lib/paged'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -70,10 +70,13 @@ type Refund = {
   competitionName: string
 }
 
+/** A stage's count and USD total; unconverted refunds have no rate yet. */
+type StageSummary = { count: number; amountMinor: number; unconverted: number }
+
 type Summary = {
-  action: { count: number; amountMinor: number }
-  processing: { count: number; amountMinor: number }
-  refundedLast30Days: { count: number; amountMinor: number }
+  action: StageSummary
+  processing: StageSummary
+  refundedLast30Days: StageSummary
   currency: string
 }
 
@@ -230,10 +233,15 @@ function StageCards({ summary }: { summary?: Summary }) {
               </span>
               {value && value.amountMinor > 0 && (
                 <span className='text-sm text-muted-foreground'>
-                  {money(value.amountMinor)}
+                  {usd(value.amountMinor)}
                 </span>
               )}
             </div>
+            {value && value.unconverted > 0 && (
+              <div className='mt-1 text-xs text-[#c4421d]'>
+                {value.unconverted} awaiting an exchange rate
+              </div>
+            )}
           </div>
         )
       })}

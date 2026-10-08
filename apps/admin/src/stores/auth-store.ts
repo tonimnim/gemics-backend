@@ -14,6 +14,7 @@ export type Permission =
   | 'competition.manage'
   | 'staff.manage'
   | 'finance.view'
+  | 'finance.manage'
   | 'player.view'
   | 'player.suspend'
 

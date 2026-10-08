@@ -20,6 +20,8 @@ export type Overview = {
     refunds: number
     succeededLast30Days: number
     collectedMinorLast30Days: number
+    /** Payments still waiting for an exchange rate, not in the total. */
+    unconvertedLast30Days: number
     currency: string
   } | null
 }

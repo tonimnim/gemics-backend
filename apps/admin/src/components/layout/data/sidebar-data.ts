@@ -1,6 +1,7 @@
 import {
   BadgeCheck,
   Banknote,
+  ChartNoAxesCombined,
   Gavel,
   LayoutDashboard,
   ReceiptText,
@@ -78,6 +79,12 @@ const navigation: { title: string; items: GatedLink[] }[] = [
   {
     title: 'Payments',
     items: [
+      {
+        title: 'Finance',
+        url: '/finance',
+        icon: ChartNoAxesCombined,
+        permission: 'finance.view',
+      },
       {
         title: 'Payment reviews',
         url: '/payments',
