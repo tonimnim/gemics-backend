@@ -208,6 +208,15 @@ services:
       SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-false}
       FX_RATES_URL: ${FX_RATES_URL:-https://api.frankfurter.dev/v2/rates?base=USD}
       FX_REFRESH_INTERVAL: ${FX_REFRESH_INTERVAL:-6h}
+      VISION_URL: ${VISION_URL:-}
+      VISION_TOKEN: ${VISION_TOKEN:-}
+      VISION_TIMEOUT: ${VISION_TIMEOUT:-30s}
+      VISION_CONCURRENCY: ${VISION_CONCURRENCY:-2}
+      VISION_AUTO_DECIDE: ${VISION_AUTO_DECIDE:-false}
+      VISION_AUTO_MIN_CONFIDENCE: ${VISION_AUTO_MIN_CONFIDENCE:-0.9}
+      VISION_WORKER: ${VISION_WORKER:-true}
+      VISION_TRAINING_TOKEN: ${VISION_TRAINING_TOKEN:-}
+      VISION_TRAINING_CIDRS: ${VISION_TRAINING_CIDRS:-}
       MPESA_ENVIRONMENT: ${MPESA_ENVIRONMENT:-disabled}
       MPESA_CONSUMER_KEY: ${MPESA_CONSUMER_KEY:-}
       MPESA_CONSUMER_SECRET: ${MPESA_CONSUMER_SECRET:-}
@@ -326,6 +335,66 @@ services:
       timeout: 3s
       retries: 5
     stop_grace_period: 40s
+
+  # Screenshot reader (docs/screenshot-reader.md): the team's Python service in
+  # its own repository (tonitsOCR, on the EasyOCR fork), which reads the
+  # eFootball Full Time screen. This stub only wires it in. It is off by
+  # default. Start it with
+  #   docker compose --env-file .env.docker --profile vision up -d --build
+  # and point the API at it with VISION_URL=http://vision:8000 and the same
+  # VISION_TOKEN. Only the API calls it, so it publishes no port. The build
+  # needs a service Dockerfile that runs the HTTP server (POST /v1/read,
+  # GET /healthz on port 8000); set VISION_IMAGE to use a prebuilt image.
+  vision:
+    profiles: ["vision"]
+    image: ${VISION_IMAGE:-tonits-vision:local}
+    build:
+      context: ${VISION_BUILD_CONTEXT:-../tonitsOCR/EasyOCR}
+      dockerfile: ${VISION_DOCKERFILE:-tonits_vision/Dockerfile}
+    restart: unless-stopped
+    environment:
+      PORT: "8000"
+      # Requests from the API carry this as "Authorization: Bearer <token>".
+      VISION_TOKEN: ${VISION_TOKEN:-}
+      # The reader's own settings (see tonits_vision/reader.py).
+      VISION_RECOGNIZER: ${VISION_RECOGNIZER:-english_g2}
+      VISION_MODEL_DIR: ${VISION_MODEL_DIR:-/models}
+      VISION_USER_NETWORK_DIR: ${VISION_USER_NETWORK_DIR:-/models}
+      # Models are baked into the image; never download at runtime.
+      VISION_DOWNLOAD_MODELS: "0"
+      # Requests waiting beyond this get 503 busy, which the API retries in
+      # seconds; this is the reader's back-pressure.
+      VISION_MAX_QUEUE: ${VISION_MAX_QUEUE:-4}
+      # Optional vision-LLM second opinion for low-confidence reads. Empty
+      # disables it, so the reader never pays for an outside model.
+      VISION_FALLBACK_API_KEY: ${VISION_FALLBACK_API_KEY:-}
+      VISION_FALLBACK_MODEL: ${VISION_FALLBACK_MODEL:-claude-haiku-4-5-20251001}
+      VISION_FALLBACK_BELOW: ${VISION_FALLBACK_BELOW:-0.6}
+    expose:
+      - "8000"
+    # One reader process reads one image at a time on CPU (1-4 s). Scale out
+    # with replicas, not threads.
+    mem_limit: ${VISION_MEM_LIMIT:-2g}
+    cpus: ${VISION_CPUS:-2}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status == 200 else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # Loading the OCR models takes a while on first start.
+      start_period: 60s
+    stop_grace_period: 20s
 
   web:
     build:
