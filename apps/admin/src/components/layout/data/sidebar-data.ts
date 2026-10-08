@@ -7,6 +7,7 @@ import {
   ShieldAlert,
   Trophy,
   UserCog,
+  Users,
 } from 'lucide-react'
 import { usePermissions, type Permission } from '@/stores/auth-store'
 import { useOverview } from '@/features/overview/api'
@@ -40,6 +41,12 @@ const navigation: { title: string; items: GatedLink[] }[] = [
         url: '/competitions',
         icon: Trophy,
         permission: 'competition.manage',
+      },
+      {
+        title: 'Players',
+        url: '/players',
+        icon: Users,
+        permission: 'player.view',
       },
     ],
   },

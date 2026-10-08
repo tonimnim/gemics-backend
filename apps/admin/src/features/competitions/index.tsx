@@ -4,6 +4,7 @@ import { Link } from '@tanstack/react-router'
 import { Loader2, MoreHorizontal, Plus, Shuffle } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
+import { allowedCountries, countryFlag, countryName } from '@/lib/countries'
 import { dateTime, humanize, money } from '@/lib/format'
 import { usePagedList } from '@/lib/paged'
 import { Button } from '@/components/ui/button'
@@ -52,7 +53,6 @@ import {
   type CompetitionStatus,
   type DrawRequest,
 } from './api'
-import { allowedCountries, countryFlag, countryName } from './countries'
 import { CreateCompetitionDialog } from './create-dialog'
 
 /** What staff call each lifecycle step. */

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Check, Globe2, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { countryFlag, countryName, scopeCountries } from '@/lib/countries'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,7 +24,6 @@ import {
 } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
 import { createCompetition, type CompetitionFormat } from './api'
-import { countryFlag, countryName, scopeCountries } from './countries'
 
 const empty = {
   name: '',

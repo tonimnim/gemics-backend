@@ -20,6 +20,7 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedCompetitionsIndexRouteImport } from './routes/_authenticated/competitions/index'
 import { Route as AuthenticatedCompetitionsIdRouteImport } from './routes/_authenticated/competitions/$id'
 import { Route as AuthenticatedPaymentsIndexRouteImport } from './routes/_authenticated/payments/index'
+import { Route as AuthenticatedPlayersIndexRouteImport } from './routes/_authenticated/players/index'
 import { Route as AuthenticatedRefundsIndexRouteImport } from './routes/_authenticated/refunds/index'
 import { Route as AuthenticatedResultReviewsIndexRouteImport } from './routes/_authenticated/result-reviews/index'
 import { Route as AuthenticatedResultReviewsIdRouteImport } from './routes/_authenticated/result-reviews/$id'
@@ -84,6 +85,12 @@ const AuthenticatedPaymentsIndexRoute =
     path: '/payments/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedPlayersIndexRoute =
+  AuthenticatedPlayersIndexRouteImport.update({
+    id: '/players/',
+    path: '/players/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedRefundsIndexRoute =
   AuthenticatedRefundsIndexRouteImport.update({
     id: '/refunds/',
@@ -132,6 +139,7 @@ export interface FileRoutesByFullPath {
   '/result-reviews/$id': typeof AuthenticatedResultReviewsIdRoute
   '/competitions/': typeof AuthenticatedCompetitionsIndexRoute
   '/payments/': typeof AuthenticatedPaymentsIndexRoute
+  '/players/': typeof AuthenticatedPlayersIndexRoute
   '/refunds/': typeof AuthenticatedRefundsIndexRoute
   '/result-reviews/': typeof AuthenticatedResultReviewsIndexRoute
   '/staff/': typeof AuthenticatedStaffIndexRoute
@@ -150,6 +158,7 @@ export interface FileRoutesByTo {
   '/result-reviews/$id': typeof AuthenticatedResultReviewsIdRoute
   '/competitions': typeof AuthenticatedCompetitionsIndexRoute
   '/payments': typeof AuthenticatedPaymentsIndexRoute
+  '/players': typeof AuthenticatedPlayersIndexRoute
   '/refunds': typeof AuthenticatedRefundsIndexRoute
   '/result-reviews': typeof AuthenticatedResultReviewsIndexRoute
   '/staff': typeof AuthenticatedStaffIndexRoute
@@ -170,6 +179,7 @@ export interface FileRoutesById {
   '/_authenticated/result-reviews/$id': typeof AuthenticatedResultReviewsIdRoute
   '/_authenticated/competitions/': typeof AuthenticatedCompetitionsIndexRoute
   '/_authenticated/payments/': typeof AuthenticatedPaymentsIndexRoute
+  '/_authenticated/players/': typeof AuthenticatedPlayersIndexRoute
   '/_authenticated/refunds/': typeof AuthenticatedRefundsIndexRoute
   '/_authenticated/result-reviews/': typeof AuthenticatedResultReviewsIndexRoute
   '/_authenticated/staff/': typeof AuthenticatedStaffIndexRoute
@@ -190,6 +200,7 @@ export interface FileRouteTypes {
     | '/result-reviews/$id'
     | '/competitions/'
     | '/payments/'
+    | '/players/'
     | '/refunds/'
     | '/result-reviews/'
     | '/staff/'
@@ -208,6 +219,7 @@ export interface FileRouteTypes {
     | '/result-reviews/$id'
     | '/competitions'
     | '/payments'
+    | '/players'
     | '/refunds'
     | '/result-reviews'
     | '/staff'
@@ -227,6 +239,7 @@ export interface FileRouteTypes {
     | '/_authenticated/result-reviews/$id'
     | '/_authenticated/competitions/'
     | '/_authenticated/payments/'
+    | '/_authenticated/players/'
     | '/_authenticated/refunds/'
     | '/_authenticated/result-reviews/'
     | '/_authenticated/staff/'
@@ -323,6 +336,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedPaymentsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/players/': {
+      id: '/_authenticated/players/'
+      path: '/players'
+      fullPath: '/players/'
+      preLoaderRoute: typeof AuthenticatedPlayersIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/refunds/': {
       id: '/_authenticated/refunds/'
       path: '/refunds'
@@ -374,6 +394,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedResultReviewsIdRoute: typeof AuthenticatedResultReviewsIdRoute
   AuthenticatedCompetitionsIndexRoute: typeof AuthenticatedCompetitionsIndexRoute
   AuthenticatedPaymentsIndexRoute: typeof AuthenticatedPaymentsIndexRoute
+  AuthenticatedPlayersIndexRoute: typeof AuthenticatedPlayersIndexRoute
   AuthenticatedRefundsIndexRoute: typeof AuthenticatedRefundsIndexRoute
   AuthenticatedResultReviewsIndexRoute: typeof AuthenticatedResultReviewsIndexRoute
   AuthenticatedStaffIndexRoute: typeof AuthenticatedStaffIndexRoute
@@ -387,6 +408,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedResultReviewsIdRoute: AuthenticatedResultReviewsIdRoute,
   AuthenticatedCompetitionsIndexRoute: AuthenticatedCompetitionsIndexRoute,
   AuthenticatedPaymentsIndexRoute: AuthenticatedPaymentsIndexRoute,
+  AuthenticatedPlayersIndexRoute: AuthenticatedPlayersIndexRoute,
   AuthenticatedRefundsIndexRoute: AuthenticatedRefundsIndexRoute,
   AuthenticatedResultReviewsIndexRoute: AuthenticatedResultReviewsIndexRoute,
   AuthenticatedStaffIndexRoute: AuthenticatedStaffIndexRoute,

@@ -19,6 +19,7 @@ const tones: Record<string, string> = {
   decided: 'good',
   completed: 'good',
   active: 'good',
+  verified: 'good',
   registration_open: 'good',
   running: 'good',
   check_in: 'info',
@@ -27,10 +28,13 @@ const tones: Record<string, string> = {
   rejected: 'bad',
   failed: 'bad',
   cancelled: 'bad',
+  suspended: 'bad',
   revoked: 'muted',
   withdrawn: 'muted',
   closed: 'muted',
   draft: 'muted',
+  deleted: 'muted',
+  unverified: 'muted',
 }
 
 const classes: Record<string, string> = {
