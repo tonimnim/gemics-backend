@@ -342,38 +342,44 @@ services:
   # default. Start it with
   #   docker compose --env-file .env.docker --profile vision up -d --build
   # and point the API at it with VISION_URL=http://vision:8000 and the same
-  # VISION_TOKEN. Only the API calls it, so it publishes no port. The build
-  # needs a service Dockerfile that runs the HTTP server (POST /v1/read,
-  # GET /healthz on port 8000); set VISION_IMAGE to use a prebuilt image.
+  # VISION_TOKEN. Only the API calls it, so it publishes no port. The image is
+  # tonits_vision/Dockerfile (POST /v1/read, GET /healthz on port 8000); set
+  # VISION_IMAGE to use a prebuilt one.
   vision:
     profiles: ["vision"]
     image: ${VISION_IMAGE:-tonits-vision:local}
     build:
       context: ${VISION_BUILD_CONTEXT:-../tonitsOCR/EasyOCR}
       dockerfile: ${VISION_DOCKERFILE:-tonits_vision/Dockerfile}
+      args:
+        # The recognizer the image carries and serves (english_g2, or a
+        # fine-tuned one exported to tonits_vision/models). The image owns
+        # its model settings, so none are overridden here.
+        RECOGNIZER: ${VISION_RECOGNIZER:-english_g2}
     restart: unless-stopped
     environment:
-      PORT: "8000"
       # Requests from the API carry this as "Authorization: Bearer <token>".
       VISION_TOKEN: ${VISION_TOKEN:-}
-      # The reader's own settings (see tonits_vision/reader.py).
-      VISION_RECOGNIZER: ${VISION_RECOGNIZER:-english_g2}
-      VISION_MODEL_DIR: ${VISION_MODEL_DIR:-/models}
-      VISION_USER_NETWORK_DIR: ${VISION_USER_NETWORK_DIR:-/models}
-      # Models are baked into the image; never download at runtime.
-      VISION_DOWNLOAD_MODELS: "0"
-      # Requests waiting beyond this get 503 busy, which the API retries in
-      # seconds; this is the reader's back-pressure.
-      VISION_MAX_QUEUE: ${VISION_MAX_QUEUE:-4}
+      # Readings that may wait behind the one in progress; more get 503 busy,
+      # which the API retries in seconds. Keep the API's VISION_TIMEOUT above
+      # both (1 + this) x the slowest read and VISION_FALLBACK_DEADLINE.
+      VISION_MAX_QUEUE: ${VISION_MAX_QUEUE:-2}
       # Optional vision-LLM second opinion for low-confidence reads. Empty
-      # disables it, so the reader never pays for an outside model.
+      # disables it, so the reader never pays for an outside model. It can
+      # confirm or doubt a reading, never change it. The deadline counts
+      # from the request's arrival (queue wait and OCR included), so it must
+      # leave room for both. An agreement lifts confidence only to
+      # VISION_FALLBACK_AGREED_CONFIDENCE; keep that below the API's
+      # VISION_AUTO_MIN_CONFIDENCE so the LLM's word never settles a dispute.
       VISION_FALLBACK_API_KEY: ${VISION_FALLBACK_API_KEY:-}
       VISION_FALLBACK_MODEL: ${VISION_FALLBACK_MODEL:-claude-haiku-4-5-20251001}
       VISION_FALLBACK_BELOW: ${VISION_FALLBACK_BELOW:-0.6}
+      VISION_FALLBACK_DEADLINE: ${VISION_FALLBACK_DEADLINE:-90}
+      VISION_FALLBACK_AGREED_CONFIDENCE: ${VISION_FALLBACK_AGREED_CONFIDENCE:-0.85}
     expose:
       - "8000"
-    # One reader process reads one image at a time on CPU (1-4 s). Scale out
-    # with replicas, not threads.
+    # One reader process reads one image at a time on CPU, with as many torch
+    # threads as the CPU limit allows. Scale out with replicas, not threads.
     mem_limit: ${VISION_MEM_LIMIT:-2g}
     cpus: ${VISION_CPUS:-2}
     read_only: true
@@ -394,7 +400,8 @@ services:
       retries: 5
       # Loading the OCR models takes a while on first start.
       start_period: 60s
-    stop_grace_period: 20s
+    # Readings already queued finish before it stops.
+    stop_grace_period: 60s
 
   web:
     build:
