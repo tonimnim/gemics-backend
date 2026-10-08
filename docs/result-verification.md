@@ -221,10 +221,13 @@ stored for an idempotent retry holds only the caller's own view.
 ## Automated decisions later
 
 The decision logic has one entry point that takes the decider as a parameter,
-so an automated decider can be added later without a second code path. It is
-not built. When it is, it will be recorded as a `system` decider with its own
-reference, it will not be able to set a corrected score, and it will never
-record a strike: a ban always needs a human decision.
+so an automated decider uses the same code path as staff. The screenshot
+reader is the first one (see [screenshot reader](screenshot-reader.md)). It
+is recorded as a `system` decider with its own reference
+(`screenshot-reader:<review id>`), it cannot set a corrected score, and it
+never records a strike: a ban always needs a human decision. It decides only
+when both players' own screenshots agree with each other and with exactly one
+claim, and it is off until `VISION_AUTO_DECIDE=true`.
 
 ## Evidence is a signal, not proof
 
@@ -232,8 +235,10 @@ Screenshots can be edited. The blind dual report is the main control: an
 invented score only survives if the opponent invents the same one. Further
 layers worth adding:
 
-- OCR to prefill and compare scores, with the image kept for human review;
-- perceptual hashes to detect a reused screenshot;
+- OCR to read and compare scores, with the image kept for human review (built:
+  the screenshot reader);
+- perceptual hashes and stats fingerprints to detect a reused screenshot
+  (built);
 - anomaly flags for repeated collusion, impossible schedules and unusual score
   patterns;
 - monitored screen sharing or recording for high-value finals.
