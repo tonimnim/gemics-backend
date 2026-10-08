@@ -10,19 +10,20 @@ func TestPlatformRolePermissionsAreSeparated(t *testing.T) {
 	every := []platformPermission{
 		platformOverviewView, platformRefundView, platformRefundManage, platformVerificationManage,
 		platformPaymentReviewManage, platformResultReviewManage, platformPlayerStrikeRevoke,
-		platformCompetitionManage, platformStaffManage, platformFinanceView,
+		platformCompetitionManage, platformStaffManage, platformFinanceView, platformPlayerView, platformPlayerSuspend,
 	}
 	cases := []struct {
 		role string
 		want []platformPermission
 	}{
 		{role: "admin", want: every},
-		// Every staff role runs competitions; none sees money.
-		{role: "support", want: []platformPermission{platformOverviewView, platformCompetitionManage}},
+		// Every staff role runs competitions and looks players up; none sees money.
+		{role: "support", want: []platformPermission{platformOverviewView, platformCompetitionManage, platformPlayerView}},
 		{role: "reviewer", want: []platformPermission{platformOverviewView, platformCompetitionManage,
-			platformVerificationManage, platformResultReviewManage}},
+			platformPlayerView, platformVerificationManage, platformResultReviewManage}},
 		{role: "operator", want: []platformPermission{platformOverviewView, platformCompetitionManage,
-			platformVerificationManage, platformResultReviewManage, platformPlayerStrikeRevoke}},
+			platformPlayerView, platformVerificationManage, platformResultReviewManage, platformPlayerStrikeRevoke,
+			platformPlayerSuspend}},
 		// Organization roles and unknown values never reach a platform queue.
 		{role: "owner"},
 		{role: "referee"},

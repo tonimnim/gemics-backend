@@ -22,6 +22,8 @@ const (
 	platformPlayerStrikeRevoke  platformPermission = "player_strike.revoke"
 	platformCompetitionManage   platformPermission = "competition.manage"
 	platformStaffManage         platformPermission = "staff.manage"
+	platformPlayerView          platformPermission = "player.view"
+	platformPlayerSuspend       platformPermission = "player.suspend"
 	// platformFinanceView covers revenue figures. Money queues have their own
 	// permissions, which only admins hold too.
 	platformFinanceView platformPermission = "finance.view"
@@ -37,17 +39,19 @@ var platformRoles = []string{"support", "reviewer", "operator", "admin"}
 
 // platformRolePermissions is the whole staff permission matrix. Every staff
 // role creates and runs competitions, which includes seeing each
-// competition's registrations, and sees the overview; none sees money.
-// Admins hold every permission: finance, payment reviews, refund decisions
-// and granting staff roles.
+// competition's registrations, sees the overview and looks players up; none
+// sees money. Operators and admins suspend players. Admins hold every
+// permission: finance, payment reviews, refund decisions and granting staff
+// roles.
 var platformRolePermissions = map[string][]platformPermission{
-	"support":  {platformOverviewView, platformCompetitionManage},
-	"reviewer": {platformOverviewView, platformCompetitionManage, platformVerificationManage, platformResultReviewManage},
-	"operator": {platformOverviewView, platformCompetitionManage, platformVerificationManage,
-		platformResultReviewManage, platformPlayerStrikeRevoke},
+	"support": {platformOverviewView, platformCompetitionManage, platformPlayerView},
+	"reviewer": {platformOverviewView, platformCompetitionManage, platformPlayerView, platformVerificationManage,
+		platformResultReviewManage},
+	"operator": {platformOverviewView, platformCompetitionManage, platformPlayerView, platformVerificationManage,
+		platformResultReviewManage, platformPlayerStrikeRevoke, platformPlayerSuspend},
 	"admin": {platformOverviewView, platformRefundView, platformRefundManage, platformVerificationManage,
 		platformPaymentReviewManage, platformResultReviewManage, platformPlayerStrikeRevoke,
-		platformCompetitionManage, platformStaffManage, platformFinanceView},
+		platformCompetitionManage, platformStaffManage, platformFinanceView, platformPlayerView, platformPlayerSuspend},
 }
 
 func platformRoleCan(role string, permission platformPermission) bool {

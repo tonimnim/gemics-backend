@@ -539,7 +539,7 @@ func TestMatchRoomQueryReadsTheMatchGameAccountAndPublicAvatar(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := []string{"account_handlers.go", "account_contact_handlers.go", "account_security_handlers.go",
-		"admin_staff_handlers.go",
+		"admin_player_handlers.go", "admin_staff_handlers.go",
 		"game_account_verification_handlers.go", "match_handlers.go", "registration_handlers.go"}
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") || slices.Contains(allowed, file) {
