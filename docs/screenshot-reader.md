@@ -358,7 +358,10 @@ a day, the only cost is that staff decide without readings.
 - a replica dies mid-read: the lease expires and another replica reads it;
 - a late answer from an expired claim: dropped;
 - a decision lost to a restart: the next sweep re-evaluates the review;
-- a bad image: failed for good, staff decide;
+- a bad image: failed for good, staff decide. Go never sends an image no
+  screen can produce (shorter side under 240 px, or one side more than 4 times
+  the other): the reader scales every image to one height, so a thin strip
+  would exhaust its memory and crash it on every retry;
 - reading turned off: waiting screenshots aren't shown as "reading", and
   ones older than 14 days are closed when it's turned back on.
 

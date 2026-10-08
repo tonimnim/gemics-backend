@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg" // screenshot geometry
+	_ "image/png"  // screenshot geometry
 	"io"
 	"math"
 	"net/http"
@@ -305,6 +308,31 @@ func screenshotPlausibility(reading screenshotReading) []string {
 		}
 	}
 	return failed
+}
+
+// A phone or tablet screenshot is at most about 2.4 times as wide as it is
+// tall, and at least a few hundred pixels on its short side.
+const (
+	screenshotMinSide   = 240
+	screenshotMaxAspect = 4
+)
+
+// screenshotGeometryProblem refuses images that can't be a screenshot of the
+// Full Time screen before they reach the reader. The reader scales every image
+// to one height, so a thin strip (8192x10) would become a frame hundreds of
+// thousands of pixels wide and exhaust its memory, every time it is retried.
+// Bytes whose header doesn't decode are left to the reader, which refuses
+// them itself.
+func screenshotGeometryProblem(data []byte) string {
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return ""
+	}
+	short, long := min(config.Width, config.Height), max(config.Width, config.Height)
+	if short < screenshotMinSide || long > screenshotMaxAspect*short {
+		return fmt.Sprintf("Not a full screenshot (%dx%d).", config.Width, config.Height)
+	}
+	return ""
 }
 
 // screenshotStatsFingerprint identifies a screen by its numbers. Two matches

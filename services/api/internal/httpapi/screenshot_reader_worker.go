@@ -187,6 +187,9 @@ func (s *Server) readScreenshot(ctx context.Context, client visionClient, store 
 		return s.failScreenshotReading(ctx, job, &visionError{Retryable: !errors.Is(err, storage.ErrNotFound) &&
 			!errors.Is(err, storage.ErrObjectTooLarge), Message: "screenshot download failed"})
 	}
+	if problem := screenshotGeometryProblem(image); problem != "" {
+		return s.failScreenshotReading(ctx, job, &visionError{Message: problem})
+	}
 	reading, err := client.read(ctx, image, job.MediaType, job.EvidenceID, screenshotDeciderPrefix+job.EvidenceID)
 	if err != nil {
 		var readerErr *visionError

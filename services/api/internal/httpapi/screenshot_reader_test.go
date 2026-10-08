@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +72,31 @@ func TestScreenshotPlausibilityAcceptsRealScreensAndCatchesEditedScores(t *testi
 	failed := screenshotPlausibility(barcelona)
 	if !slices.Equal(failed, []string{"goals_and_saves_exceed_shots_on_target"}) || hasBlockingFlag(failed) {
 		t.Fatalf("a genuine screen was blocked: %v", failed)
+	}
+}
+
+func TestScreenshotGeometryRefusesShapesNoScreenCanHave(t *testing.T) {
+	encode := func(width, height int) []byte {
+		var buffer bytes.Buffer
+		if err := png.Encode(&buffer, image.NewGray(image.Rect(0, 0, width, height))); err != nil {
+			t.Fatal(err)
+		}
+		return buffer.Bytes()
+	}
+	for _, size := range [][2]int{{1600, 720}, {2400, 1080}, {720, 1600}, {1024, 768}, {960, 240}} {
+		if problem := screenshotGeometryProblem(encode(size[0], size[1])); problem != "" {
+			t.Errorf("%v refused: %s", size, problem)
+		}
+	}
+	// A thin strip would be scaled into a frame hundreds of thousands of
+	// pixels wide; a tiny image or a long banner crop isn't the screen either.
+	for _, size := range [][2]int{{8192, 10}, {10, 8192}, {200, 120}, {2000, 400}} {
+		if problem := screenshotGeometryProblem(encode(size[0], size[1])); problem == "" {
+			t.Errorf("%v accepted", size)
+		}
+	}
+	if problem := screenshotGeometryProblem([]byte("not an image")); problem != "" {
+		t.Errorf("undecodable bytes refused here instead of by the reader: %s", problem)
 	}
 }
 
