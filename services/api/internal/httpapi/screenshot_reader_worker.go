@@ -113,8 +113,8 @@ func (s *Server) screenshotReaderTick(ctx context.Context, client visionClient, 
 	}
 	if healthy {
 		// Claim only as many screenshots as can be read at once, and keep
-		// going while every slot was filled.
-		for ctx.Err() == nil && s.readDueScreenshots(ctx, client, store) == max(1, s.config.VisionConcurrency) {
+		// going while every slot was filled and answered.
+		for ctx.Err() == nil && s.readDueScreenshots(ctx, client, store) {
 		}
 	}
 	if s.config.VisionAutoDecide {
@@ -132,8 +132,11 @@ type screenshotJob struct {
 }
 
 // readDueScreenshots claims up to one screenshot per free slot and reads them
-// all at once, returning how many it claimed.
-func (s *Server) readDueScreenshots(ctx context.Context, client visionClient, store objectReader) int {
+// all at once. It reports whether to claim more: only when every slot was
+// filled and every screenshot got a final answer. A busy or restarting reader
+// fails each claim in milliseconds, so draining on would walk the whole
+// backlog past the health check; the next tick asks /healthz first.
+func (s *Server) readDueScreenshots(ctx context.Context, client visionClient, store objectReader) bool {
 	slots := max(1, s.config.VisionConcurrency)
 	lease := s.config.VisionTimeout + time.Minute
 	rows, err := s.db.Writer.Query(ctx, `WITH due AS (
@@ -150,7 +153,7 @@ func (s *Server) readDueScreenshots(ctx context.Context, client visionClient, st
 		if ctx.Err() == nil {
 			s.logger.Warn("claim screenshots to read", "error", err)
 		}
-		return 0
+		return false
 	}
 	jobs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (screenshotJob, error) {
 		var job screenshotJob
@@ -159,26 +162,30 @@ func (s *Server) readDueScreenshots(ctx context.Context, client visionClient, st
 	})
 	if err != nil {
 		s.logger.Warn("claim screenshots to read", "error", err)
-		return 0
+		return false
 	}
 	var wait sync.WaitGroup
+	var answered atomic.Int64
 	for _, job := range jobs {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			s.readScreenshot(ctx, client, store, job)
+			if s.readScreenshot(ctx, client, store, job) {
+				answered.Add(1)
+			}
 		}()
 	}
 	wait.Wait()
-	return len(jobs)
+	return len(jobs) == slots && answered.Load() == int64(slots)
 }
 
-func (s *Server) readScreenshot(ctx context.Context, client visionClient, store objectReader, job screenshotJob) {
+// readScreenshot reads one claimed screenshot. It reports whether the
+// screenshot got a final answer: a reading, or a failure for good.
+func (s *Server) readScreenshot(ctx context.Context, client visionClient, store objectReader, job screenshotJob) bool {
 	image, err := store.Read(ctx, job.ObjectKey, screenshotReadMaxBytes)
 	if err != nil {
-		s.failScreenshotReading(ctx, job, &visionError{Retryable: !errors.Is(err, storage.ErrNotFound) &&
+		return s.failScreenshotReading(ctx, job, &visionError{Retryable: !errors.Is(err, storage.ErrNotFound) &&
 			!errors.Is(err, storage.ErrObjectTooLarge), Message: "screenshot download failed"})
-		return
 	}
 	reading, err := client.read(ctx, image, job.MediaType, job.EvidenceID, screenshotDeciderPrefix+job.EvidenceID)
 	if err != nil {
@@ -186,8 +193,7 @@ func (s *Server) readScreenshot(ctx context.Context, client visionClient, store 
 		if !errors.As(err, &readerErr) {
 			readerErr = &visionError{Retryable: true, Message: "reader failed"}
 		}
-		s.failScreenshotReading(ctx, job, readerErr)
-		return
+		return s.failScreenshotReading(ctx, job, readerErr)
 	}
 	stored, err := s.storeScreenshotReading(ctx, job, reading)
 	if err != nil {
@@ -196,18 +202,18 @@ func (s *Server) readScreenshot(ctx context.Context, client visionClient, store 
 		var pgErr *pgconn.PgError
 		deterministic := errors.As(err, &pgErr) && (strings.HasPrefix(pgErr.Code, "22") || strings.HasPrefix(pgErr.Code, "23"))
 		s.logger.Warn("store screenshot reading", "evidence_id", job.EvidenceID, "error", err)
-		s.failScreenshotReading(ctx, job, &visionError{Retryable: !deterministic, Message: "reading could not be stored"})
-		return
+		return s.failScreenshotReading(ctx, job, &visionError{Retryable: !deterministic, Message: "reading could not be stored"})
 	}
 	if stored && s.config.VisionAutoDecide {
 		s.autoDecideFromScreenshots(ctx, job.MatchID)
 	}
+	return true
 }
 
 // failScreenshotReading gives up on an image the reader can never read, and
 // waits out a reader outage with backoff for up to about a day. A failed
-// reading leaves the review with staff.
-func (s *Server) failScreenshotReading(ctx context.Context, job screenshotJob, readerErr *visionError) {
+// reading leaves the review with staff. It reports whether it gave up.
+func (s *Server) failScreenshotReading(ctx context.Context, job screenshotJob, readerErr *visionError) bool {
 	message := truncateRunes(readerErr.Message, 500)
 	if readerErr.Busy {
 		// Shed load is not an outage: try again in seconds, spread out.
@@ -217,7 +223,7 @@ func (s *Server) failScreenshotReading(ctx context.Context, job screenshotJob, r
 			WHERE evidence_id=$1 AND claim_token=$2::uuid`, job.EvidenceID, job.Token, message, delay.Seconds()); err != nil {
 			s.logger.Warn("reschedule screenshot", "evidence_id", job.EvidenceID, "error", err)
 		}
-		return
+		return false
 	}
 	if !readerErr.Retryable || job.Outages+1 >= screenshotMaxOutageRetries {
 		if _, err := s.db.Writer.Exec(ctx, `UPDATE screenshot_readings SET status='failed',last_error=$3,
@@ -226,7 +232,7 @@ func (s *Server) failScreenshotReading(ctx context.Context, job screenshotJob, r
 			s.logger.Warn("record screenshot failure", "evidence_id", job.EvidenceID, "error", err)
 		}
 		s.logger.Info("screenshot unreadable", "evidence_id", job.EvidenceID, "reason", message)
-		return
+		return true
 	}
 	backoff := min(30*time.Second<<min(job.Outages, 10), 30*time.Minute)
 	if _, err := s.db.Writer.Exec(ctx, `UPDATE screenshot_readings SET last_error=$3,outage_retries=outage_retries+1,
@@ -234,6 +240,7 @@ func (s *Server) failScreenshotReading(ctx context.Context, job screenshotJob, r
 		WHERE evidence_id=$1 AND claim_token=$2::uuid`, job.EvidenceID, job.Token, message, backoff.Seconds()); err != nil {
 		s.logger.Warn("reschedule screenshot", "evidence_id", job.EvidenceID, "error", err)
 	}
+	return false
 }
 
 // storeScreenshotReading saves a reading under its claim and flags it when

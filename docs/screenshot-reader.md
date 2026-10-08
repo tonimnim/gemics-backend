@@ -351,6 +351,9 @@ a day, the only cost is that staff decide without readings.
 
 **What fails safe:**
 - reader down: nothing claimed; screenshots wait up to a day, then staff;
+- reader failing or shedding load: the worker stops claiming at the first
+  unanswered screenshot and asks `/healthz` again on the next tick, so a
+  restart costs one batch, not the whole backlog;
 - reader overloaded: 503 `busy`, retried in seconds;
 - a replica dies mid-read: the lease expires and another replica reads it;
 - a late answer from an expired claim: dropped;

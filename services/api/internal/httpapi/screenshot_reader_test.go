@@ -635,13 +635,21 @@ func TestIntegrationScreenshotReaderSurvivesOutagesAndStaleClaims(t *testing.T) 
 	if status, attempts, _ := readingState(homeEvidence); status != "queued" || attempts != 0 {
 		t.Fatalf("claimed while the reader was down: %s %d", status, attempts)
 	}
-	// A reader that answers 503 delays the screenshot without failing it.
+	// A reader that answers 503 delays the screenshot without failing it, and
+	// the tick stops there instead of walking the rest of the backlog past
+	// the health check: with one slot, only one of the two is claimed.
 	fake.mu.Lock()
 	fake.unhealthy, fake.status = false, http.StatusServiceUnavailable
 	fake.mu.Unlock()
+	h.Server.config.VisionConcurrency = 1
 	tick()
-	if status, _, outages := readingState(homeEvidence); status != "queued" || outages != 1 {
-		t.Fatalf("outage = %s %d", status, outages)
+	h.Server.config.VisionConcurrency = 2
+	homeStatus, homeAttempts, homeOutages := readingState(homeEvidence)
+	awayStatus, awayAttempts, awayOutages := readingState(awayEvidence)
+	if homeStatus != "queued" || awayStatus != "queued" || homeAttempts+awayAttempts != 1 ||
+		homeOutages+awayOutages != 1 {
+		t.Fatalf("outage = %s/%s, attempts %d+%d, outages %d+%d (one claim, then stop)",
+			homeStatus, awayStatus, homeAttempts, awayAttempts, homeOutages, awayOutages)
 	}
 
 	// A result from an expired claim is dropped.
