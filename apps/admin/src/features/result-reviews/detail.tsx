@@ -22,14 +22,17 @@ import {
   type ReviewDetail,
   type StaffReport,
 } from './api'
+import { ScreenshotReadingNote, ScreenshotVerdict } from './screenshot-reading'
 
 function ReportCard({
+  reviewId,
   side,
   name,
   initial,
   final,
   strikes,
 }: {
+  reviewId: string
   side: 'Home' | 'Away'
   name: string
   initial: StaffReport | null
@@ -85,7 +88,16 @@ function ReportCard({
         {final && final.evidence.length > 0 ? (
           <div className='flex flex-wrap gap-3'>
             {final.evidence.map((item) => (
-              <EvidenceImage key={item.id} id={item.id} ready={item.ready} />
+              <div key={item.id} className='space-y-2'>
+                <EvidenceImage id={item.id} ready={item.ready} />
+                {item.reading && (
+                  <ScreenshotReadingNote
+                    reviewId={reviewId}
+                    evidenceId={item.id}
+                    reading={item.reading}
+                  />
+                )}
+              </div>
             ))}
           </div>
         ) : (
@@ -179,8 +191,12 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
               Queued {dateTime(review.queuedAt)}
             </span>
           </div>
+          {review.screenshotCheck && (
+            <ScreenshotVerdict check={review.screenshotCheck} review={review} />
+          )}
           <div className='grid gap-4 lg:grid-cols-2'>
             <ReportCard
+              reviewId={review.id}
               side='Home'
               name={review.participants.home.displayName}
               initial={review.reports.home.initial}
@@ -192,6 +208,7 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
               }
             />
             <ReportCard
+              reviewId={review.id}
               side='Away'
               name={review.participants.away.displayName}
               initial={review.reports.away.initial}

@@ -39,7 +39,52 @@ export type StaffReport = Score & {
     mediaType: string
     byteSize: number
     ready: boolean
+    reading: ScreenshotReading | null
   }[]
+}
+
+/** A result in match orientation, from the screenshot reader. */
+export type ScreenshotScore = {
+  homeScore: number
+  awayScore: number
+  homePenalties: number | null
+  awayPenalties: number | null
+}
+
+/** What the screenshot reader made of one screenshot. */
+export type ScreenshotReading = {
+  status: 'queued' | 'read' | 'failed'
+  screen: 'match_result' | 'unknown' | null
+  confidence: number | null
+  left: { team: string; score: number } | null
+  right: { team: string; score: number } | null
+  penalties: { left: number; right: number } | null
+  stats: Record<string, [number, number]>
+  orientation: 'home_left' | 'home_right' | 'either' | 'unknown'
+  score: ScreenshotScore | null
+  flags: string[]
+  reusedMatchId: string | null
+  error: string | null
+  model: string | null
+}
+
+/** The reader's verdict on the whole review. */
+export type ScreenshotCheck = {
+  verdict:
+    | 'pending'
+    | 'supports'
+    | 'neither'
+    | 'conflicting'
+    | 'unreadable'
+    | 'inconclusive'
+  score: ScreenshotScore | null
+  differences: string[]
+  reasons: string[]
+  /** Whose claim the screenshots match, when they match exactly one. */
+  supportedSide?: 'home' | 'away'
+  decision?: 'accept_home' | 'accept_away'
+  /** The reader will settle this review itself. */
+  autoDecide: boolean
 }
 
 type Participant = {
@@ -65,6 +110,7 @@ export type ReviewDetail = Omit<ReviewSummary, 'decision'> & {
   }
   verification: { mismatchAt: string | null; responseDeadlineAt: string | null }
   activeStrikeCounts: Record<string, number>
+  screenshotCheck: ScreenshotCheck | null
 }
 
 export function scoreText(score: Score) {
