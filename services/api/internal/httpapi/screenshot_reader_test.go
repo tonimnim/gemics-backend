@@ -61,11 +61,14 @@ func TestScreenshotPlausibilityAcceptsRealScreensAndCatchesEditedScores(t *testi
 	if failed := screenshotPlausibility(edited); !slices.Contains(failed, "goals_exceed_shots_on_target") {
 		t.Fatalf("edited score passed: %v", failed)
 	}
-	// Two goals plus seven saves cannot come from five shots on target.
-	tight := mustValidate(t, screenshotSample("Mugz FC", 2, "SQUAD 0", 1, map[string][]int{
-		"shotsOnTarget": {5, 1}, "saves": {0, 7}}))
-	if failed := screenshotPlausibility(tight); !slices.Contains(failed, "goals_and_saves_exceed_shots_on_target") {
-		t.Fatalf("goals plus saves passed: %v", failed)
+	// A genuine console screen (FC Barcelona 4-1, the stadium scoreboard behind
+	// agrees) has 4 goals + 7 saves against 10 on target, and 1 + 3 against 3:
+	// eFootball doesn't count saves that way, so the rule is only a hint.
+	barcelona := mustValidate(t, screenshotSample("FC Barcelona", 4, "Emirhann", 1, map[string][]int{
+		"shotsOnTarget": {10, 3}, "saves": {3, 7}}))
+	failed := screenshotPlausibility(barcelona)
+	if !slices.Equal(failed, []string{"goals_and_saves_exceed_shots_on_target"}) || hasBlockingFlag(failed) {
+		t.Fatalf("a genuine screen was blocked: %v", failed)
 	}
 }
 
@@ -219,7 +222,7 @@ func TestEvaluateScreenshotsDecidesOnlyWhenBothPlayersAgree(t *testing.T) {
 	reused := evaluated("away", "e2", mugz)
 	statsKind := "stats"
 	reused.ReuseKind = &statsKind
-	incomplete := screenshotSample("Mugz FC", 2, "SQUAD 0", 1, map[string][]int{"possession": {64, 36}, "shotsOnTarget": {12, 1}})
+	incomplete := screenshotSample("Mugz FC", 2, "SQUAD 0", 1, map[string][]int{"possession": {64, 36}, "saves": {0, 7}})
 	for name, readings := range map[string][]*evaluatedReading{
 		"low confidence":    both(mugz, low),
 		"full time unknown": both(mugz, unproven),
@@ -229,6 +232,12 @@ func TestEvaluateScreenshotsDecidesOnlyWhenBothPlayersAgree(t *testing.T) {
 		if result := evaluate(readings, claim(2, 1), claim(1, 2)); result.Decision != "" {
 			t.Errorf("%s still decided: %+v", name, result)
 		}
+	}
+	// Saves only feed a hint, so an unread saves row doesn't block here (the
+	// reader may still lower its confidence for the missing row).
+	noSaves := screenshotSample("Mugz FC", 2, "SQUAD 0", 1, map[string][]int{"possession": {64, 36}, "shotsOnTarget": {12, 1}})
+	if result := evaluate(both(noSaves, noSaves), claim(2, 1), claim(1, 2)); result.Decision != "accept_home" {
+		t.Fatalf("unread saves blocked = %+v", result)
 	}
 	// A similar image is a hint for staff, never a block on its own.
 	similar := evaluated("away", "e2", mugz)

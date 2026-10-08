@@ -275,9 +275,11 @@ func truncateRunes(value string, limit int) string {
 }
 
 // screenshotPlausibility recomputes the stats checks in Go. A goal is a shot
-// on target and a save stops one, so goals plus the other side's saves never
-// exceed a side's shots on target. An own goal is the rare honest exception,
-// which is why a failed check is a flag for staff, never a rejection.
+// on target, so goals never exceed a side's shots on target; an own goal is
+// the rare honest exception, which is why a failed check is a flag for staff,
+// never a rejection. Goals plus the other side's saves should not exceed shots
+// on target either, but genuine eFootball screens break that (4 goals and 7
+// saves against 10 on target), so it is only a hint.
 func screenshotPlausibility(reading screenshotReading) []string {
 	failed := []string{}
 	stat := func(key string) ([2]int, bool) {
@@ -495,7 +497,7 @@ type screenshotEvaluation struct {
 }
 
 // screenshotHints are flags shown to staff that never block a decision.
-var screenshotHints = []string{"similar_image"}
+var screenshotHints = []string{"similar_image", "goals_and_saves_exceed_shots_on_target"}
 
 func hasBlockingFlag(flags []string) bool {
 	return slices.ContainsFunc(flags, func(flag string) bool { return !slices.Contains(screenshotHints, flag) })
@@ -561,8 +563,6 @@ func evaluateScreenshots(in screenshotEvaluationInput) screenshotEvaluation {
 			item.Flags = append(item.Flags, "similar_image")
 		}
 		if _, ok := reading.Stats["shotsOnTarget"]; !ok {
-			item.Flags = append(item.Flags, "stats_incomplete")
-		} else if _, ok := reading.Stats["saves"]; !ok {
 			item.Flags = append(item.Flags, "stats_incomplete")
 		}
 		switch {

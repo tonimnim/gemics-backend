@@ -40,6 +40,7 @@ const hintFlags = new Set([
   'similar_image',
   'teams_unknown',
   'stats_incomplete',
+  'goals_and_saves_exceed_shots_on_target',
 ])
 
 const statLabels: Record<string, string> = {

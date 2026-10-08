@@ -187,7 +187,8 @@ container healthcheck and by Go before it starts sending work.
    (`screen`, `left`/`right` team and score, `penalties`), `source`
    (`staff_decision`), `decidedAt`, what the reader returned, and
    `readerCorrect`. Only trustworthy labels are exported: best-of-one matches
-   decided by staff, where both players' screenshots agree and none is flagged.
+   decided by staff, where both players' screenshots agree and none carries a
+   blocking flag (hints such as `similar_image` or the saves rule are allowed).
    A forged screenshot never becomes a label, and nor do the reader's own
    automatic decisions. Set `VISION_TRAINING_CIDRS` and block `/v1/internal/`
    at the public gateway as well.
@@ -232,7 +233,8 @@ win automatically. So:
 
 1. **Only learned team names map a side.** Go learns them from **staff**
    decisions, and only when both players' screenshots carry exactly the same
-   names (no OCR tolerance), every reading is unflagged, and the decided result
+   names (no OCR tolerance), no reading carries a blocking flag (hints are
+   allowed), and the decided result
    fits the screenshot one way round. The reader never learns from its own
    automatic decisions.
 2. **Both names must map**, the left to one player and the right to the other,
@@ -263,14 +265,15 @@ never trusts a single screenshot. It relies on things a forger can't control:
    has to fake their image while the opponent uploads the real one. The two then
    disagree, and the reader shows staff exactly which numbers differ. This holds
    however good AI image generation gets.
-2. **The stats table is a checksum.** A goal is a shot on target, and a save
-   stops one. So for each side:
-   `goals ≤ shots on target` and `goals + opponent's saves ≤ shots on target`
-   (all three samples satisfy this; for example Argentina 3 goals + 2 saves =
-   5 on target). Also successful passes ≤ passes, and possession adds up to 100.
-   Editing only the score, the common forgery, usually breaks one of these. An
-   own goal is the rare honest exception (a goal without a shot), which is
-   why a failed check is a flag for staff, never a rejection on its own.
+2. **The stats table is a checksum.** A goal is a shot on target, so for each
+   side `goals ≤ shots on target`. Also shots on target ≤ shots, successful
+   passes ≤ passes, and possession adds up to 100. Editing only the score, the
+   common forgery, usually breaks one of these. An own goal is the rare honest
+   exception (a goal without a shot), which is why a failed check is a flag for
+   staff, never a rejection on its own. `goals + opponent's saves ≤ shots on
+   target` looks like it should hold too, but a genuine console screen breaks
+   it (FC Barcelona 4 goals + 7 saves against 10 on target), so it is only a
+   hint for staff.
 3. **Identity.** The team names must belong to the two players in this match
    (see mapping below). A real screenshot from someone else's match fails.
 4. **Reuse.** The same 26-number stat table in two matches is reuse; only
@@ -310,8 +313,8 @@ but it can never invent a score or give strikes. All of these must hold:
   `fullTime: true`, above the confidence threshold;
 - the two players' screenshots agree on **every** field read: team names, score,
   penalties and each stat, not just the score;
-- every plausibility check passes, and the stats it needs (shots on target,
-  saves) were read;
+- every plausibility check passes (the saves hint aside), and shots on target
+  was read;
 - both team names map to the two players through learned names;
 - no screenshot's stat table was used for another match;
 - the match is best of one, there was no shoot-out, and the agreed score

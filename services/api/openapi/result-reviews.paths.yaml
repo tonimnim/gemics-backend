@@ -455,9 +455,10 @@ components:
         home_right, or either for a draw without penalties). Flags explain why it can't be trusted on its own:
         not_read, not_result_screen, low_confidence, teams_unknown, not_full_time, full_time_unknown,
         reused_stats, stats_incomplete, possession_not_100, on_target_exceeds_shots, goals_exceed_shots_on_target,
-        goals_and_saves_exceed_shots_on_target, successful_exceeds_passes; similar_image (the same image hash in an
-        earlier match) is a hint for staff that never blocks a decision. orientation comes only from team names
-        learned from staff decisions, never from names a player can edit.
+        successful_exceeds_passes. Two are hints for staff that never block a decision: similar_image (the same
+        image hash in an earlier match) and goals_and_saves_exceed_shots_on_target (genuine eFootball screens can
+        break it). orientation comes only from team names learned from staff decisions, never from names a player
+        can edit.
       required: [status, screen, confidence, left, right, penalties, stats, orientation, score, flags, reusedMatchId, error, model]
       properties:
         status: { type: string, enum: [queued, read, failed] }
