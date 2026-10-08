@@ -3242,13 +3242,20 @@ paths:
                     oneOf:
                       - type: 'null'
                       - type: object
-                        required: [paymentReviews, refunds, succeededLast30Days, collectedMinorLast30Days, currency]
+                        required: [paymentReviews, refunds, succeededLast30Days, collectedMinorLast30Days,
+                          unconvertedLast30Days, currency]
                         properties:
                           paymentReviews: { type: integer }
                           refunds: { type: integer }
                           succeededLast30Days: { type: integer }
-                          collectedMinorLast30Days: { type: integer, format: int64 }
-                          currency: { type: string, const: KES }
+                          collectedMinorLast30Days:
+                            type: integer
+                            format: int64
+                            description: USD cents, the sum of each payment's USD value frozen when it succeeded.
+                          unconvertedLast30Days:
+                            type: integer
+                            description: Succeeded payments still waiting for a rate, left out of collectedMinorLast30Days.
+                          currency: { type: string, const: USD }
         '403':
           $ref: '#/components/responses/Error'
   /v1/admin/staff:
@@ -3324,6 +3331,147 @@ paths:
         '409':
           $ref: '#/components/responses/Error'
           description: cannot_change_own_role.
+  /v1/currencies:
+    get:
+      operationId: listCurrencies
+      tags:
+        - Competitions
+      summary: Supported currencies, their minor units and the countries priced in them.
+      description: >-
+        Every amount in the API is an integer of minor units in its own currency; divide by 10^minorUnit to show
+        it (JPY has none). USD is the reporting currency; only KES can be collected as an entry fee today.
+      responses:
+        '200':
+          description: Supported currencies.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, reportingCurrency, paidEntryCurrency]
+                properties:
+                  reportingCurrency: { type: string, const: USD }
+                  paidEntryCurrency: { type: string, const: KES }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [code, minorUnit, name, countries]
+                      properties:
+                        code: { type: string, pattern: '^[A-Z]{3}$' }
+                        minorUnit: { type: integer, minimum: 0, maximum: 3 }
+                        name: { type: string }
+                        countries:
+                          type: array
+                          items: { type: string, pattern: '^[A-Z]{2}$' }
+  /v1/admin/fx-rates:
+    get:
+      operationId: listFxRates
+      tags:
+        - Staff
+      summary: The newest exchange rate for every supported currency. Requires overview.view.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Rates against USD.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, reportingCurrency]
+                properties:
+                  reportingCurrency: { type: string, const: USD }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/FxRate' }
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/admin/fx-rates/{currency}:
+    put:
+      operationId: setFxRate
+      tags:
+        - Staff
+      summary: Enter a day's rate by hand, for example while the provider is down. Requires finance.manage (admins).
+      description: >-
+        A manual rate is never overwritten by a fetch. Payments and refunds already converted keep their frozen
+        rate; unconverted ones are converted at once.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: currency
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[A-Z]{3}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [unitsPerUsd]
+              properties:
+                unitsPerUsd:
+                  type: string
+                  pattern: '^[0-9]{1,12}(\.[0-9]{1,10})?$'
+                  description: Units of the currency one US dollar buys, as a decimal string.
+                rateDate: { type: string, format: date, description: Today when omitted; never in the future. }
+      responses:
+        '200':
+          description: Every rate after the change.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, reportingCurrency]
+                properties:
+                  reportingCurrency: { type: string, const: USD }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/FxRate' }
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_rate, invalid_rate_date.
+        '403':
+          $ref: '#/components/responses/Error'
+          description: platform_access_denied (requires finance.manage).
+        '404':
+          $ref: '#/components/responses/Error'
+          description: currency_not_found (unsupported, or USD).
+        '503':
+          $ref: '#/components/responses/Error'
+          description: database_unavailable.
+  /v1/admin/finance:
+    get:
+      operationId: getFinanceReport
+      tags:
+        - Staff
+      summary: Money in and out for a period, per currency and in USD. Requires finance.view (admins).
+      description: >-
+        Payments and refunds are summed per currency, and in USD from the value frozen on each when it succeeded;
+        totals.unconverted counts those still waiting for a rate, which the USD totals leave out. Prizes are
+        commitments, valued at today's rate.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, enum: [7, 30, 90, 365], default: 30 }
+      responses:
+        '200':
+          description: The finance report.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/FinanceReport' }
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_period.
+        '403':
+          $ref: '#/components/responses/Error'
   /v1/admin/players:
     get:
       operationId: listAdminPlayers
@@ -3550,7 +3698,12 @@ paths:
                   action: { $ref: '#/components/schemas/RefundStageSummary' }
                   processing: { $ref: '#/components/schemas/RefundStageSummary' }
                   refundedLast30Days: { $ref: '#/components/schemas/RefundStageSummary' }
-                  currency: { type: string, const: KES }
+                  currency:
+                    type: string
+                    const: USD
+                    description: >-
+                      amountMinor totals are USD cents: a refund's frozen USD value once it succeeded, otherwise its
+                      amount at its payment's frozen rate.
         '403':
           $ref: '#/components/responses/Error'
   /v1/admin/refunds/{id}/decisions:
@@ -4665,10 +4818,11 @@ components:
   schemas:
     RefundStageSummary:
       type: object
-      required: [count, amountMinor]
+      required: [count, amountMinor, unconverted]
       properties:
         count: { type: integer }
         amountMinor: { type: integer, format: int64 }
+        unconverted: { type: integer, description: Refunds whose payment has no USD value yet; amountMinor leaves them out. }
     StaffRole:
       type: string
       description: >-
@@ -4689,8 +4843,98 @@ components:
         - competition.manage
         - staff.manage
         - finance.view
+        - finance.manage
         - player.view
         - player.suspend
+    FxRate:
+      type: object
+      required: [currency, name, minorUnit, unitsPerUsd, rateDate, source, fetchedAt, stale]
+      properties:
+        currency: { type: string }
+        name: { type: string }
+        minorUnit: { type: integer }
+        unitsPerUsd: { type: string, nullable: true, description: Units per US dollar; null before any rate exists. }
+        rateDate: { type: string, format: date, nullable: true }
+        source: { type: string, nullable: true, description: 'The provider host, or manual.' }
+        fetchedAt: { type: string, format: date-time, nullable: true }
+        stale: { type: boolean, description: The newest rate is more than three days old. }
+    FinanceReport:
+      type: object
+      required: [days, from, to, totals, byCurrency, daily, prizes, recent, rates]
+      properties:
+        days: { type: integer }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        totals:
+          type: object
+          required: [collectedUsdMinor, refundedUsdMinor, netUsdMinor, payments, refunds, unconverted,
+            prizesUsdMinor, upcomingPrizesUsdMinor]
+          properties:
+            collectedUsdMinor: { type: integer, format: int64 }
+            refundedUsdMinor: { type: integer, format: int64 }
+            netUsdMinor: { type: integer, format: int64 }
+            payments: { type: integer }
+            refunds: { type: integer }
+            unconverted: { type: integer }
+            prizesUsdMinor: { type: integer, format: int64, description: Prizes of competitions that started in the period. }
+            upcomingPrizesUsdMinor: { type: integer, format: int64, description: Prizes of published competitions not yet started. }
+        byCurrency:
+          type: array
+          items:
+            type: object
+            required: [currency, minorUnit, collectedMinor, refundedMinor, netMinor, collectedUsdMinor,
+              refundedUsdMinor, payments, refunds]
+            properties:
+              currency: { type: string }
+              minorUnit: { type: integer }
+              collectedMinor: { type: integer, format: int64 }
+              refundedMinor: { type: integer, format: int64 }
+              netMinor: { type: integer, format: int64 }
+              collectedUsdMinor: { type: integer, format: int64 }
+              refundedUsdMinor: { type: integer, format: int64 }
+              payments: { type: integer }
+              refunds: { type: integer }
+        daily:
+          type: array
+          description: UTC days, oldest first, including days without money.
+          items:
+            type: object
+            required: [date, collectedUsdMinor, refundedUsdMinor]
+            properties:
+              date: { type: string, format: date }
+              collectedUsdMinor: { type: integer, format: int64 }
+              refundedUsdMinor: { type: integer, format: int64 }
+        prizes:
+          type: array
+          items:
+            type: object
+            required: [currency, minorUnit, prizesMinor, upcomingMinor, prizesUsdMinor, upcomingUsdMinor, competitions]
+            properties:
+              currency: { type: string }
+              minorUnit: { type: integer }
+              prizesMinor: { type: integer, format: int64 }
+              upcomingMinor: { type: integer, format: int64 }
+              prizesUsdMinor: { type: integer, format: int64, nullable: true }
+              upcomingUsdMinor: { type: integer, format: int64, nullable: true }
+              competitions: { type: integer }
+        recent:
+          type: array
+          description: The 25 latest payments and refunds in the period.
+          items:
+            type: object
+            required: [kind, id, at, player, competition, amountMinor, currency, usdMinor]
+            properties:
+              kind: { type: string, enum: [payment, refund] }
+              id: { type: string, format: uuid }
+              at: { type: string, format: date-time }
+              player: { type: string }
+              competition: { type: string }
+              amountMinor: { type: integer, format: int64 }
+              currency: { type: string }
+              usdMinor: { type: integer, format: int64, nullable: true }
+        rates:
+          type: array
+          items: { $ref: '#/components/schemas/FxRate' }
     AdminPlayer:
       type: object
       required: [id, username, displayName, konamiId, inGameName, verification, countryCode, status, staffRole,
@@ -4911,16 +5155,23 @@ components:
           format: int64
           minimum: 0
           maximum: 5000000
-          description: Minor units. Above zero requires KES, the only wired collection rail.
+          description: >-
+            KES minor units. Above zero requires the competition to be limited to Kenya, as M-Pesa is the only
+            collection rail (paid_entry_kenya_only), and whole shillings.
         currency:
           type: string
           pattern: ^[A-Z]{3}$
-          default: KES
+          description: >-
+            Derived from rules.eligibility.allowedCountries: a competition open to exactly one country with a
+            supported currency is priced in it (KE KES, IN INR, SG SGD, ID IDR, BR BRL, JP JPY, ...); any other
+            competition is priced in USD. Omit it or restate it; another value is currency_mismatch. See
+            GET /v1/currencies for minor units. A patch whose countries change the currency of a competition
+            with a prize must restate prizeAmountMinor in the new currency (prize_currency_changed).
         prizeAmountMinor:
           type: integer
           format: int64
           minimum: 0
-          maximum: 500000000
+          maximum: 1000000000000
         prizeFunding:
           type: string
           enum:
@@ -4991,11 +5242,17 @@ components:
         currency:
           type: string
           pattern: ^[A-Z]{3}$
+          description: >-
+            Derived from rules.eligibility.allowedCountries: a competition open to exactly one country with a
+            supported currency is priced in it (KE KES, IN INR, SG SGD, ID IDR, BR BRL, JP JPY, ...); any other
+            competition is priced in USD. Omit it or restate it; another value is currency_mismatch. See
+            GET /v1/currencies for minor units. A patch whose countries change the currency of a competition
+            with a prize must restate prizeAmountMinor in the new currency (prize_currency_changed).
         prizeAmountMinor:
           type: integer
           format: int64
           minimum: 0
-          maximum: 500000000
+          maximum: 1000000000000
         prizeFunding:
           type: string
           enum:

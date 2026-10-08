@@ -390,9 +390,9 @@ components:
         gameId: { type: string }
         format: { type: string, enum: [single_elimination, double_elimination, round_robin] }
         maxEntries: { type: integer, minimum: 2, maximum: 1024 }
-        entryFeeMinor: { type: integer, format: int64, minimum: 0, maximum: 5000000, description: "Minor units. Above zero requires KES, the only wired collection rail." }
-        currency: { type: string, pattern: "^[A-Z]{3}$", default: KES }
-        prizeAmountMinor: { type: integer, format: int64, minimum: 0, maximum: 500000000 }
+        entryFeeMinor: { type: integer, format: int64, minimum: 0, maximum: 5000000, description: "KES minor units. Above zero requires the competition to be limited to Kenya (paid_entry_kenya_only)." }
+        currency: { type: string, pattern: "^[A-Z]{3}$", description: "Derived from rules.eligibility.allowedCountries: one country's currency, otherwise USD. Omit or restate it (currency_mismatch otherwise)." }
+        prizeAmountMinor: { type: integer, format: int64, minimum: 0, maximum: 1000000000000 }
         prizeFunding: { type: string, enum: [none, organizer, sponsor], default: none, description: A prize above zero must name its funder. Entry fees are an administration fee and never fund prizes. }
         registrationOpensAt: { type: string, format: date-time }
         registrationClosesAt: { type: string, format: date-time }
@@ -421,8 +421,8 @@ components:
         format: { type: string, enum: [single_elimination, double_elimination, round_robin] }
         maxEntries: { type: integer, minimum: 2, maximum: 1024 }
         entryFeeMinor: { type: integer, format: int64, minimum: 0, maximum: 5000000 }
-        currency: { type: string, pattern: "^[A-Z]{3}$" }
-        prizeAmountMinor: { type: integer, format: int64, minimum: 0, maximum: 500000000 }
+        currency: { type: string, pattern: "^[A-Z]{3}$", description: "Restates the currency derived from the countries. Countries that change the currency of a competition with a prize require prizeAmountMinor restated in the new currency (prize_currency_changed)." }
+        prizeAmountMinor: { type: integer, format: int64, minimum: 0, maximum: 1000000000000 }
         prizeFunding: { type: string, enum: [none, organizer, sponsor] }
         registrationOpensAt: { type: string, format: date-time }
         registrationClosesAt: { type: string, format: date-time }
