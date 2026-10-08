@@ -2,13 +2,15 @@
 export const scopeCountries = [
   'KE',
   'IN',
+  'SG',
+  'ID',
+  'BR',
+  'JP',
+  'TH',
+  'MY',
   'UG',
   'TZ',
   'NG',
-  'BR',
-  'TH',
-  'ID',
-  'MY',
 ] as const
 
 const names = new Intl.DisplayNames(['en'], { type: 'region' })

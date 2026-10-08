@@ -44,7 +44,8 @@ export type CompetitionInput = {
   format: CompetitionFormat
   maxEntries: number
   entryFeeMinor: number
-  currency: 'KES'
+  /** Optional: the API derives it from the countries in rules. */
+  currency?: string
   prizeAmountMinor: number
   prizeFunding: 'none' | 'organizer' | 'sponsor'
   registrationOpensAt: string

@@ -3,6 +3,13 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Check, Globe2, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { countryFlag, countryName, scopeCountries } from '@/lib/countries'
+import {
+  competitionCurrency,
+  paidEntryCurrency,
+  toMinor,
+  toUsdMinor,
+  usd,
+} from '@/lib/currency'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,6 +30,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
+import { rateFor, useFxRates } from '@/features/finance/api'
 import { createCompetition, type CompetitionFormat } from './api'
 
 const empty = {
@@ -30,14 +38,23 @@ const empty = {
   description: '',
   format: 'single_elimination' as CompetitionFormat,
   maxEntries: '16',
-  entryFeeKES: '0',
-  prizeKES: '0',
-  prizeFunding: 'none' as 'none' | 'organizer' | 'sponsor',
+  entryFee: '0',
+  prize: '0',
+  // Only sent with a prize; the select shows Tonits until staff pick.
+  prizeFunding: 'organizer' as 'organizer' | 'sponsor',
   countries: [] as string[],
   registrationOpensAt: '',
   registrationClosesAt: '',
   startsAt: '',
 }
+
+// Paid entry is collected by M-Pesa, so the API only lets players in Kenya
+// join. The form says so instead of offering a choice it would refuse.
+const countriesOf = (form: typeof empty) =>
+  Number(form.entryFee) > 0 ? ['KE'] : form.countries
+
+// The API prices a competition in its one country's currency, or in USD.
+const pricedIn = (form: typeof empty) => competitionCurrency(countriesOf(form))
 
 /** Creates a draft competition run by Tonits. Publishing is a separate step. */
 export function CreateCompetitionDialog({
@@ -52,12 +69,27 @@ export function CreateCompetitionDialog({
   const queryClient = useQueryClient()
   const [form, setForm] = useState(empty)
   const set = (patch: Partial<typeof empty>) =>
-    setForm((current) => ({ ...current, ...patch }))
-  const paid = Number(form.entryFeeKES) > 0
-  const prized = Number(form.prizeKES) > 0
-  // Paid entry is collected by M-Pesa, so the API only lets players in Kenya
-  // join. The form says so instead of offering a choice it would refuse.
-  const countries = paid ? ['KE'] : form.countries
+    setForm((current) => {
+      const next = { ...current, ...patch }
+      // A typed prize means nothing in another currency, so a change of
+      // currency clears it rather than silently repricing it.
+      if (pricedIn(next) !== pricedIn(current)) next.prize = '0'
+      return next
+    })
+  const rates = useFxRates()
+  const paid = Number(form.entryFee) > 0
+  const prized = Number(form.prize) > 0
+  const countries = countriesOf(form)
+  const currency = pricedIn(form)
+  const usdHint = (major: string, inCurrency: string) => {
+    if (!Number(major) || inCurrency === 'USD') return null
+    const value = toUsdMinor(
+      toMinor(major, inCurrency),
+      inCurrency,
+      rateFor(rates.data, inCurrency)
+    )
+    return value == null ? null : `≈ ${usd(value)}`
+  }
   const toggleCountry = (code: string) =>
     set({
       countries: form.countries.includes(code)
@@ -67,15 +99,14 @@ export function CreateCompetitionDialog({
 
   const create = useMutation({
     mutationFn: () => {
-      const prizeMinor = Math.round(Number(form.prizeKES) * 100)
+      const prizeMinor = toMinor(form.prize, currency)
       return createCompetition(orgId, {
         name: form.name.trim(),
         description: form.description.trim(),
         gameId: 'efootball-mobile',
         format: form.format,
         maxEntries: Number(form.maxEntries),
-        entryFeeMinor: Math.round(Number(form.entryFeeKES) * 100),
-        currency: 'KES',
+        entryFeeMinor: toMinor(form.entryFee, paidEntryCurrency),
         prizeAmountMinor: prizeMinor,
         prizeFunding: prizeMinor > 0 ? form.prizeFunding : 'none',
         registrationOpensAt: new Date(form.registrationOpensAt).toISOString(),
@@ -202,40 +233,48 @@ export function CreateCompetitionDialog({
             </div>
           </Section>
 
-          <Section title='Money'>
+          <Section
+            title='Money'
+            hint={
+              currency === 'USD'
+                ? 'Priced in USD, as it is open to more than one country.'
+                : `Priced in ${currency}, the currency of ${countryName(countries[0])}.`
+            }
+          >
             <div className='grid gap-4 sm:grid-cols-2'>
               <div className='grid gap-2'>
-                <Label htmlFor='fee'>Entry fee (KES)</Label>
-                <Input
+                <Label htmlFor='fee'>Entry fee ({paidEntryCurrency})</Label>
+                <MoneyInput
                   id='fee'
-                  type='number'
-                  min={0}
-                  step={1}
-                  value={form.entryFeeKES}
-                  onChange={(e) => set({ entryFeeKES: e.target.value })}
+                  currency={paidEntryCurrency}
+                  value={form.entryFee}
+                  onChange={(value) => set({ entryFee: value })}
                 />
+                <p className='text-xs text-muted-foreground'>
+                  {usdHint(form.entryFee, paidEntryCurrency) ??
+                    (paid
+                      ? 'Paid entry is limited to Kenya.'
+                      : 'Free to enter. A fee limits entry to Kenya.')}
+                </p>
               </div>
               <div className='grid gap-2'>
-                <Label htmlFor='prize'>Prize (KES)</Label>
-                <Input
+                <Label htmlFor='prize'>Prize ({currency})</Label>
+                <MoneyInput
                   id='prize'
-                  type='number'
-                  min={0}
-                  step={1}
-                  value={form.prizeKES}
-                  onChange={(e) => set({ prizeKES: e.target.value })}
+                  currency={currency}
+                  value={form.prize}
+                  onChange={(value) => set({ prize: value })}
                 />
+                <p className='text-xs text-muted-foreground'>
+                  {usdHint(form.prize, currency) ?? '\u00a0'}
+                </p>
               </div>
             </div>
             {prized && (
               <div className='grid gap-2 sm:w-1/2 sm:pe-2'>
                 <Label>Prize funded by</Label>
                 <Select
-                  value={
-                    form.prizeFunding === 'none'
-                      ? 'organizer'
-                      : form.prizeFunding
-                  }
+                  value={form.prizeFunding}
                   onValueChange={(value) =>
                     set({ prizeFunding: value as 'organizer' | 'sponsor' })
                   }
@@ -355,5 +394,36 @@ function CountryChip({
       {children}
       {selected && <Check className='size-3.5' />}
     </button>
+  )
+}
+
+/** A whole-number amount in major units, with the currency beside it. */
+function MoneyInput({
+  id,
+  currency,
+  value,
+  onChange,
+}: {
+  id: string
+  currency: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className='relative'>
+      <Input
+        id={id}
+        type='number'
+        min={0}
+        step={1}
+        inputMode='numeric'
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className='pe-14'
+      />
+      <span className='pointer-events-none absolute end-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground'>
+        {currency}
+      </span>
+    </div>
   )
 }
