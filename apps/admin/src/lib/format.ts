@@ -1,10 +1,6 @@
 import { format, formatDistanceToNowStrict } from 'date-fns'
 
-export function money(minor: number, currency = 'KES') {
-  return `${currency} ${(minor / 100).toLocaleString('en-KE', {
-    minimumFractionDigits: minor % 100 === 0 ? 0 : 2,
-  })}`
-}
+export { money, usd } from './currency'
 
 export function dateTime(value: string | null | undefined) {
   return value ? format(new Date(value), 'd MMM yyyy, HH:mm') : '—'

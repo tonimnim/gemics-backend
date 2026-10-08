@@ -97,7 +97,7 @@ export function CompetitionDetailPage({ id }: { id: string }) {
             />
             <Fact
               label='Entry'
-              value={paid ? money(data.entryFeeMinor!) : 'Free'}
+              value={paid ? money(data.entryFeeMinor!, data.currency) : 'Free'}
             />
             <Fact
               label='Registration closes'
@@ -157,7 +157,7 @@ export function CompetitionDetailPage({ id }: { id: string }) {
                       <>
                         <StatusBadge status={entry.paymentStatus} />
                         <div className='mt-1 font-mono text-xs text-muted-foreground'>
-                          {money(data!.entryFeeMinor!)}
+                          {money(data!.entryFeeMinor!, data!.currency)}
                         </div>
                       </>
                     ) : (

@@ -174,7 +174,7 @@ export function CompetitionsPage() {
                 </TableCell>
                 <TableCell className='text-sm'>
                   {competition.entryFeeMinor
-                    ? money(competition.entryFeeMinor)
+                    ? money(competition.entryFeeMinor, competition.currency)
                     : 'Free'}
                 </TableCell>
                 <TableCell className='text-sm text-muted-foreground'>
