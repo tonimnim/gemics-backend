@@ -280,6 +280,7 @@ func (s *Server) executeAccountDeletion(w http.ResponseWriter, r *http.Request) 
 		args  []any
 	}{
 		{`DELETE FROM notifications WHERE user_id=$1`, []any{current.UserID}},
+		{`DELETE FROM player_team_names WHERE user_id=$1`, []any{current.UserID}},
 		{`DELETE FROM notification_preferences WHERE user_id=$1`, []any{current.UserID}},
 		{`DELETE FROM organization_members WHERE user_id=$1`, []any{current.UserID}},
 		{`UPDATE platform_staff_roles SET revoked_at=COALESCE(revoked_at,now()) WHERE user_id=$1`, []any{current.UserID}},

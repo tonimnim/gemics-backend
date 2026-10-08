@@ -81,8 +81,26 @@ type Config struct {
 	// (the default) or any provider returning a "rates" object. Empty disables
 	// fetching (rates can still be entered by an admin). FXRefreshInterval is
 	// how often it is polled.
-	FXRatesURL              string
-	FXRefreshInterval       time.Duration
+	FXRatesURL        string
+	FXRefreshInterval time.Duration
+	// VisionURL is the internal screenshot reader (empty disables reading).
+	// Requests carry VisionToken as a bearer token. VisionAutoDecide lets the
+	// reader decide a disputed result when both players' screenshots agree.
+	VisionURL               string
+	VisionToken             string
+	VisionTimeout           time.Duration
+	VisionConcurrency       int
+	VisionAutoDecide        bool
+	VisionAutoMinConfidence float64
+	// VisionWorker runs the reading worker in this process. Turn it off on
+	// public API replicas and on for one or two worker replicas, so reading
+	// load scales with the reader, not with API traffic.
+	VisionWorker bool
+	// VisionTrainingToken guards the training-examples feed. It is separate
+	// from VisionToken, which is sent to the reader with every image.
+	// VisionTrainingCIDRs, when set, limits the feed to those client networks.
+	VisionTrainingToken     string
+	VisionTrainingCIDRs     []string
 	StorageMode             string
 	StorageS3Endpoint       string
 	StorageS3PublicEndpoint string
@@ -239,6 +257,58 @@ func Load() (Config, error) {
 	if fxRefreshInterval < time.Minute {
 		return Config{}, fmt.Errorf("FX_REFRESH_INTERVAL must be at least 1m")
 	}
+	visionURL := strings.TrimRight(strings.TrimSpace(os.Getenv("VISION_URL")), "/")
+	visionToken := strings.TrimSpace(os.Getenv("VISION_TOKEN"))
+	if visionURL != "" {
+		parsed, parseErr := url.Parse(visionURL)
+		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return Config{}, fmt.Errorf("VISION_URL must be an http or https URL")
+		}
+		// Plain HTTP carries the token and screenshots in the clear, so it is
+		// allowed only to a private network address or a bare service name.
+		if parsed.Scheme == "http" && !internalHost(parsed.Hostname()) {
+			return Config{}, fmt.Errorf("VISION_URL must use https unless it names an internal host")
+		}
+		if visionToken == "" {
+			return Config{}, fmt.Errorf("VISION_TOKEN is required when VISION_URL is set")
+		}
+	}
+	if visionToken != "" && len(visionToken) < 32 {
+		return Config{}, fmt.Errorf("VISION_TOKEN must be at least 32 characters")
+	}
+	visionTrainingToken := strings.TrimSpace(os.Getenv("VISION_TRAINING_TOKEN"))
+	if visionTrainingToken != "" && (len(visionTrainingToken) < 32 || visionTrainingToken == visionToken) {
+		return Config{}, fmt.Errorf("VISION_TRAINING_TOKEN must be at least 32 characters and differ from VISION_TOKEN")
+	}
+	visionTrainingCIDRs := csv(os.Getenv("VISION_TRAINING_CIDRS"))
+	for _, cidr := range visionTrainingCIDRs {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			return Config{}, fmt.Errorf("VISION_TRAINING_CIDRS contains an invalid CIDR %q", cidr)
+		}
+	}
+	visionTimeout, err := boundedDuration("VISION_TIMEOUT", 30*time.Second, time.Second, 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	visionConcurrency, err := boundedInteger("VISION_CONCURRENCY", 2, 1, 32)
+	if err != nil {
+		return Config{}, err
+	}
+	visionAutoDecide, err := boolean("VISION_AUTO_DECIDE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	visionWorker, err := boolean("VISION_WORKER", true)
+	if err != nil {
+		return Config{}, err
+	}
+	visionAutoMinConfidence := 0.9
+	if raw := strings.TrimSpace(os.Getenv("VISION_AUTO_MIN_CONFIDENCE")); raw != "" {
+		visionAutoMinConfidence, err = strconv.ParseFloat(raw, 64)
+		if err != nil || visionAutoMinConfidence < 0.5 || visionAutoMinConfidence > 1 {
+			return Config{}, fmt.Errorf("VISION_AUTO_MIN_CONFIDENCE must be between 0.5 and 1")
+		}
+	}
 	fxRatesURL := value("FX_RATES_URL", "https://api.frankfurter.dev/v2/rates?base=USD")
 	if strings.EqualFold(fxRatesURL, "off") {
 		fxRatesURL = ""
@@ -319,6 +389,15 @@ func Load() (Config, error) {
 		SMTPRequireTLS:          smtpRequireTLS,
 		FXRatesURL:              fxRatesURL,
 		FXRefreshInterval:       fxRefreshInterval,
+		VisionURL:               visionURL,
+		VisionToken:             visionToken,
+		VisionTimeout:           visionTimeout,
+		VisionConcurrency:       int(visionConcurrency),
+		VisionAutoDecide:        visionAutoDecide,
+		VisionAutoMinConfidence: visionAutoMinConfidence,
+		VisionWorker:            visionWorker,
+		VisionTrainingToken:     visionTrainingToken,
+		VisionTrainingCIDRs:     visionTrainingCIDRs,
 		MPesaEnvironment:        strings.ToLower(value("MPESA_ENVIRONMENT", "disabled")),
 		MPesaConsumerKey:        strings.TrimSpace(os.Getenv("MPESA_CONSUMER_KEY")),
 		MPesaConsumerSecret:     os.Getenv("MPESA_CONSUMER_SECRET"),
@@ -602,4 +681,14 @@ func storageOrigin(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("invalid storage origin")
 	}
 	return result, nil
+}
+
+// internalHost reports whether a host is a bare service name, localhost or a
+// private, loopback or link-local address.
+func internalHost(host string) bool {
+	if host == "localhost" || (host != "" && !strings.Contains(host, ".") && !strings.Contains(host, ":")) {
+		return true
+	}
+	address, err := netip.ParseAddr(host)
+	return err == nil && (address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast())
 }

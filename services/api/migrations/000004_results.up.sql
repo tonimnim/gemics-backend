@@ -350,6 +350,85 @@ ALTER TABLE ONLY game_account_verification_evidence
 ALTER TABLE ONLY game_account_verification_evidence
     ADD CONSTRAINT game_account_verification_evidence_request_id_position_key UNIQUE (request_id, "position");
 
+-- screenshot_readings
+
+-- What the screenshot reader (an internal service) read from each screenshot
+-- bound to a final score report. The reader only reads; Go re-checks the
+-- numbers, maps the team names to the players and decides what to do.
+CREATE TABLE screenshot_readings (
+    evidence_id uuid NOT NULL,
+    match_id uuid NOT NULL,
+    report_id uuid NOT NULL,
+    status text DEFAULT 'queued'::text NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    outage_retries integer DEFAULT 0 NOT NULL,
+    available_at timestamp with time zone DEFAULT now() NOT NULL,
+    claim_token uuid,
+    last_error text,
+    evaluated_at timestamp with time zone,
+    screen text,
+    confidence numeric(4,3),
+    full_time boolean,
+    left_team text,
+    left_score integer,
+    right_team text,
+    right_score integer,
+    left_penalties integer,
+    right_penalties integer,
+    stats jsonb DEFAULT '{}'::jsonb NOT NULL,
+    image_hash text,
+    stats_fingerprint text,
+    reused_match_id uuid,
+    reuse_kind text,
+    engine text,
+    model_version text,
+    read_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT screenshot_readings_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'read'::text, 'failed'::text]))),
+    CONSTRAINT screenshot_readings_attempts_check CHECK (((attempts >= 0) AND (outage_retries >= 0))),
+    CONSTRAINT screenshot_readings_screen_check CHECK (((screen IS NULL) OR (screen = ANY (ARRAY['match_result'::text, 'unknown'::text])))),
+    CONSTRAINT screenshot_readings_read_chk CHECK (((status = 'read'::text) = ((read_at IS NOT NULL) AND (screen IS NOT NULL)))),
+    CONSTRAINT screenshot_readings_confidence_check CHECK (((confidence IS NULL) OR ((confidence >= (0)::numeric) AND (confidence <= (1)::numeric)))),
+    CONSTRAINT screenshot_readings_scores_check CHECK ((((left_score IS NULL) OR ((left_score >= 0) AND (left_score <= 99))) AND ((right_score IS NULL) OR ((right_score >= 0) AND (right_score <= 99))) AND ((left_penalties IS NULL) OR ((left_penalties >= 0) AND (left_penalties <= 99))) AND ((right_penalties IS NULL) OR ((right_penalties >= 0) AND (right_penalties <= 99))))),
+    CONSTRAINT screenshot_readings_penalties_pair_chk CHECK (((left_penalties IS NULL) = (right_penalties IS NULL))),
+    CONSTRAINT screenshot_readings_stats_object_chk CHECK ((jsonb_typeof(stats) = 'object'::text)),
+    CONSTRAINT screenshot_readings_hash_check CHECK (((image_hash IS NULL) OR (image_hash ~ '^[0-9a-f]{16}$'::text))),
+    CONSTRAINT screenshot_readings_fingerprint_check CHECK (((stats_fingerprint IS NULL) OR (stats_fingerprint ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT screenshot_readings_reuse_chk CHECK ((((reused_match_id IS NULL) = (reuse_kind IS NULL)) AND ((reuse_kind IS NULL) OR (reuse_kind = ANY (ARRAY['image'::text, 'stats'::text]))))),
+    CONSTRAINT screenshot_readings_text_check CHECK (((char_length(COALESCE(left_team, ''::text)) <= 80) AND (char_length(COALESCE(right_team, ''::text)) <= 80) AND (char_length(COALESCE(last_error, ''::text)) <= 500) AND (char_length(COALESCE(engine, ''::text)) <= 64) AND (char_length(COALESCE(model_version, ''::text)) <= 128)))
+);
+ALTER TABLE ONLY screenshot_readings
+    ADD CONSTRAINT screenshot_readings_pkey PRIMARY KEY (evidence_id);
+CREATE INDEX screenshot_readings_queue_idx ON screenshot_readings USING btree (available_at, evidence_id) WHERE (status = 'queued'::text);
+CREATE INDEX screenshot_readings_match_idx ON screenshot_readings USING btree (match_id);
+CREATE INDEX screenshot_readings_hash_idx ON screenshot_readings USING btree (image_hash) WHERE (image_hash IS NOT NULL);
+CREATE INDEX screenshot_readings_fingerprint_idx ON screenshot_readings USING btree (stats_fingerprint) WHERE (stats_fingerprint IS NOT NULL);
+CREATE INDEX screenshot_readings_training_idx ON screenshot_readings USING btree (read_at, evidence_id) WHERE (status = 'read'::text);
+CREATE INDEX screenshot_readings_unevaluated_idx ON screenshot_readings USING btree (match_id) WHERE (evaluated_at IS NULL);
+
+-- player_team_names
+
+-- eFootball team names learned from staff-decided disputes in which both
+-- players' screenshots showed exactly the same names and the decided result
+-- shows which side was whose. They are the only names the screenshot reader
+-- trusts to tell which team on a screenshot is which player: a player can
+-- edit every other name (display name, username, in-game name) at will.
+CREATE TABLE player_team_names (
+    user_id uuid NOT NULL,
+    name_key text NOT NULL,
+    name text NOT NULL,
+    confirmations integer DEFAULT 1 NOT NULL,
+    first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_confirmed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT player_team_names_key_check CHECK (((char_length(name_key) >= 2) AND (char_length(name_key) <= 80) AND (name_key !~ '[[:space:][:punct:]]'::text) AND (name_key = lower(name_key)))),
+    CONSTRAINT player_team_names_name_check CHECK (((char_length(name) >= 1) AND (char_length(name) <= 80))),
+    CONSTRAINT player_team_names_confirmations_check CHECK ((confirmations > 0))
+);
+ALTER TABLE ONLY player_team_names
+    ADD CONSTRAINT player_team_names_pkey PRIMARY KEY (user_id, name_key);
+CREATE INDEX player_team_names_key_idx ON player_team_names USING btree (name_key);
+
 -- Relationships
 
 ALTER TABLE ONLY evidence_media_processing_jobs
@@ -414,5 +493,14 @@ ALTER TABLE ONLY result_submissions
     ADD CONSTRAINT result_submissions_supersedes_id_fkey FOREIGN KEY (supersedes_id) REFERENCES result_submissions(id);
 ALTER TABLE ONLY result_submissions
     ADD CONSTRAINT result_submissions_supersedes_same_match_fk FOREIGN KEY (supersedes_id, match_id) REFERENCES result_submissions(id, match_id);
+
+ALTER TABLE ONLY screenshot_readings
+    ADD CONSTRAINT screenshot_readings_evidence_id_fkey FOREIGN KEY (evidence_id) REFERENCES evidence_uploads(id) ON DELETE CASCADE;
+ALTER TABLE ONLY screenshot_readings
+    ADD CONSTRAINT screenshot_readings_match_id_fkey FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE;
+ALTER TABLE ONLY screenshot_readings
+    ADD CONSTRAINT screenshot_readings_report_id_fkey FOREIGN KEY (report_id) REFERENCES match_result_reports(id) ON DELETE CASCADE;
+ALTER TABLE ONLY player_team_names
+    ADD CONSTRAINT player_team_names_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 
 COMMIT;

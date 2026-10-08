@@ -436,5 +436,5 @@ func attachFinalReportEvidence(ctx context.Context, tx pgx.Tx, reportID string, 
 			return errMatchResolutionChanged
 		}
 	}
-	return nil
+	return queueScreenshotReadings(ctx, tx, reportID, evidenceIDs)
 }

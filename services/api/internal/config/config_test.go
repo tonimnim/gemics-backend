@@ -276,3 +276,44 @@ func TestAvatarUploadBudgetIsStrictAndBounded(t *testing.T) {
 		})
 	}
 }
+
+func TestVisionSettingsRejectUnsafeConfiguration(t *testing.T) {
+	const token = "reader-token-0123456789-0123456789"
+	const training = "training-token-0123456789-0123456789"
+	cases := []struct {
+		name string
+		env  map[string]string
+		ok   bool
+	}{
+		{"internal service over http", map[string]string{"VISION_URL": "http://vision:8000", "VISION_TOKEN": token}, true},
+		{"private address over http", map[string]string{"VISION_URL": "http://10.0.3.7:8000", "VISION_TOKEN": token}, true},
+		{"public host over https", map[string]string{"VISION_URL": "https://reader.example.com", "VISION_TOKEN": token}, true},
+		{"public host over http", map[string]string{"VISION_URL": "http://reader.example.com", "VISION_TOKEN": token}, false},
+		{"missing token", map[string]string{"VISION_URL": "http://vision:8000"}, false},
+		{"short token", map[string]string{"VISION_URL": "http://vision:8000", "VISION_TOKEN": "short-token"}, false},
+		{"training token reused", map[string]string{"VISION_TOKEN": token, "VISION_TRAINING_TOKEN": token}, false},
+		{"short training token", map[string]string{"VISION_TRAINING_TOKEN": "too-short"}, false},
+		{"bad training network", map[string]string{"VISION_TRAINING_TOKEN": training, "VISION_TRAINING_CIDRS": "10.0.0.0/33"}, false},
+		{"training feed alone", map[string]string{"VISION_TRAINING_TOKEN": training, "VISION_TRAINING_CIDRS": "10.0.0.0/8"}, true},
+		{"confidence too low", map[string]string{"VISION_AUTO_MIN_CONFIDENCE": "0.3"}, false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("APP_ENV", "development")
+			for _, key := range []string{"VISION_URL", "VISION_TOKEN", "VISION_TRAINING_TOKEN", "VISION_TRAINING_CIDRS",
+				"VISION_AUTO_MIN_CONFIDENCE"} {
+				t.Setenv(key, "")
+			}
+			for key, value := range testCase.env {
+				t.Setenv(key, value)
+			}
+			cfg, err := Load()
+			if (err == nil) != testCase.ok {
+				t.Fatalf("Load() error = %v, want ok=%v", err, testCase.ok)
+			}
+			if err == nil && !cfg.VisionWorker {
+				t.Fatal("the reading worker should be on by default")
+			}
+		})
+	}
+}

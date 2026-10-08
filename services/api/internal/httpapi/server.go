@@ -127,6 +127,7 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	s.registerCurrencyRoutes(mux)
 	s.registerFXRateRoutes(mux)
 	s.registerFinanceRoutes(mux)
+	s.registerScreenshotReaderRoutes(mux)
 
 	s.http = &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -153,6 +154,7 @@ func (s *Server) Run(ctx context.Context) error {
 		go s.runLeaderboardProjector(workerCtx)
 		go s.runNotificationPipeline(workerCtx)
 		go s.runFXRateRefresher(workerCtx)
+		go s.runScreenshotReader(workerCtx)
 	}
 	errCh := make(chan error, 1)
 	go func() {

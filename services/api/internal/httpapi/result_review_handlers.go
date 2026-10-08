@@ -59,6 +59,8 @@ type staffReportEvidenceView struct {
 	MediaType string `json:"mediaType"`
 	ByteSize  int64  `json:"byteSize"`
 	Ready     bool   `json:"ready"`
+	// Reading is what the screenshot reader made of it, once queued.
+	Reading *staffScreenshotReadingView `json:"reading"`
 }
 
 type staffReporterView struct {
@@ -127,6 +129,8 @@ type resultReviewDetail struct {
 	ActiveStrikeCounts    map[string]int                 `json:"activeStrikeCounts"`
 	Strikes               []playerStrikeView             `json:"strikes"`
 	Decision              *resultReviewDecisionView      `json:"decision"`
+	// ScreenshotCheck is the screenshot reader's verdict, when it read any.
+	ScreenshotCheck *screenshotEvaluation `json:"screenshotCheck"`
 }
 
 // resultReviewSummaryColumns reads a review joined to its match as "m", which
@@ -313,6 +317,9 @@ func (s *Server) getResultReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	detail, err := loadResultReviewDetail(r.Context(), s.db.Writer, reviewID, identityFromContext(r.Context()).UserID)
+	if err == nil {
+		err = s.attachScreenshotReadings(r.Context(), s.db.Writer, &detail)
+	}
 	if err != nil {
 		s.writeResultReviewFailure(w, reviewID, err)
 		return
@@ -375,7 +382,12 @@ func (s *Server) decideResultReview(w http.ResponseWriter, r *http.Request) {
 		s.writeResultReviewFailure(w, reviewID, err)
 		return
 	}
+	// A decided result shows whose team was whose on the screenshots.
+	learnTeamNamesSafely(ctx, tx, outcome.MatchID, s)
 	detail, err := loadResultReviewDetail(ctx, tx, reviewID, actorID)
+	if err == nil {
+		err = s.attachScreenshotReadings(ctx, tx, &detail)
+	}
 	if err != nil {
 		s.writeResultReviewFailure(w, reviewID, err)
 		return
