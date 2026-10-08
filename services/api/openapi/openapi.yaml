@@ -3324,6 +3324,153 @@ paths:
         '409':
           $ref: '#/components/responses/Error'
           description: cannot_change_own_role.
+  /v1/admin/players:
+    get:
+      operationId: listAdminPlayers
+      tags:
+        - Staff
+      summary: Every player, newest first. Requires player.view (every staff role).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          description: Matches the username, display name, in-game name or Konami ID (any spacing or dashes).
+          schema: { type: string, maxLength: 64 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          description: Bound to the caller and to q.
+          schema: { type: string }
+      responses:
+        '200':
+          description: One page of players.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/AdminPlayer' }
+                  page:
+                    type: object
+                    required: [nextCursor, hasMore]
+                    properties:
+                      nextCursor: { type: string, nullable: true }
+                      hasMore: { type: boolean }
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_search, invalid_limit, invalid_cursor.
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/admin/players/{id}:
+    get:
+      operationId: getAdminPlayer
+      tags:
+        - Staff
+      summary: One player with contact details, recent competitions and any suspension. Requires player.view.
+      description: The phone number is masked.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The player.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/AdminPlayerDetail' }
+        '404':
+          $ref: '#/components/responses/Error'
+          description: player_not_found.
+  /v1/admin/players/{id}/suspension:
+    post:
+      operationId: suspendPlayer
+      tags:
+        - Staff
+      summary: Suspend an active player. Requires player.suspend (operators and admins).
+      description: >-
+        The player is signed out of every session and cannot sign in until reactivated. Staff cannot suspend
+        themselves or anyone holding a staff role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminPlayerStatusInput' }
+      responses:
+        '200':
+          description: The suspended player.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/AdminPlayerDetail' }
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_reason.
+        '404':
+          $ref: '#/components/responses/Error'
+          description: player_not_found.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: cannot_change_own_status, player_is_staff, player_status_conflict.
+  /v1/admin/players/{id}/reactivation:
+    post:
+      operationId: reactivatePlayer
+      tags:
+        - Staff
+      summary: Reactivate a suspended player. Requires player.suspend.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminPlayerStatusInput' }
+      responses:
+        '200':
+          description: The reactivated player.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/AdminPlayerDetail' }
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_reason.
+        '404':
+          $ref: '#/components/responses/Error'
+          description: player_not_found.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: cannot_change_own_status, player_status_conflict.
   /v1/admin/refunds:
     get:
       operationId: listRefundQueue
@@ -4525,9 +4672,9 @@ components:
     StaffRole:
       type: string
       description: >-
-        support: overview, create and run competitions, see registrations. reviewer: support plus result reviews
-        and account verifications. operator: reviewer plus revoking strikes. admin: everything, including finance,
-        payment reviews, refunds and staff roles.
+        support: overview, create and run competitions, see registrations, look players up. reviewer: support plus
+        result reviews and account verifications. operator: reviewer plus revoking strikes and suspending players.
+        admin: everything, including finance, payment reviews, refunds and staff roles.
       enum: [support, reviewer, operator, admin]
     StaffPermission:
       type: string
@@ -4542,6 +4689,72 @@ components:
         - competition.manage
         - staff.manage
         - finance.view
+        - player.view
+        - player.suspend
+    AdminPlayer:
+      type: object
+      required: [id, username, displayName, konamiId, inGameName, verification, countryCode, status, staffRole,
+        hasEmail, hasPhone, activeStrikes, competitions, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string, nullable: true }
+        displayName: { type: string }
+        konamiId: { type: string, nullable: true }
+        inGameName: { type: string, nullable: true }
+        verification:
+          type: string
+          nullable: true
+          enum: [unverified, pending, verified, rejected, null]
+        countryCode: { type: string, minLength: 2, maxLength: 2 }
+        status: { type: string, enum: [pending, active, suspended, deleted] }
+        staffRole:
+          allOf:
+            - $ref: '#/components/schemas/StaffRole'
+          nullable: true
+        hasEmail: { type: boolean }
+        hasPhone: { type: boolean }
+        activeStrikes: { type: integer }
+        competitions: { type: integer, description: Competitions entered. }
+        createdAt: { type: string, format: date-time }
+    AdminPlayerDetail:
+      allOf:
+        - $ref: '#/components/schemas/AdminPlayer'
+        - type: object
+          required: [email, emailVerified, phone, lastSeenAt, totalStrikes, suspension, competitionList]
+          properties:
+            email: { type: string, nullable: true }
+            emailVerified: { type: boolean }
+            phone: { type: string, nullable: true, description: 'Masked, for example +254*****678.' }
+            lastSeenAt: { type: string, format: date-time, nullable: true }
+            totalStrikes: { type: integer }
+            suspension:
+              type: object
+              nullable: true
+              description: The latest suspension, while the player is suspended.
+              required: [reason, at, by]
+              properties:
+                reason: { type: string }
+                at: { type: string, format: date-time }
+                by: { type: string, nullable: true, description: Username of the staff member. }
+            competitionList:
+              type: array
+              description: The 25 most recent competitions entered.
+              items:
+                type: object
+                required: [competitionId, name, status, entryStatus, placement, joinedAt]
+                properties:
+                  competitionId: { type: string, format: uuid }
+                  name: { type: string }
+                  status: { type: string }
+                  entryStatus: { type: string }
+                  placement: { type: integer, nullable: true }
+                  joinedAt: { type: string, format: date-time }
+    AdminPlayerStatusInput:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 10, maxLength: 500 }
     StaffList:
       type: object
       required: [data, roles]
