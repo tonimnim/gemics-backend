@@ -11,6 +11,7 @@ export function SiteHeader() {
         </Link>
         <nav className="site-nav" aria-label="Primary">
           <Link href="/tournaments">Tournaments</Link>
+          <Link href="/rankings">Rankings</Link>
           <Link className="nav-secondary" href="/#how-it-works">How it works</Link>
           <Link className="button button-glass button-small" href="/#app">
             Get the app
@@ -31,7 +32,8 @@ export function SiteFooter() {
           </Link>
           <nav aria-label="Footer">
             <Link href="/tournaments">Tournaments</Link>
-              <Link href="/#how-it-works">How it works</Link>
+            <Link href="/rankings">Rankings</Link>
+            <Link href="/#how-it-works">How it works</Link>
             <Link href="/#app">
               Get the app <ArrowIcon className="inline-icon" />
             </Link>

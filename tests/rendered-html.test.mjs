@@ -31,6 +31,22 @@ test("server-renders the Tonits landing page", async () => {
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 
+test("server-renders the public tournament and ranking pages", async () => {
+  // No API runs under the test, so both pages must degrade to their notices.
+  for (const [path, title, notice] of [
+    ["/tournaments", /<title>Tournaments — Tonits<\/title>/, /Tournaments are unavailable right now/],
+    ["/rankings", /<title>Rankings — Tonits<\/title>/, /Rankings are unavailable right now/],
+    ["/rankings?country=KE", /<title>Rankings — Tonits<\/title>/, /aria-current="page"[^>]*>Kenya</],
+  ]) {
+    const response = await render(path);
+    assert.equal(response.status, 200, path);
+    const html = await response.text();
+    assert.match(html, title, path);
+    assert.match(html, notice, path);
+    assert.match(html, /href="\/rankings"/, path);
+  }
+});
+
 test("removes starter-only preview infrastructure", async () => {
   const [page, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
