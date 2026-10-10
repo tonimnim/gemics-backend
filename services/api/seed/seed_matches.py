@@ -65,16 +65,22 @@ def upload(player, data):
     raise RuntimeError("evidence never became ready")
 
 
-def report(match_id, player, home, away, final_evidence=None):
-    tiebreak = None
+def report(match_id, player, home, away):
+    """The player submits the result; the opponent then confirms or rejects it."""
     body = {"homeScore": home, "awayScore": away, "declarationAccepted": True}
     if home == away:
-        body["tiebreak"] = tiebreak = {"type": "penalties", "homeScore": 4, "awayScore": 3}
-    path = f"/v1/matches/{match_id}/score-reports"
-    if final_evidence:
-        body["evidenceIds"] = final_evidence
-        path += "/final"
-    return call("POST", path, body, token=player["token"], idempotent=True)
+        body["tiebreak"] = {"type": "penalties", "homeScore": 4, "awayScore": 3}
+    return call("POST", f"/v1/matches/{match_id}/score-reports", body, token=player["token"], idempotent=True)
+
+
+def answer(match_id, player, decision):
+    return call("POST", f"/v1/matches/{match_id}/score-reports/confirmation", {"decision": decision},
+                token=player["token"], idempotent=True)
+
+
+def send_screenshot(match_id, player, evidence_id):
+    return call("POST", f"/v1/matches/{match_id}/score-reports/screenshot", {"evidenceId": evidence_id},
+                token=player["token"], idempotent=True)
 
 
 def main():
@@ -121,15 +127,15 @@ def main():
         if plan == "pending":
             continue
         if plan == "agree":
-            report(match_id, away_player, h, a)
+            answer(match_id, away_player, "confirm")
             continue
-        # A disagreement: the other side claims the reverse result, then both
-        # answer the mismatch with screenshots of their claim.
-        report(match_id, away_player, a, h)
+        # A dispute: the away side rejects the result, then each side sends a
+        # screenshot; the away one is edited to the reverse score.
+        answer(match_id, away_player, "reject")
         home_shot = upload(home_player, screenshot(home_player["username"], away_player["username"], h, a))
         away_shot = upload(away_player, screenshot(home_player["username"], away_player["username"], a, h))
-        report(match_id, home_player, h, a, [home_shot])
-        report(match_id, away_player, a, h, [away_shot])
+        send_screenshot(match_id, home_player, home_shot)
+        send_screenshot(match_id, away_player, away_shot)
         reviews += 1
     print(f"  plans: {sorted(plans)}; {reviews} disputes sent to Gamics review")
 

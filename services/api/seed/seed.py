@@ -127,7 +127,13 @@ def register(name, country, password):
                    {"username": username, "konamiId": kid, "password": password, "deviceName": "Seed"})
     person = {"name": name, "username": username, "konamiId": kid, "password": password, "country": country,
               "token": session["accessToken"], "id": session["player"]["id"]}
-    accounts = call("GET", "/v1/me/game-accounts", token=person["token"])["data"]
+    # The list is read from the replica, which can lag the registration by a
+    # moment.
+    for _ in range(50):
+        accounts = call("GET", "/v1/me/game-accounts", token=person["token"])["data"]
+        if accounts:
+            break
+        time.sleep(0.1)
     person["gameAccountId"] = accounts[0]["id"]
     call("PATCH", "/v1/me", {"displayName": name}, token=person["token"])
     return person

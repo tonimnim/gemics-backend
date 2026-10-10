@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, __import__("os").path.dirname(__file__))
 from PIL import Image, ImageDraw  # noqa: E402
 from seed import GAMICS_ORG, APIError, call, rng, sql, step  # noqa: E402
-from seed_matches import font, report, upload  # noqa: E402
+from seed_matches import answer, font, report, upload  # noqa: E402
 
 state = json.load(open("/tmp/tonits-seed-state.json"))
 staff = {m.get("role", "admin"): m for m in state["staff"]}
@@ -149,7 +149,7 @@ def play_open_matches():
             if h == a:
                 a = max(0, a - 1) if a else 0
             report(m["id"], sides[0], h, a)
-            report(m["id"], sides[1], h, a)
+            answer(m["id"], sides[1], "confirm")
             played += 1
     return played
 
