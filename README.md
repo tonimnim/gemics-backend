@@ -5,8 +5,9 @@ eFootball Mobile in Kenya.
 
 ## What is scaffolded
 
-- An Expo SDK 57 React Native player app for iOS and Android.
-- A responsive marketing website using the Next.js App Router programming model.
+- A responsive landing website using the Next.js App Router programming model.
+- A React staff dashboard (`apps/admin`). The player app is built in Flutter in its
+  own repository, against the API and contract in this one.
 - A Go API with graceful shutdown, timeouts, structured logs, CORS and request IDs.
 - Registration with only a username, Konami ID and password; Konami ID sign-in;
   email and phone added after registration; rotating refresh sessions,
@@ -18,9 +19,9 @@ eFootball Mobile in Kenya.
   payment idempotency and atomic paid-entry creation.
 - Deterministic draws and progression for single elimination, double elimination
   and round robin, with standings and placements.
-- Blind result verification: each entry reports its score without seeing the
-  other's, silent entries are removed from the tournament, and scores that still
-  differ after a screenshot-backed response go to a Gamics staff review queue.
+- Result verification: either entry submits the result and the other confirms or
+  rejects it; an unanswered result stands, and a rejected one goes to a staff review
+  queue with one screenshot from each player, read by the screenshot reader.
   Organizers never decide results.
 - A PostgreSQL schema for organizers, solo/team entries, brackets, score reports,
   screenshot evidence, result reviews, conduct strikes, idempotency, audit history
@@ -30,16 +31,16 @@ eFootball Mobile in Kenya.
 ## Repository map
 
 ```text
-app/                         Marketing website
-apps/mobile/                 Expo React Native player app
+app/                         Landing website
+apps/admin/                  Staff dashboard
 services/api/cmd/api/        Go API entry point
 services/api/internal/       Domain and transport modules
 services/api/migrations/     PostgreSQL schema
 services/api/openapi/        HTTP contract
 docs/architecture.md         Boundaries, scale path and challenged decisions
 docs/docker.md               Containers, API addresses and deployment notes
-docs/result-verification.md  Blind score reports, removal and Gamics review policy
-docs/mobile-api-requirements.md  Implemented/planned mobile API boundary
+docs/result-verification.md  Submit, confirm or reject, screenshots and review policy
+docs/mobile-api-requirements.md  API boundary for the Flutter player app
 docs/platform-readiness.md   Honest implementation and release-gap inventory
 docs/production-architecture.md  Database, cache and network scale design
 docs/security.md             Dependency audit baseline and release gate
@@ -55,14 +56,6 @@ npm install
 npm run dev
 ```
 
-For the player app, copy its environment example and start Expo:
-
-```sh
-cp apps/mobile/.env.example apps/mobile/.env
-npm install --prefix apps/mobile
-npm run mobile:start
-```
-
 In another terminal, start the API:
 
 ```sh
@@ -74,8 +67,6 @@ Checks:
 ```sh
 npm run build
 npm run lint
-npm run mobile:typecheck
-npm run mobile:lint
 npm run api:test
 ```
 

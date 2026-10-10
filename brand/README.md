@@ -2,11 +2,9 @@
 
 Everything a client needs to look like Gamics: the mark, app icons, colours,
 type, shape language and a ready Flutter theme. The sources of truth are the
-website (`app/globals.css`, `app/brand-mark.tsx`, `public/`) and the old Expo
-app's tokens (`apps/mobile/src/design/tokens.ts`); this folder collects them.
-
-> **Do not reuse `apps/mobile/assets/images/icon.png`.** That blue "A" is the
-> stock Expo template icon, not Gamics. Use `app-icon/` below.
+website (`app/globals.css`, `app/brand-mark.tsx`, `public/`) and the staff
+dashboard (`apps/admin/src/styles/theme.css`); this folder collects them. Use
+`app-icon/` below for the app icon.
 
 ## 1. The mark
 
@@ -70,7 +68,7 @@ flutter_native_splash:
     image: "assets/brand/splash-mark-acid-1152.png"
 ```
 
-App identity carried over from the Expo app: name **Gamics**, bundle/package ID
+App identity carried over from the earlier app: name **Gamics**, bundle/package ID
 **`io.gamics.app`**, deep-link scheme **`gamics://`**, portrait only, dark UI.
 
 ## 3. Colour

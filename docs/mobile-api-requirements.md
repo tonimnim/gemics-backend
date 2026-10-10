@@ -7,14 +7,16 @@ refresh tokens are rotated by the API and stored only in secure device storage.
 
 ## Base configuration
 
+The Flutter app takes the API base URL from its build configuration (for example
+`--dart-define=API_URL=...`):
+
 ```text
-EXPO_PUBLIC_API_URL=http://10.0.2.2:8080  # Android emulator
-EXPO_PUBLIC_USE_FIXTURES=false
+API_URL=http://10.0.2.2:8090  # Android emulator against the local Docker stack
 ```
 
 Use the computer's LAN address instead of `10.0.2.2` on a physical phone. Production
 must use HTTPS. API-relative media references, including `avatarUrl`, are resolved
-against `EXPO_PUBLIC_API_URL`. The public avatar route responds with a short-lived
+against the API base URL. The public avatar route responds with a short-lived
 `307` redirect; the client may let its image component follow that redirect.
 
 ## Player journey
@@ -95,7 +97,7 @@ signed-in account, when they matter.
 
 ### 3. Device notifications and account security
 
-- `POST /v1/me/push-tokens` registers or rotates an Expo device token and binds it to
+- `POST /v1/me/push-tokens` registers or rotates a device push token and binds it to
   the session the request is signed in with. Register after every sign-in and on each
   app launch: an installation stops receiving pushes when its session ends (logout,
   remote session revoke, account deletion), and installations registered before
@@ -118,16 +120,17 @@ Route and render on `kind` and the ids in `data`; never parse the title or body.
 `data` holds identifiers only, never a score.
 
 - Every event below is stored in the inbox. Rows whose delivery is push are also sent
-  through Expo, but only while the named preference is on
+  to the device (today through Expo's push service, which a Flutter app can't use;
+  delivery moves to Firebase Cloud Messaging before the app ships), but only while the named preference is on
   (`PATCH /v1/me/notification-preferences`) and only to installations registered with
   `POST /v1/me/push-tokens` whose session is still signed in. The push has the same
   title and body as the inbox item.
-- The Expo push `data` is the item's `data` plus `notificationId`, plus `actionUrl`
+- The push `data` is the item's `data` plus `notificationId`, plus `actionUrl`
   when it is not null (`PushNotificationData` in OpenAPI).
 - When a push is tapped, call `POST /v1/me/notifications/{notificationId}/read`, then
   open the screen listed for its `kind`, using the ids in `data`.
 - `actionUrl` is an in-app route hint, not an API path. It has no `/v1` prefix and must
-  never be requested from `EXPO_PUBLIC_API_URL`. It is null when the item has no screen
+  never be requested from the API. It is null when the item has no screen
   of its own; open the inbox item instead.
 - Items stored before `kind` existed may lack it, or carry one of the legacy values
   `draw_generated`, `payment_succeeded`, `payment_review` or `payment_failed`. Route

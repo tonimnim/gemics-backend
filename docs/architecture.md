@@ -2,7 +2,7 @@
 
 ## Decision summary
 
-Gamics starts with an Expo React Native player app, a separate marketing website,
+Gamics starts with a Flutter player app (its own repository), a separate landing website,
 one modular Go API, PostgreSQL as the transactional source of truth, and
 S3-compatible object storage for match evidence. Background delivery uses a
 transactional outbox.
@@ -12,7 +12,7 @@ eFootball-specific player or bracket table, so another solo or team title can
 be added without rewriting registrations and matches.
 
 ```text
-React Native player app ----+
+Flutter player app ---------+
                             |
 Organizer console (later) --+----> Go HTTP API
                             |            |
@@ -153,14 +153,15 @@ The initial schema distinguishes an administrative fee from organizer- or
 sponsor-funded prizes. It intentionally has no player-funded prize-pool option.
 That supports the sports-competition model and keeps the first release focused on free events.
 
-### Why ship the player experience in React Native now?
+### Why a native player app now?
 
 The player loop depends on check-in reminders, camera or gallery evidence,
-deep links and eventually push notifications. Those are core to trustworthy
-match operations, not optional polish. Expo React Native provides one iOS and
-Android codebase while the lightweight website stays focused on discovery and
-marketing. The trade-off is app-store release work and a second JavaScript
-toolchain, which is contained under `apps/mobile` and kept behind the same Go API.
+deep links and push notifications. Those are core to trustworthy match
+operations, not optional polish. Flutter provides one iOS and Android codebase
+while the lightweight website stays focused on discovery. The app lives in its
+own repository and talks only to the Go API and its OpenAPI contract. Push
+delivery is still built on Expo's push service and must move to Firebase Cloud
+Messaging for the Flutter app.
 
 ## Extraction triggers
 
