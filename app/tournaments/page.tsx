@@ -1,157 +1,110 @@
+import type { Metadata } from "next";
 import Link from "next/link";
-import { BrandMark } from "../brand-mark";
+import { type Competition, loadCompetitions } from "../lib/competitions";
+import { PageHead } from "../page-head";
+import { SiteFooter, SiteHeader } from "../site-chrome";
+import { FeaturedTournament, TournamentRow } from "../tournament-row";
 
-// Rendered on the server, so the page ships no client JavaScript and needs no
-// CORS grant. Inside Docker the API is reachable as the compose service name;
-// the localhost fallback is for `npm run dev` on a developer machine.
-const apiURL = process.env.API_URL ?? "http://localhost:8080";
-
-type Competition = {
-  id: string;
-  slug: string;
-  name: string;
-  description: string;
-  gameName: string;
-  organizerName: string;
-  format: string;
-  status: string;
-  maxEntries: number;
-  entryCount: number;
-  availableSlots: number;
-  entryType: "free" | "paid";
-  entryFeeMinor: number;
-  currency: string;
-  startsAt: string;
+export const metadata: Metadata = {
+  title: "Tournaments — Tonits",
 };
 
-const formatLabels: Record<string, string> = {
-  single_elimination: "Single elimination",
-  double_elimination: "Double elimination",
-  round_robin: "Round robin",
+type Group = {
+  key: string;
+  label: string;
+  title: string;
+  statuses: string[];
+  newestFirst?: boolean;
 };
 
-const statusLabels: Record<string, string> = {
-  published: "Announced",
-  registration_open: "Registration open",
-  check_in: "Check-in open",
-  running: "Underway",
-  completed: "Finished",
-};
+const groups: Group[] = [
+  { key: "open", label: "Open", title: "Open for entry", statuses: ["registration_open", "check_in"] },
+  { key: "upcoming", label: "Upcoming", title: "Coming up", statuses: ["published"] },
+  { key: "live", label: "Underway", title: "Underway", statuses: ["running"] },
+  { key: "finished", label: "Finished", title: "Finished", statuses: ["completed"], newestFirst: true },
+];
 
-/** Entry fees are stored as integer minor units, never floats. */
-function entryPrice(competition: Competition) {
-  const amount = competition.entryFeeMinor / 100;
-  return new Intl.NumberFormat("en-KE", {
-    style: "currency",
-    currency: competition.currency || "KES",
-    minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
-  }).format(amount);
+function startTime(competition: Competition) {
+  const time = new Date(competition.startsAt).getTime();
+  return Number.isNaN(time) ? Number.MAX_SAFE_INTEGER : time;
 }
 
-function startLabel(value: string) {
-  const startsAt = new Date(value);
-  if (Number.isNaN(startsAt.getTime())) return "Date to be confirmed";
-  return startsAt.toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" });
+function inGroup(group: Group, competitions: Competition[]) {
+  const members = competitions.filter((competition) => group.statuses.includes(competition.status));
+  return members.sort((a, b) => (group.newestFirst ? startTime(b) - startTime(a) : startTime(a) - startTime(b)));
 }
 
-async function loadCompetitions(): Promise<{ data: Competition[]; reachable: boolean }> {
-  try {
-    // no-store because a tournament that just opened should appear immediately;
-    // the API already fronts this query with its own short-lived cache.
-    const response = await fetch(`${apiURL}/v1/competitions?limit=50`, { cache: "no-store" });
-    if (!response.ok) return { data: [], reachable: false };
-    const body = (await response.json()) as { data?: Competition[] };
-    return { data: body.data ?? [], reachable: true };
-  } catch {
-    return { data: [], reachable: false };
-  }
-}
+export default async function Tournaments({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const [{ data, reachable }, params] = await Promise.all([loadCompetitions(), searchParams]);
+  const requested = typeof params.status === "string" ? params.status : "all";
+  const active = groups.find((group) => group.key === requested) ?? null;
+  const visible = (active ? [active] : groups)
+    .map((group) => ({ group, members: inGroup(group, data) }))
+    .filter(({ members }) => members.length > 0);
 
-export default async function Tournaments() {
-  const { data, reachable } = await loadCompetitions();
-  const accents = ["", "blue", "orange"];
+  // The event of the page: the next open tournament to start, else the next announced one.
+  const featured = active ? null : (inGroup(groups[0], data)[0] ?? inGroup(groups[1], data)[0] ?? null);
+  const openCount = inGroup(groups[0], data).length;
 
   return (
-    <main>
-      <header className="site-header shell">
-        <Link className="brand" href="/" aria-label="Gamics home">
-          <BrandMark />
-          <span>GAMICS</span>
-        </Link>
-        <nav aria-label="Primary navigation">
-          <Link href="/tournaments">Tournaments</Link>
-          <Link href="/#players">Players</Link>
-          <Link href="/#organizers">Organizers</Link>
-        </nav>
-        <button className="button button-quiet" type="button">Join the arena</button>
-      </header>
+    <>
+      <SiteHeader />
 
-      <section className="section shell">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow"><span /> All competitions</p>
-            <h2>FIND YOUR<br />TOURNAMENT.</h2>
-          </div>
-          <p>Every open eFootball Mobile competition on Gamics. Free to enter unless a fee is shown.</p>
+      <main>
+        <PageHead
+          title="Tournaments"
+          meta={reachable && data.length > 0 ? `${data.length} total · ${openCount} open for entry` : null}
+        >
+          {reachable && data.length > 0 && (
+            <nav className="filters" aria-label="Filter tournaments">
+              <Link className="filter" href="/tournaments" aria-current={active ? undefined : "page"} scroll={false}>
+                All
+                <span>{data.length}</span>
+              </Link>
+              {groups.map((group) => (
+                <Link
+                  className="filter"
+                  href={`/tournaments?status=${group.key}`}
+                  aria-current={active?.key === group.key ? "page" : undefined}
+                  key={group.key}
+                  scroll={false}
+                >
+                  {group.label}
+                  <span>{inGroup(group, data).length}</span>
+                </Link>
+              ))}
+            </nav>
+          )}
+        </PageHead>
+
+        <div className="shell">
+          {!reachable && <p className="empty-note">Tournaments are unavailable right now. Try again shortly.</p>}
+
+          {reachable && visible.length === 0 && <p className="empty-note">Nothing here right now. Check back soon.</p>}
+
+          {featured && <FeaturedTournament competition={featured} />}
+
+          {visible.map(({ group, members }) => (
+            <section className="board-group" aria-labelledby={`group-${group.key}`} key={group.key}>
+              <header className="board-group-head" data-reveal>
+                <h2 id={`group-${group.key}`}>{group.title}</h2>
+                <span>{members.length}</span>
+              </header>
+              <ol className="board">
+                {members.map((competition, index) => (
+                  <TournamentRow competition={competition} index={index} key={competition.id} />
+                ))}
+              </ol>
+            </section>
+          ))}
         </div>
+      </main>
 
-        {!reachable && (
-          <p className="tournament-note">
-            Competitions are temporarily unavailable. Please try again shortly.
-          </p>
-        )}
-
-        {reachable && data.length === 0 && (
-          <p className="tournament-note">
-            No competitions are open right now. Check back soon.
-          </p>
-        )}
-
-        {data.length > 0 && (
-          <div className="competition-grid">
-            {data.map((competition, index) => (
-              <article className="competition-card" key={competition.id}>
-                <div className={`competition-number ${accents[index % accents.length]}`}>
-                  {String(index + 1).padStart(2, "0")}
-                </div>
-                <div className="competition-content">
-                  <span className="game-label">{competition.gameName}</span>
-                  <h3>{competition.name}</h3>
-                  {competition.description && <p>{competition.description}</p>}
-
-                  <div className="entry-row">
-                    <span className={`entry-tag ${competition.entryType}`}>
-                      {competition.entryType === "paid" ? entryPrice(competition) : "FREE ENTRY"}
-                    </span>
-                    <span className="entry-format">{formatLabels[competition.format] ?? competition.format}</span>
-                  </div>
-
-                  <div className="competition-meta">
-                    <span>{statusLabels[competition.status] ?? competition.status} &middot; {startLabel(competition.startsAt)}</span>
-                    <strong>{competition.entryCount} / {competition.maxEntries}</strong>
-                  </div>
-                  <div className="capacity">
-                    <i style={{ width: `${Math.min(100, Math.round((competition.entryCount / Math.max(1, competition.maxEntries)) * 100))}%` }} />
-                  </div>
-                  <p className="entry-organizer">By {competition.organizerName}</p>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <footer className="shell">
-        <div className="footer-row">
-          <Link className="brand" href="/"><BrandMark /><span>GAMICS</span></Link>
-          <p>Competition infrastructure for African esports.</p>
-          <span>NAIROBI // 2026</span>
-        </div>
-        <p className="legal-note">
-          eFootball is a trademark of Konami Digital Entertainment. Gamics is an independent platform and is not
-          affiliated with or endorsed by Konami.
-        </p>
-      </footer>
-    </main>
+      <SiteFooter />
+    </>
   );
 }
