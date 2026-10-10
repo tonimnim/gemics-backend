@@ -47,6 +47,31 @@ test("server-renders the public tournament and ranking pages", async () => {
   }
 });
 
+test("server-renders the legal pages and links them with the socials from every footer", async () => {
+  for (const [path, title, heading] of [
+    ["/terms", "Terms of Service", /Fair play and conduct/],
+    ["/privacy", "Privacy Policy", /Reading screenshots/],
+    ["/refunds", "Refund Policy", /When you get a full refund/],
+    ["/fair-play", "Fair Play Rules", /Conduct strikes/],
+  ]) {
+    const response = await render(path);
+    assert.equal(response.status, 200, path);
+    const html = await response.text();
+    assert.match(html, new RegExp(`<title>${title} — Tonits</title>`), path);
+    assert.match(html, heading, path);
+    assert.match(html, /Last updated/, path);
+  }
+
+  const html = await (await render("/")).text();
+  for (const href of ["/terms", "/privacy", "/refunds", "/fair-play"]) {
+    assert.match(html, new RegExp(`href="${href}"`), href);
+  }
+  for (const network of ["TikTok", "Instagram", "YouTube", "X"]) {
+    assert.match(html, new RegExp(`aria-label="Tonits on ${network}"`), network);
+  }
+  assert.match(html, /rel="noopener noreferrer"/);
+});
+
 test("removes starter-only preview infrastructure", async () => {
   const [page, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
