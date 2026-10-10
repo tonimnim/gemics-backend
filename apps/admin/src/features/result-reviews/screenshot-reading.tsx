@@ -73,13 +73,11 @@ export function ScreenshotVerdict({
   const text: Record<ScreenshotCheck['verdict'], string> = {
     pending: 'Reading the screenshots…',
     supports: check.score
-      ? `The screenshots show ${homeName} ${scoreLine(check.score)} ${awayName}, matching the ${
-          check.supportedSide ?? 'home'
-        } claim.`
-      : 'The screenshots match one claim.',
+      ? `The screenshots show ${homeName} ${scoreLine(check.score)} ${awayName}, the submitted result.`
+      : 'The screenshots match the submitted result.',
     neither: check.score
-      ? `The screenshots show ${homeName} ${scoreLine(check.score)} ${awayName}, matching neither claim.`
-      : 'The screenshots match neither claim.',
+      ? `The screenshots show ${homeName} ${scoreLine(check.score)} ${awayName}, not the submitted result.`
+      : "The screenshots don't match the submitted result.",
     conflicting: `The screenshots disagree on ${check.differences.map(fieldLabel).join(', ')}.`,
     unreadable: "The screenshots couldn't be read.",
     inconclusive:
@@ -110,7 +108,7 @@ export function ScreenshotVerdict({
       <div className='grid gap-0.5'>
         <div className='font-medium'>{text[check.verdict]}</div>
         {/* Elsewhere the headline already says why; here it explains what
-            keeps a supported claim from being settled automatically. */}
+            keeps a supported result from being settled automatically. */}
         {check.verdict === 'supports' && check.reasons.length > 0 && (
           <div className='text-sm opacity-80'>{check.reasons.join(' ')}</div>
         )}

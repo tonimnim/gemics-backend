@@ -28,15 +28,17 @@ function ReportCard({
   reviewId,
   side,
   name,
-  initial,
-  final,
+  submitted,
+  rejected,
+  screenshot,
   strikes,
 }: {
   reviewId: string
   side: 'Home' | 'Away'
   name: string
-  initial: StaffReport | null
-  final: StaffReport | null
+  submitted: StaffReport | null
+  rejected: boolean
+  screenshot: StaffReport | null
   strikes: number
 }) {
   return (
@@ -57,37 +59,34 @@ function ReportCard({
         </CardTitle>
       </CardHeader>
       <CardContent className='space-y-4'>
-        <div className='grid grid-cols-2 gap-3 text-sm'>
-          <div>
-            <div className='font-mono text-xs text-muted-foreground uppercase'>
-              First claim
-            </div>
-            <div className='text-2xl font-black'>
-              {initial ? scoreText(initial) : '—'}
-            </div>
-            {initial && (
-              <div className='text-xs text-muted-foreground'>
-                {dateTime(initial.reportedAt)}
+        <div className='text-sm'>
+          {submitted &&
+          submitted.homeScore != null &&
+          submitted.awayScore != null ? (
+            <>
+              <div className='font-mono text-xs text-muted-foreground uppercase'>
+                Submitted the result
               </div>
-            )}
-          </div>
-          <div>
-            <div className='font-mono text-xs text-muted-foreground uppercase'>
-              Final claim
-            </div>
-            <div className='text-2xl font-black'>
-              {final ? scoreText(final) : '—'}
-            </div>
-            {final && (
-              <div className='text-xs text-muted-foreground'>
-                {dateTime(final.reportedAt)}
+              <div className='text-2xl font-black'>
+                {scoreText({
+                  homeScore: submitted.homeScore,
+                  awayScore: submitted.awayScore,
+                  tiebreak: submitted.tiebreak,
+                })}
               </div>
-            )}
-          </div>
+              <div className='text-xs text-muted-foreground'>
+                {dateTime(submitted.reportedAt)}
+              </div>
+            </>
+          ) : (
+            <div className='font-mono text-xs text-muted-foreground uppercase'>
+              {rejected ? 'Rejected the result' : 'Did not answer'}
+            </div>
+          )}
         </div>
-        {final && final.evidence.length > 0 ? (
+        {screenshot && screenshot.evidence.length > 0 ? (
           <div className='flex flex-wrap gap-3'>
-            {final.evidence.map((item) => (
+            {screenshot.evidence.map((item) => (
               <div key={item.id} className='space-y-2'>
                 <EvidenceImage id={item.id} ready={item.ready} />
                 {item.reading && (
@@ -101,7 +100,7 @@ function ReportCard({
             ))}
           </div>
         ) : (
-          <p className='text-sm text-muted-foreground'>No screenshots.</p>
+          <p className='text-sm text-muted-foreground'>No screenshot.</p>
         )}
       </CardContent>
     </Card>
@@ -116,7 +115,10 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
       api<{ data: ReviewDetail }>(`/v1/admin/result-reviews/${id}`),
   })
   const review = data?.data
-  const [decision, setDecision] = useState<ReviewDecision>('accept_home')
+  // accept stands for accepting the submitted result, whichever side sent it.
+  const [decision, setDecision] = useState<
+    'accept' | Exclude<ReviewDecision, 'accept_home' | 'accept_away'>
+  >('accept')
   const [score, setScore] = useState({ home: '0', away: '0' })
   const [strikeUserIds, setStrikeUserIds] = useState<string[]>([])
   const [note, setNote] = useState('')
@@ -128,7 +130,8 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
         idempotent: true,
         body: {
           expectedVersion: review!.version,
-          decision,
+          decision:
+            decision === 'accept' ? `accept_${submittedSide}` : decision,
           correctedScore:
             decision === 'corrected_score'
               ? { homeScore: Number(score.home), awayScore: Number(score.away) }
@@ -145,17 +148,25 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
     },
   })
 
-  const reporters = review
+  const submittedSide: 'home' | 'away' = review?.reports.away.initial
+    ? 'away'
+    : 'home'
+  const otherSide = submittedSide === 'home' ? 'away' : 'home'
+  const submitted = review?.reports[submittedSide].initial ?? null
+  const rejectedBy = review?.verification.rejectedBy ?? null
+  // Only the player a decision proves wrong can be struck: the submitter or
+  // the player who rejected the result.
+  const players = review
     ? [
-        {
-          userId: review.participants.home.captainUserId,
-          name: review.participants.home.displayName,
+        submitted && {
+          userId: submitted.reportedBy.userId,
+          name: `${submitted.reportedBy.displayName} (submitted the result)`,
         },
-        {
-          userId: review.participants.away.captainUserId,
-          name: review.participants.away.displayName,
+        rejectedBy && {
+          userId: rejectedBy,
+          name: `${review.participants[otherSide].displayName} (rejected it)`,
         },
-      ]
+      ].filter((player) => !!player)
     : []
 
   return (
@@ -199,8 +210,9 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
               reviewId={review.id}
               side='Home'
               name={review.participants.home.displayName}
-              initial={review.reports.home.initial}
-              final={review.reports.home.final}
+              submitted={review.reports.home.initial}
+              rejected={submittedSide === 'away' && !!rejectedBy}
+              screenshot={review.reports.home.final}
               strikes={
                 review.activeStrikeCounts[
                   review.participants.home.captainUserId
@@ -211,8 +223,9 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
               reviewId={review.id}
               side='Away'
               name={review.participants.away.displayName}
-              initial={review.reports.away.initial}
-              final={review.reports.away.final}
+              submitted={review.reports.away.initial}
+              rejected={submittedSide === 'home' && !!rejectedBy}
+              screenshot={review.reports.away.final}
               strikes={
                 review.activeStrikeCounts[
                   review.participants.away.captainUserId
@@ -259,19 +272,23 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
                   <RadioGroup
                     value={decision}
                     onValueChange={(value) =>
-                      setDecision(value as ReviewDecision)
+                      setDecision(value as typeof decision)
                     }
                     className='grid gap-2 sm:grid-cols-2'
                   >
                     {(
                       [
                         [
-                          'accept_home',
-                          `Accept ${review.participants.home.displayName}'s claim`,
-                        ],
-                        [
-                          'accept_away',
-                          `Accept ${review.participants.away.displayName}'s claim`,
+                          'accept',
+                          submitted &&
+                          submitted.homeScore != null &&
+                          submitted.awayScore != null
+                            ? `Accept the submitted result (${scoreText({
+                                homeScore: submitted.homeScore,
+                                awayScore: submitted.awayScore,
+                                tiebreak: submitted.tiebreak,
+                              })})`
+                            : 'Accept the submitted result',
                         ],
                         ['corrected_score', 'Enter the correct score'],
                         ['remove_both', 'Remove both players'],
@@ -319,8 +336,8 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
                     </div>
                   )}
                   <div className='grid gap-2'>
-                    <Label>Conduct strike for a false report</Label>
-                    {reporters.map((player) => (
+                    <Label>Conduct strike</Label>
+                    {players.map((player) => (
                       <Label
                         key={player.userId}
                         className='flex items-center gap-2 font-normal'
