@@ -77,20 +77,20 @@ func TestNotificationDefinitionMapsResultVerificationEvents(t *testing.T) {
 		want        notificationDefinition
 	}{
 		{"result.report_received", testNotificationMatchID, reportPayload, notificationDefinition{
-			Category: "result", PreferenceKey: "result_push", Title: "Your opponent reported the score",
-			Body: "Report your score for this match before the deadline.", ActionURL: matchURL,
+			Category: "result", PreferenceKey: "result_push", Title: "Confirm the match result",
+			Body: "Your opponent submitted the result. Confirm or reject it before the deadline.", ActionURL: matchURL,
 			RecipientKind: notificationRecipientMatchEntry, RecipientID: testNotificationEntryID, Data: matchData,
 			Disposition: notificationDispositionProjected, SkipUnlessAwaitingEntryReport: true,
 		}},
 		{"result.report_reminder", testNotificationMatchID, reportPayload, notificationDefinition{
-			Category: "result", PreferenceKey: "result_push", Title: "Report your score now",
-			Body:      "Your report window is about to close. If you don't report, you will be removed from the tournament.",
+			Category: "result", PreferenceKey: "result_push", Title: "Confirm the result now",
+			Body:      "Time is almost up. If you don't confirm or reject it, the submitted result stands.",
 			ActionURL: matchURL, RecipientKind: notificationRecipientMatchEntry, RecipientID: testNotificationEntryID,
 			Data: matchData, Disposition: notificationDispositionProjected, SkipUnlessAwaitingEntryReport: true,
 		}},
 		{"result.mismatch", testNotificationMatchID, matchPayload, notificationDefinition{
-			Category: "result", PreferenceKey: "result_push", Title: "Scores don't match",
-			Body:      "The reported scores don't match. Check the result and submit your final score with a screenshot before the deadline.",
+			Category: "result", PreferenceKey: "result_push", Title: "Result rejected",
+			Body:      "The submitted result was rejected. Send a screenshot of the Full Time screen before the deadline.",
 			ActionURL: matchURL, RecipientKind: notificationRecipientMatch, Data: matchData,
 			Disposition: notificationDispositionProjected,
 		}},
@@ -117,9 +117,9 @@ func TestNotificationDefinitionMapsResultVerificationEvents(t *testing.T) {
 			ActionURL: matchURL, RecipientKind: notificationRecipientMatch, Data: matchData,
 			Disposition: notificationDispositionProjected,
 		}},
-		{"competition.entry_removed", testNotificationEntryID, notificationTestRemovalPayload("report_timeout"), notificationDefinition{
+		{"competition.entry_removed", testNotificationEntryID, notificationTestRemovalPayload("response_timeout"), notificationDefinition{
 			Category: "result", PreferenceKey: "result_push", Title: "Removed from tournament",
-			Body: "You didn't report your score in time.", ActionURL: matchURL, RecipientKind: notificationRecipientEntry,
+			Body: "You didn't send your screenshot in time.", ActionURL: matchURL, RecipientKind: notificationRecipientEntry,
 			Data:        map[string]any{"competitionId": testNotificationCompetitionID, "matchId": testNotificationMatchID},
 			Disposition: notificationDispositionProjected,
 		}},
@@ -153,8 +153,7 @@ func TestEntryRemovedNotificationExplainsEachReason(t *testing.T) {
 		reasonCode string
 		body       string
 	}{
-		{"report_timeout", "You didn't report your score in time."},
-		{"response_timeout", "You didn't submit your final score in time."},
+		{"response_timeout", "You didn't send your screenshot in time."},
 		{"no_result_reported", "No score was reported before the deadline."},
 		{"platform_review", "Gamics reviewed your match and removed your entry."},
 	}
@@ -171,7 +170,7 @@ func TestEntryRemovedNotificationExplainsEachReason(t *testing.T) {
 
 func TestNotificationDefinitionRejectsMalformedResultPayloads(t *testing.T) {
 	without := func(key string) map[string]any {
-		payload := notificationTestRemovalPayload("report_timeout")
+		payload := notificationTestRemovalPayload("response_timeout")
 		delete(payload, key)
 		return payload
 	}
@@ -273,7 +272,7 @@ func TestResultNotificationsCarryIdentifiersOnly(t *testing.T) {
 
 func TestNotificationStaleReportCheckRequiresOpenWindowAndOwedReport(t *testing.T) {
 	for _, required := range []string{
-		"verification.match_id=$1", "verification.phase='awaiting_second_report'", "report_deadline_at>now()",
+		"verification.match_id=$1", "verification.phase='awaiting_confirmation'", "report_deadline_at>now()",
 		"entry.id=$2 AND entry.status NOT IN ('withdrawn','disqualified')",
 		"NOT EXISTS (SELECT 1 FROM match_result_reports report", "report.match_id=$1 AND report.entry_id=$2",
 	} {
@@ -494,7 +493,7 @@ func TestIntegrationNotificationProjectorScopesResultEvents(t *testing.T) {
 	decided := notificationIntegrationEmit(t, pool, "match", matchID, "result.review_decided", matchPayload)
 	forfeited := notificationIntegrationEmit(t, pool, "match", matchID, "match.forfeited", matchPayload)
 	removal := notificationIntegrationEmit(t, pool, "competition_entry", away.ID, "competition.entry_removed",
-		map[string]any{"entryId": away.ID, "competitionId": seeded.ID, "matchId": matchID, "reasonCode": "report_timeout"})
+		map[string]any{"entryId": away.ID, "competitionId": seeded.ID, "matchId": matchID, "reasonCode": "response_timeout"})
 	notificationIntegrationProject(t, server)
 	notificationIntegrationExpect(t, pool, late, notificationDispositionIgnored)
 	notificationIntegrationExpect(t, pool, removedReminder, notificationDispositionIgnored)
@@ -509,7 +508,7 @@ func TestIntegrationNotificationProjectorScopesResultEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantData := map[string]string{"competitionId": seeded.ID, "matchId": matchID, "kind": "competition.entry_removed"}
-	if title != "Removed from tournament" || body != "You didn't report your score in time." ||
+	if title != "Removed from tournament" || body != "You didn't send your screenshot in time." ||
 		actionURL != "/matches/"+matchID || !maps.Equal(data, wantData) {
 		t.Fatalf("removal notice = %q / %q / %q / %v", title, body, actionURL, data)
 	}
@@ -578,7 +577,7 @@ func notificationIntegrationFirstReport(t *testing.T, pool *pgxpool.Pool, compet
 	if _, err = tx.Exec(ctx, `INSERT INTO match_result_verifications
 		(match_id,competition_id,phase,first_report_entry_id,first_reported_at,report_window_seconds,
 		 reminder_lead_seconds,response_window_seconds,report_deadline_at,reminder_at)
-		VALUES ($1,$2,'awaiting_second_report',$3,now(),600,180,600,now()+interval '600 seconds',
+		VALUES ($1,$2,'awaiting_confirmation',$3,now(),600,180,600,now()+interval '600 seconds',
 		 now()+interval '420 seconds')`, matchID, competitionID, reporter.ID); err != nil {
 		t.Fatalf("open verification of %s: %v", matchID, err)
 	}

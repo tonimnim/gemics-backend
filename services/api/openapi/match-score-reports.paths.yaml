@@ -1,34 +1,28 @@
-# Blind dual score reports (result verification v2). Merge this OpenAPI 3.1
-# fragment with the main contract, which defines MatchRoom, GameScore,
+# Match results: one entry submits the result, the other confirms or rejects
+# it, and after a rejection each entry sends one screenshot. Merge this OpenAPI
+# 3.1 fragment with the main contract, which defines MatchRoom, GameScore,
 # TiebreakScore, MatchVerificationPolicy and the Error response.
 #
-# Auth: both operations need a signed-in player who is a starter or substitute
+# Auth: every operation needs a signed-in player who is a starter or substitute
 # of one of the match's entries. Anyone else, including coaches, organizers and
 # Gamics staff, gets 404 match_not_found, exactly as for a missing match.
-# Idempotency: both operations require an Idempotency-Key. Keys are scoped to
-# the caller, the match and the report kind, so a replay returns the caller's
-# own stored response with Idempotency-Replayed: true.
-# Blindness: each entry reports its score without seeing the other entry's
-# claim. Responses, errors and pushes never contain the opponent's score before
-# the match is resolved; the room only says whether the opponent has reported
-# or responded. After resolution only the canonical result is shown.
+# Idempotency: every operation requires an Idempotency-Key. Keys are scoped to
+# the caller, the match and the action, so a replay returns the caller's own
+# stored response with Idempotency-Replayed: true.
+# Visibility: both entries see the submitted result.
+# Of the other entry's screenshot the room shows only whether it was sent.
 paths:
   /v1/matches/{matchId}/score-reports:
     post:
       operationId: createScoreReport
       tags: [Match results]
-      summary: Report your entry's score, blind (score only, no screenshot).
+      summary: Submit the match result (either entry, once).
       description: >-
-        Any starter or substitute may report once for their entry. The first report starts the other
-        entry's report window (verificationPolicy.reportWindowSeconds, 10 minutes by default) and a
-        reminder push reaches that entry reminderBeforeDeadlineSeconds before the window ends. A second
-        report that agrees with the first (same totals and tiebreak; the games breakdown is ignored)
-        confirms the result at once, advances the bracket and applies ratings. A second report that
-        differs opens the response window, and both entries are told only that the scores don't match.
-        If the other entry stays silent, the worker removes it from the tournament when the window ends
-        and the reporter wins by forfeit. If nobody reports by resultDueAt, both entries are removed.
-        The response and every error depend only on the caller's own entry and never reveal the
-        opponent's score.
+        Either entry submits the full score once, after both checked in and before resultDueAt. The other
+        entry is then asked to confirm or reject it within verificationPolicy.reportWindowSeconds (10
+        minutes by default), with a reminder push reminderBeforeDeadlineSeconds before the end. If it
+        doesn't answer in time, the submitted result stands. If nobody submits a result by resultDueAt,
+        both entries are removed.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: matchId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -44,7 +38,7 @@ paths:
                 value: { homeScore: 1, awayScore: 1, tiebreak: { type: penalties, homeScore: 4, awayScore: 3 }, declarationAccepted: true }
       responses:
         "201":
-          description: Report stored. The body is the caller's blind room and the report just stored.
+          description: Result submitted. The body is the caller's room.
           headers:
             Idempotency-Replayed:
               description: Present with the value true when the stored response for this key was replayed.
@@ -66,30 +60,27 @@ paths:
           $ref: "#/components/responses/Error"
           description: >-
             competition_closed (the competition is cancelled or completed); report_not_allowed (the match is
-            not in progress or awaiting the second report); report_already_submitted (the caller's entry
-            already reported); report_window_closed (resultDueAt passed before any report, or the report
-            window ended); match_changed (a concurrent change; refresh and retry); idempotency_conflict.
+            not in progress); result_already_submitted (the caller's entry already submitted the result);
+            result_awaiting_confirmation (the other entry already submitted it; confirm or reject it
+            instead); report_window_closed (resultDueAt passed); match_changed (a concurrent change; refresh
+            and retry); idempotency_conflict.
         "500":
           $ref: "#/components/responses/Error"
           description: internal_error.
         "503":
           $ref: "#/components/responses/Error"
           description: database_unavailable, session_check_unavailable.
-  /v1/matches/{matchId}/score-reports/final:
+  /v1/matches/{matchId}/score-reports/confirmation:
     post:
-      operationId: createFinalScoreReport
+      operationId: createResultConfirmation
       tags: [Match results]
-      summary: Submit your entry's one final score with screenshots after a mismatch.
+      summary: Confirm or reject the result the other entry submitted.
       description: >-
-        Allowed only while resultVerification.phase is awaiting_responses and before responseDeadline.
-        Each entry may respond once with its final score and one to three of its own screenshots that
-        are processed (ready=true), JPEG or PNG, and not attached to anything else. The current claims
-        are compared after every response: agreement confirms the result at once; a lone differing
-        response waits for the other entry; two differing responses send the match to the Gamics review
-        queue. When the window ends, a non-responder is removed from the tournament and a lone responder
-        advances; if nobody responded, both entries are removed. A non-responder whose screenshot is
-        still stuck in Gamics' own processing is never removed; the match goes to Gamics review instead.
-        The response and every error never reveal the opponent's score.
+        Allowed only to the entry that did not submit the result, while resultVerification.phase is
+        awaiting_confirmation and before confirmationDeadline. confirm settles the submitted result at
+        once, advances the bracket and applies ratings. reject opens the screenshot window
+        (verificationPolicy.responseWindowSeconds): each entry then sends one screenshot of the Full Time
+        screen.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: matchId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -98,15 +89,13 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/FinalScoreReportRequest" }
-            example:
-              homeScore: 2
-              awayScore: 1
-              evidenceIds: ["4d3e5536-bf3c-4dba-a643-575e43f56970"]
-              declarationAccepted: true
+            schema: { $ref: "#/components/schemas/ResultConfirmationRequest" }
+            examples:
+              confirm: { value: { decision: confirm } }
+              reject: { value: { decision: reject } }
       responses:
         "201":
-          description: Final report stored and its screenshots attached. The body is the caller's blind room and the final report just stored.
+          description: Answer recorded. The body is the caller's room.
           headers:
             Idempotency-Replayed:
               description: Present with the value true when the stored response for this key was replayed.
@@ -114,9 +103,7 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/ScoreReportResponseEnvelope" } } }
         "400":
           $ref: "#/components/responses/Error"
-          description: >-
-            idempotency_key_required, invalid_idempotency_key; invalid_request; invalid_score_report;
-            invalid_score; invalid_evidence (not one to three distinct evidence UUIDs).
+          description: idempotency_key_required, invalid_idempotency_key; invalid_request; invalid_decision (not confirm or reject).
         "401":
           $ref: "#/components/responses/Error"
           description: authentication_required, invalid_access_token, invalid_session.
@@ -126,9 +113,61 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
           description: >-
-            competition_closed; response_not_allowed (the match is not awaiting mismatch responses);
-            response_already_submitted (the caller's entry already responded); response_window_closed;
-            evidence_not_ready (a screenshot is not the caller's, not processed, not JPEG/PNG, or already
+            competition_closed; confirmation_not_allowed (no submitted result is awaiting an answer);
+            own_result (the caller's entry submitted it); confirmation_window_closed; match_changed;
+            idempotency_conflict.
+        "500":
+          $ref: "#/components/responses/Error"
+          description: internal_error.
+        "503":
+          $ref: "#/components/responses/Error"
+          description: database_unavailable, session_check_unavailable.
+  /v1/matches/{matchId}/score-reports/screenshot:
+    post:
+      operationId: createResultScreenshot
+      tags: [Match results]
+      summary: Send your entry's one screenshot after a rejection.
+      description: >-
+        Allowed while resultVerification.phase is awaiting_screenshots and before screenshotDeadline.
+        Each entry sends exactly one of its own processed (ready=true) JPEG or PNG uploads that is not
+        attached to anything else. Once both entries sent theirs, the match goes to the Gamics review
+        queue, where the screenshot reader reads both. When the window ends, an entry that sent none is
+        removed from the tournament and the other advances; if neither sent one, both are removed. An
+        entry whose screenshot is still stuck in Gamics' own processing is never removed; the match goes
+        to Gamics review instead.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: matchId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResultScreenshotRequest" }
+            example: { evidenceId: "4d3e5536-bf3c-4dba-a643-575e43f56970" }
+      responses:
+        "201":
+          description: Screenshot attached. The body is the caller's room.
+          headers:
+            Idempotency-Replayed:
+              description: Present with the value true when the stored response for this key was replayed.
+              schema: { type: string, enum: ["true"] }
+          content: { application/json: { schema: { $ref: "#/components/schemas/ScoreReportResponseEnvelope" } } }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: idempotency_key_required, invalid_idempotency_key; invalid_request; invalid_evidence (not an evidence UUID).
+        "401":
+          $ref: "#/components/responses/Error"
+          description: authentication_required, invalid_access_token, invalid_session.
+        "404":
+          $ref: "#/components/responses/Error"
+          description: match_not_found.
+        "409":
+          $ref: "#/components/responses/Error"
+          description: >-
+            competition_closed; screenshot_not_allowed (the match is not awaiting screenshots);
+            screenshot_already_submitted (the caller's entry already sent one); screenshot_window_closed;
+            evidence_not_ready (the screenshot is not the caller's, not processed, not JPEG/PNG, or already
             used); match_changed; idempotency_conflict.
         "500":
           $ref: "#/components/responses/Error"
@@ -149,7 +188,7 @@ components:
     ScoreReportRequest:
       type: object
       additionalProperties: false
-      description: One entry's blind score claim. Only the server compares it with the other entry's claim.
+      description: The submitted result. The other entry sees it and confirms or rejects it.
       required: [homeScore, awayScore, declarationAccepted]
       properties:
         homeScore: { type: integer, minimum: 0, maximum: 99 }
@@ -159,7 +198,7 @@ components:
           maxItems: 99
           description: >-
             Optional game-by-game breakdown: 1..bestOf games whose totals equal homeScore and awayScore.
-            When omitted, the server records one aggregate game. It never decides whether two claims agree.
+            When omitted, the server records one aggregate game.
           items: { $ref: "#/components/schemas/GameScore" }
         tiebreak:
           description: Required for a tied elimination match (a penalty shootout with a winner); forbidden otherwise. Round-robin draws have no tiebreak.
@@ -167,40 +206,32 @@ components:
             - { $ref: "#/components/schemas/TiebreakScore" }
             - { type: "null" }
         declarationAccepted: { type: boolean, const: true }
-    FinalScoreReportRequest:
+    ResultConfirmationRequest:
       type: object
       additionalProperties: false
-      description: One entry's single response to a mismatch. Same score rules as ScoreReportRequest, plus the screenshots that prove it.
-      required: [homeScore, awayScore, evidenceIds, declarationAccepted]
+      description: The other entry's answer to the submitted result.
+      required: [decision]
       properties:
-        homeScore: { type: integer, minimum: 0, maximum: 99 }
-        awayScore: { type: integer, minimum: 0, maximum: 99 }
-        games:
-          type: array
-          maxItems: 99
-          items: { $ref: "#/components/schemas/GameScore" }
-        tiebreak:
-          oneOf:
-            - { $ref: "#/components/schemas/TiebreakScore" }
-            - { type: "null" }
-        evidenceIds:
-          type: array
-          minItems: 1
-          maxItems: 3
-          uniqueItems: true
-          description: The caller's own processed (ready=true) JPEG or PNG uploads that are not attached to anything else.
-          items: { type: string, format: uuid }
-        declarationAccepted: { type: boolean, const: true }
-    ScoreReportView:
+        decision: { type: string, enum: [confirm, reject] }
+    ResultScreenshotRequest:
       type: object
       additionalProperties: false
-      description: >-
-        One of the viewer's own reports. There is no view of the other entry's report: this schema never
-        contains the opponent's score before the match is resolved, or after.
-      required: [id, kind, homeScore, awayScore, tiebreak, games, reportedAt]
+      description: One screenshot of the Full Time screen, sent after a rejection.
+      required: [evidenceId]
+      properties:
+        evidenceId:
+          type: string
+          format: uuid
+          description: The caller's own processed (ready=true) JPEG or PNG upload that is not attached to anything else.
+    SubmittedResult:
+      type: object
+      additionalProperties: false
+      description: The result one entry submitted. Both entries see it.
+      required: [id, side, submittedByMe, homeScore, awayScore, tiebreak, games, submittedAt]
       properties:
         id: { type: string, format: uuid }
-        kind: { type: string, enum: [initial, final] }
+        side: { type: string, enum: [home, away], description: The side that submitted it. }
+        submittedByMe: { type: boolean }
         homeScore: { type: integer, minimum: 0, maximum: 99 }
         awayScore: { type: integer, minimum: 0, maximum: 99 }
         tiebreak:
@@ -210,58 +241,61 @@ components:
         games:
           type: array
           items: { $ref: "#/components/schemas/GameScore" }
-        evidenceIds:
-          type: array
-          description: Present only on a final report, in the order they were submitted.
-          items: { type: string, format: uuid }
-        reportedAt: { type: string, format: date-time }
+        submittedAt: { type: string, format: date-time }
+    ResultScreenshot:
+      type: object
+      additionalProperties: false
+      description: The viewer's own screenshot after a rejection.
+      required: [id, evidenceId, submittedAt]
+      properties:
+        id: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        submittedAt: { type: string, format: date-time }
     ScoreReportResponseEnvelope:
       type: object
       additionalProperties: false
-      description: The caller's own room and report. Never contains the opponent's score before the match is resolved.
+      description: The caller's room after the action.
       required: [data]
       properties:
         data:
           type: object
           additionalProperties: false
-          required: [match, report]
+          required: [match]
           properties:
             match: { $ref: "#/components/schemas/MatchRoom" }
-            report: { $ref: "#/components/schemas/ScoreReportView" }
     ResultVerification:
       type: object
       additionalProperties: false
       description: >-
-        The viewer's blind view of result verification. Never contains the opponent's score before the
-        match is resolved: about the other entry it says only whether it reported or responded. Each
-        deadline is shown only in the phase it governs.
-      required: [phase, myReport, myFinalReport, opponentReported, opponentResponded, reportDeadline, responseDeadline, resolution, entryRemoved]
+        The viewer's view of the result: the submitted result, the viewer's own screenshot after a
+        rejection, whether the other entry sent its screenshot, and the deadline of the current step.
+      required: [phase, submittedResult, myScreenshot, opponentScreenshotSubmitted, confirmationDeadline, screenshotDeadline, resolution, entryRemoved]
       properties:
         phase:
           type: string
-          enum: [not_started, awaiting_second_report, awaiting_responses, in_review, resolved]
-          description: not_started until the first report. A resolved match may also stay not_started when nobody ever reported.
-        myReport:
+          enum: [not_started, awaiting_confirmation, awaiting_screenshots, in_review, resolved]
+          description: not_started until a result is submitted. A resolved match may also stay not_started when nobody ever submitted one.
+        submittedResult:
           oneOf:
-            - { $ref: "#/components/schemas/ScoreReportView" }
+            - { $ref: "#/components/schemas/SubmittedResult" }
             - { type: "null" }
-        myFinalReport:
+        myScreenshot:
           oneOf:
-            - { $ref: "#/components/schemas/ScoreReportView" }
+            - { $ref: "#/components/schemas/ResultScreenshot" }
             - { type: "null" }
-        opponentReported: { type: boolean }
-        opponentResponded: { type: boolean }
-        reportDeadline:
+        opponentScreenshotSubmitted: { type: boolean }
+        confirmationDeadline:
           type: [string, "null"]
           format: date-time
-          description: End of the second entry's report window; set only in awaiting_second_report.
-        responseDeadline:
+          description: End of the other entry's time to confirm or reject; set only in awaiting_confirmation.
+        screenshotDeadline:
           type: [string, "null"]
           format: date-time
-          description: End of the mismatch response window; set only in awaiting_responses.
+          description: End of the screenshot window; set only in awaiting_screenshots.
         resolution:
           type: [string, "null"]
-          enum: [agreed, report_timeout, response_timeout, platform_review, competition_cancelled, null]
+          enum: [agreed, confirmation_timeout, response_timeout, platform_review, competition_cancelled, null]
+          description: agreed when confirmed; confirmation_timeout when unanswered, so the submitted result stood.
         entryRemoved:
           type: boolean
           description: >-
@@ -282,27 +316,33 @@ components:
             - { type: "null" }
         origin:
           type: string
-          enum: [agreed_reports, platform_review, legacy]
-          description: agreed_reports when both entries' claims matched; platform_review when Gamics decided; legacy for results confirmed before result verification v2.
+          enum: [agreed_reports, unanswered, platform_review, legacy]
+          description: >-
+            agreed_reports when the other entry confirmed the submitted result; unanswered when it didn't
+            answer in time, so the submitted result stood; platform_review when Gamics decided; legacy for
+            results confirmed before result verification v2.
         confirmedAt: { type: string, format: date-time }
     MatchLifecycle:
       type: string
       description: >-
-        The viewer's lifecycle. awaiting_resolution covers the short gap between a passed deadline and
-        the worker acting on it; it offers no actions. The three terminal values follow state: completed
-        (a result was confirmed; see result), forfeited (decided without a score, by forfeit or walkover)
-        and cancelled (no result; completionReason says why). outcome and winnerSide say who won.
-        out_of_competition marks an unfinished match of an entry that was removed or withdrew: it offers
-        no actions, never appears in the active list, and its round's release settles it without the
-        entry. The match that removed an entry is shown by resultVerification.entryRemoved and removals.
+        The viewer's lifecycle. report_required asks for the result; confirmation_required asks the other
+        entry to confirm or reject it; screenshot_required asks for a screenshot after a rejection.
+        awaiting_resolution covers the short gap between a passed deadline and the worker acting on it;
+        it offers no actions. The three terminal values follow state: completed (a result was confirmed;
+        see result), forfeited (decided without a score, by forfeit or walkover) and cancelled (no result;
+        completionReason says why). outcome and winnerSide say who won. out_of_competition marks an
+        unfinished match of an entry that was removed or withdrew: it offers no actions, never appears in
+        the active list, and its round's release settles it without the entry. The match that removed an
+        entry is shown by resultVerification.entryRemoved and removals.
       enum:
         - assigned
         - ready_for_check_in
         - checked_in
         - report_required
-        - awaiting_opponent_report
-        - mismatch_response_required
-        - awaiting_opponent_response
+        - awaiting_opponent_confirmation
+        - confirmation_required
+        - screenshot_required
+        - awaiting_opponent_screenshot
         - awaiting_resolution
         - under_review
         - forfeited
@@ -311,15 +351,18 @@ components:
         - out_of_competition
     MatchAllowedAction:
       type: string
-      description: check_in maps to POST /check-ins, report_score to POST /score-reports and submit_final_score to POST /score-reports/final.
-      enum: [check_in, report_score, submit_final_score]
+      description: >-
+        check_in maps to POST /check-ins, report_score to POST /score-reports, confirm_result and
+        reject_result to POST /score-reports/confirmation and submit_screenshot to POST
+        /score-reports/screenshot.
+      enum: [check_in, report_score, confirm_result, reject_result, submit_screenshot]
     MatchCompletionReason:
       type: [string, "null"]
       description: >-
-        Why a terminal match ended. report_timeout, response_timeout and no_result_reported remove the
-        silent entries from the tournament; platform_review is a Gamics review decision;
-        competition_cancelled is set when the competition is cancelled. referee is a legacy history value
-        that is never written any more.
+        Why a terminal match ended. response_timeout and no_result_reported remove the silent entries
+        from the tournament; platform_review is a Gamics review decision; competition_cancelled is set
+        when the competition is cancelled. referee is a legacy history value that is never written any
+        more.
       enum:
         - played
         - walkover
@@ -327,7 +370,6 @@ components:
         - timeout_forfeit
         - reset_not_required
         - correction_voided
-        - report_timeout
         - response_timeout
         - no_result_reported
         - platform_review

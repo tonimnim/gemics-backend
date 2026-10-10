@@ -40,14 +40,19 @@ func resultReportsReport(entryID, userID, kind string, claim scoreClaim) verific
 		ReportedAt: resultReportsNow.Add(-time.Minute)}
 }
 
-// resultReportsAwaitingSecond is T2's outcome: the home entry reported 2-1 two
-// minutes ago and the report window is running.
+// resultReportsScreenshot is a screenshot submission: it carries no score.
+func resultReportsScreenshot(entryID, userID string) verificationReport {
+	return resultReportsReport(entryID, userID, "final", scoreClaim{})
+}
+
+// resultReportsAwaitingSecond is T2's outcome: the home entry submitted 2-1
+// two minutes ago and the away entry's confirmation window is running.
 func resultReportsAwaitingSecond() verificationState {
 	first := resultReportsNow.Add(-2 * time.Minute)
 	return verificationState{
 		Match: resultReportsMatch("awaiting_confirmation", resultReportsAwayUser, resultReportsAwayEntry),
 		Verification: &lockedVerification{
-			Phase: "awaiting_second_report", FirstReportEntryID: resultReportsHomeEntry,
+			Phase: "awaiting_confirmation", FirstReportEntryID: resultReportsHomeEntry,
 			ReportDeadlineAt: first.Add(10 * time.Minute), ReminderAt: first.Add(7 * time.Minute),
 			ResponseWindow: 10 * time.Minute, Version: 1,
 		},
@@ -55,20 +60,18 @@ func resultReportsAwaitingSecond() verificationState {
 	}
 }
 
-// resultReportsAwaitingResponses is T5's outcome: home claimed 2-1, away
-// claimed 1-2, and the response window opened a minute ago.
+// resultReportsAwaitingResponses is T5's outcome: home submitted 2-1, away
+// rejected it a minute ago, and the screenshot window is running.
 func resultReportsAwaitingResponses() verificationState {
 	mismatch := resultReportsNow.Add(-time.Minute)
 	deadline := mismatch.Add(10 * time.Minute)
+	rejecter := resultReportsAwayUser
 	state := resultReportsAwaitingSecond()
 	state.Match = resultReportsMatch("disputed", resultReportsHomeUser, resultReportsHomeEntry)
-	state.Verification.Phase = "awaiting_responses"
+	state.Verification.Phase = "awaiting_screenshots"
 	state.Verification.MismatchAt, state.Verification.ResponseDeadlineAt = &mismatch, &deadline
+	state.Verification.RejectedBy = &rejecter
 	state.Verification.Version = 2
-	state.Reports = []verificationReport{
-		resultReportsReport(resultReportsHomeEntry, resultReportsHomeUser, "initial", resultReportsClaim(2, 1)),
-		resultReportsReport(resultReportsAwayEntry, resultReportsAwayUser, "initial", resultReportsClaim(1, 2)),
-	}
 	return state
 }
 
@@ -162,51 +165,37 @@ func TestScoreClaimsAgreeOnTotalsAndTiebreakOnly(t *testing.T) {
 			}
 		})
 	}
-
-	if games := agreedGames(breakdown, breakdown); !slices.Equal(games, breakdown.Games) {
-		t.Fatalf("identical breakdowns must be kept: %+v", games)
-	}
-	if games := agreedGames(breakdown, reordered); !slices.Equal(games, []gameScoreInput{{HomeScore: 3, AwayScore: 1}}) {
-		t.Fatalf("different breakdowns must collapse to one aggregate game: %+v", games)
-	}
 }
 
 func TestPlanScoreReport(t *testing.T) {
 	awaitingSecond := resultReportsAwaitingSecond()
-	closedCompetition := resultReportsAwaitingSecond()
+	closedCompetition := verificationState{Match: resultReportsMatch("in_progress", resultReportsHomeUser, resultReportsHomeEntry)}
 	closedCompetition.Match.CompetitionStatus = "cancelled"
 	inconsistent := verificationState{Match: resultReportsMatch("in_progress", resultReportsHomeUser, resultReportsHomeEntry),
 		Verification: awaitingSecond.Verification}
 	completed := verificationState{Match: resultReportsMatch("completed", resultReportsHomeUser, resultReportsHomeEntry)}
 	firstReport := verificationState{Match: resultReportsMatch("in_progress", resultReportsHomeUser, resultReportsHomeEntry)}
-	deadline := awaitingSecond.Verification.ReportDeadlineAt
 	tests := []struct {
 		name       string
 		state      verificationState
 		entryID    string
-		claim      scoreClaim
 		wantAction planAction
 		wantCode   string
 	}{
-		{"first report opens the window", firstReport, resultReportsHomeEntry, resultReportsClaim(2, 1), "open", ""},
-		{"second report agrees", awaitingSecond, resultReportsAwayEntry, resultReportsClaim(2, 1), "finalize", ""},
-		{"second report differs", awaitingSecond, resultReportsAwayEntry, resultReportsClaim(1, 2), "mismatch", ""},
-		{"own entry already reported", resultReportsAt(awaitingSecond, resultReportsNow), resultReportsHomeEntry,
-			resultReportsClaim(2, 1), "", "report_already_submitted"},
-		{"first report at the result deadline", resultReportsAt(firstReport, *firstReport.Match.ResultDueAt),
-			resultReportsHomeEntry, resultReportsClaim(2, 1), "", "report_window_closed"},
-		{"second report at the report deadline", resultReportsAt(awaitingSecond, deadline), resultReportsAwayEntry,
-			resultReportsClaim(2, 1), "", "report_window_closed"},
-		{"second report after the report deadline", resultReportsAt(awaitingSecond, deadline.Add(time.Second)),
-			resultReportsAwayEntry, resultReportsClaim(2, 1), "", "report_window_closed"},
-		{"terminal match", completed, resultReportsHomeEntry, resultReportsClaim(2, 1), "", "report_not_allowed"},
-		{"entry outside the match", awaitingSecond, resultReportsOutsider, resultReportsClaim(2, 1), "", "match_not_found"},
-		{"closed competition", closedCompetition, resultReportsAwayEntry, resultReportsClaim(2, 1), "", "competition_closed"},
-		{"verification row while in progress", inconsistent, resultReportsHomeEntry, resultReportsClaim(2, 1), "", "internal_error"},
+		{"either entry submits the result", firstReport, resultReportsHomeEntry, "open", ""},
+		{"the away entry may submit it too", firstReport, resultReportsAwayEntry, "open", ""},
+		{"the submitter again", awaitingSecond, resultReportsHomeEntry, "", "result_already_submitted"},
+		{"the opponent submits instead of answering", awaitingSecond, resultReportsAwayEntry, "", "result_awaiting_confirmation"},
+		{"at the result deadline", resultReportsAt(firstReport, *firstReport.Match.ResultDueAt), resultReportsHomeEntry, "",
+			"report_window_closed"},
+		{"terminal match", completed, resultReportsHomeEntry, "", "report_not_allowed"},
+		{"entry outside the match", firstReport, resultReportsOutsider, "", "match_not_found"},
+		{"closed competition", closedCompetition, resultReportsHomeEntry, "", "competition_closed"},
+		{"verification row while in progress", inconsistent, resultReportsHomeEntry, "", "internal_error"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			plan, rejection := planScoreReport(test.state, test.entryID, test.claim)
+			plan, rejection := planScoreReport(test.state, test.entryID)
 			if test.wantCode != "" {
 				if rejection == nil || rejection.Code != test.wantCode {
 					t.Fatalf("rejection = %+v, want %s", rejection, test.wantCode)
@@ -223,13 +212,50 @@ func TestPlanScoreReport(t *testing.T) {
 	}
 }
 
-func TestPlanScoreReportAgreementMapsAuthorAndConfirmer(t *testing.T) {
-	// The away entry reported first here, so the second reporter is home.
+func TestPlanConfirmation(t *testing.T) {
+	awaiting := resultReportsAwaitingSecond()
+	deadline := awaiting.Verification.ReportDeadlineAt
+	inProgress := verificationState{Match: resultReportsMatch("in_progress", resultReportsAwayUser, resultReportsAwayEntry)}
+	tests := []struct {
+		name       string
+		state      verificationState
+		entryID    string
+		confirm    bool
+		wantAction planAction
+		wantCode   string
+	}{
+		{"the opponent confirms", awaiting, resultReportsAwayEntry, true, "finalize", ""},
+		{"the opponent rejects", awaiting, resultReportsAwayEntry, false, "mismatch", ""},
+		{"the submitter can't answer their own result", awaiting, resultReportsHomeEntry, true, "", "own_result"},
+		{"at the confirmation deadline", resultReportsAt(awaiting, deadline), resultReportsAwayEntry, true, "",
+			"confirmation_window_closed"},
+		{"nothing submitted yet", inProgress, resultReportsAwayEntry, true, "", "confirmation_not_allowed"},
+		{"already rejected", resultReportsAwaitingResponses(), resultReportsAwayEntry, false, "", "confirmation_not_allowed"},
+		{"entry outside the match", awaiting, resultReportsOutsider, true, "", "match_not_found"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan, rejection := planConfirmation(test.state, test.entryID, test.confirm)
+			if test.wantCode != "" {
+				if rejection == nil || rejection.Code != test.wantCode {
+					t.Fatalf("rejection = %+v, want %s", rejection, test.wantCode)
+				}
+				return
+			}
+			if rejection != nil || plan.Action != test.wantAction {
+				t.Fatalf("plan = %+v rejection = %+v, want %s", plan, rejection, test.wantAction)
+			}
+		})
+	}
+}
+
+func TestPlanConfirmationFinalizesTheSubmittedResult(t *testing.T) {
+	// The away entry submitted 0-3 here, so the home player confirms it.
 	state := resultReportsAwaitingSecond()
 	state.Match.ActorUserID, state.Match.ActorEntryID = resultReportsHomeUser, resultReportsHomeEntry
 	state.Verification.FirstReportEntryID = resultReportsAwayEntry
 	state.Reports = []verificationReport{resultReportsReport(resultReportsAwayEntry, resultReportsAwayUser, "initial", resultReportsClaim(0, 3))}
-	plan, rejection := planScoreReport(state, resultReportsHomeEntry, resultReportsClaim(0, 3))
+	plan, rejection := planConfirmation(state, resultReportsHomeEntry, true)
 	if rejection != nil || plan.Action != "finalize" {
 		t.Fatalf("plan = %+v rejection = %+v", plan, rejection)
 	}
@@ -237,38 +263,39 @@ func TestPlanScoreReportAgreementMapsAuthorAndConfirmer(t *testing.T) {
 	if resolution.FinalState != "completed" || resolution.CompletionReason != "played" || resolution.Origin != "agreed_reports" ||
 		resolution.Cause != progressionCausePlayerConfirmation || resolution.Resolution != "agreed" || !resolution.ApplyRatings ||
 		resolution.WinnerEntryID == nil || *resolution.WinnerEntryID != resultReportsAwayEntry || len(resolution.RemoveEntryIDs) != 0 {
-		t.Fatalf("unexpected agreement: %+v", resolution)
+		t.Fatalf("unexpected confirmation: %+v", resolution)
 	}
-	if *resolution.ClaimAuthorID != resultReportsHomeUser || *resolution.ConfirmerID != resultReportsAwayUser ||
+	if *resolution.ClaimAuthorID != resultReportsAwayUser || *resolution.ConfirmerID != resultReportsHomeUser ||
 		resolution.Claim.HomeScore != 0 || resolution.Claim.AwayScore != 3 {
-		t.Fatalf("canonical authorship must follow home then away: %+v", resolution)
+		t.Fatalf("the submitter authors and the opponent confirms: %+v", resolution)
+	}
+	if validateMatchResolution(state.Match, resolution) != nil {
+		t.Fatalf("resolution %+v is not applicable", resolution)
 	}
 }
 
-func TestPlanScoreReportMismatchUsesTheSnapshottedResponseWindow(t *testing.T) {
+func TestPlanConfirmationRejectionUsesTheSnapshottedScreenshotWindow(t *testing.T) {
 	state := resultReportsAwaitingSecond()
 	state.Verification.ResponseWindow = 25 * time.Minute
-	plan, rejection := planScoreReport(state, resultReportsAwayEntry, resultReportsClaim(1, 2))
+	plan, rejection := planConfirmation(state, resultReportsAwayEntry, false)
 	if rejection != nil || plan.Action != "mismatch" || !plan.ResponseDeadlineAt.Equal(resultReportsNow.Add(25*time.Minute)) {
 		t.Fatalf("plan = %+v rejection = %+v", plan, rejection)
 	}
 }
 
-func TestPlanScoreReportDrawInRoundRobinHasNoWinner(t *testing.T) {
+func TestPlanConfirmationOfARoundRobinDrawHasNoWinner(t *testing.T) {
 	state := resultReportsAwaitingSecond()
 	state.Match.StageFormat = "round_robin"
 	state.Reports[0].Claim = resultReportsClaim(1, 1)
-	plan, rejection := planScoreReport(state, resultReportsAwayEntry, resultReportsClaim(1, 1))
+	plan, rejection := planConfirmation(state, resultReportsAwayEntry, true)
 	if rejection != nil || plan.Action != "finalize" || plan.Resolution.WinnerEntryID != nil {
 		t.Fatalf("plan = %+v rejection = %+v", plan, rejection)
 	}
 }
 
-func TestPlanFinalReport(t *testing.T) {
-	withHomeFinal := resultReportsAwaitingResponses()
-	withHomeFinal.Reports = append(withHomeFinal.Reports,
-		resultReportsReport(resultReportsHomeEntry, resultReportsHomeUser, "final", resultReportsClaim(2, 0)))
-	withHomeFinal.Match.ActorUserID, withHomeFinal.Match.ActorEntryID = resultReportsAwayUser, resultReportsAwayEntry
+func TestPlanScreenshot(t *testing.T) {
+	withHomeScreenshot := resultReportsAwaitingResponses()
+	withHomeScreenshot.Reports = append(withHomeScreenshot.Reports, resultReportsScreenshot(resultReportsHomeEntry, resultReportsHomeUser))
 	inReview := resultReportsAwaitingResponses()
 	inReview.Verification.Phase = "in_review"
 	deadline := *resultReportsAwaitingResponses().Verification.ResponseDeadlineAt
@@ -276,25 +303,22 @@ func TestPlanFinalReport(t *testing.T) {
 		name       string
 		state      verificationState
 		entryID    string
-		claim      scoreClaim
 		wantAction planAction
 		wantCode   string
 	}{
-		{"first response equals the other initial", resultReportsAwaitingResponses(), resultReportsHomeEntry,
-			resultReportsClaim(1, 2), "finalize", ""},
-		{"first response still differs", resultReportsAwaitingResponses(), resultReportsHomeEntry, resultReportsClaim(3, 1), "wait", ""},
-		{"second response still differs", withHomeFinal, resultReportsAwayEntry, resultReportsClaim(1, 2), "review", ""},
-		{"second response equals the other final", withHomeFinal, resultReportsAwayEntry, resultReportsClaim(2, 0), "finalize", ""},
-		{"already responded", withHomeFinal, resultReportsHomeEntry, resultReportsClaim(2, 0), "", "response_already_submitted"},
-		{"response at the deadline", resultReportsAt(resultReportsAwaitingResponses(), deadline), resultReportsHomeEntry,
-			resultReportsClaim(1, 2), "", "response_window_closed"},
-		{"match in review", inReview, resultReportsHomeEntry, resultReportsClaim(1, 2), "", "response_not_allowed"},
-		{"no mismatch yet", resultReportsAwaitingSecond(), resultReportsAwayEntry, resultReportsClaim(1, 2), "", "response_not_allowed"},
-		{"entry outside the match", resultReportsAwaitingResponses(), resultReportsOutsider, resultReportsClaim(1, 2), "", "match_not_found"},
+		{"the submitter's screenshot waits for the rejecter's", resultReportsAwaitingResponses(), resultReportsHomeEntry, "wait", ""},
+		{"the rejecter's screenshot waits for the submitter's", resultReportsAwaitingResponses(), resultReportsAwayEntry, "wait", ""},
+		{"the second screenshot goes to review", withHomeScreenshot, resultReportsAwayEntry, "review", ""},
+		{"already sent", withHomeScreenshot, resultReportsHomeEntry, "", "screenshot_already_submitted"},
+		{"at the deadline", resultReportsAt(resultReportsAwaitingResponses(), deadline), resultReportsHomeEntry, "",
+			"screenshot_window_closed"},
+		{"match in review", inReview, resultReportsHomeEntry, "", "screenshot_not_allowed"},
+		{"not rejected yet", resultReportsAwaitingSecond(), resultReportsAwayEntry, "", "screenshot_not_allowed"},
+		{"entry outside the match", resultReportsAwaitingResponses(), resultReportsOutsider, "", "match_not_found"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			plan, rejection := planFinalReport(test.state, test.entryID, test.claim)
+			plan, rejection := planScreenshot(test.state, test.entryID)
 			if test.wantCode != "" {
 				if rejection == nil || rejection.Code != test.wantCode || rejection.Status != http.StatusConflict && rejection.Status != http.StatusNotFound {
 					t.Fatalf("rejection = %+v, want %s", rejection, test.wantCode)
@@ -308,43 +332,39 @@ func TestPlanFinalReport(t *testing.T) {
 	}
 }
 
-func TestPlanFinalReportAgreementUsesCurrentClaims(t *testing.T) {
-	// The home entry's final 2-0 is its current claim; the away entry's
-	// response agrees with it, so the away reporter confirms the home final.
-	state := resultReportsAwaitingResponses()
-	state.Reports = append(state.Reports, resultReportsReport(resultReportsHomeEntry, resultReportsHomeUser, "final", resultReportsClaim(2, 0)))
-	state.Match.ActorUserID, state.Match.ActorEntryID = resultReportsAwayUser, resultReportsAwayEntry
-	plan, rejection := planFinalReport(state, resultReportsAwayEntry, resultReportsClaim(2, 0))
-	if rejection != nil || plan.Action != "finalize" {
-		t.Fatalf("plan = %+v rejection = %+v", plan, rejection)
+func TestPlanVerificationDeadlineLetsAnUnansweredResultStand(t *testing.T) {
+	state := resultReportsAt(resultReportsAwaitingSecond(), resultReportsAwaitingSecond().Verification.ReportDeadlineAt)
+	plan, err := planVerificationDeadline(state)
+	if err != nil || plan.Action != "finalize" {
+		t.Fatalf("plan = %+v err = %v", plan, err)
 	}
 	resolution := plan.Resolution
-	if resolution.Claim.HomeScore != 2 || resolution.Claim.AwayScore != 0 || *resolution.ClaimAuthorID != resultReportsHomeUser ||
-		*resolution.ConfirmerID != resultReportsAwayUser || *resolution.WinnerEntryID != resultReportsHomeEntry {
-		t.Fatalf("unexpected agreement: %+v", resolution)
+	if resolution.FinalState != "completed" || resolution.CompletionReason != "played" || resolution.Origin != "unanswered" ||
+		resolution.Resolution != "confirmation_timeout" || !resolution.ApplyRatings || len(resolution.RemoveEntryIDs) != 0 ||
+		resolution.ConfirmerID != nil || *resolution.ClaimAuthorID != resultReportsHomeUser ||
+		resolution.WinnerEntryID == nil || *resolution.WinnerEntryID != resultReportsHomeEntry ||
+		resolution.Claim.HomeScore != 2 || resolution.Claim.AwayScore != 1 {
+		t.Fatalf("the submitted result must stand: %+v", resolution)
 	}
-	home, away := currentClaims(state)
-	if home.Kind != "final" || away.Kind != "initial" {
-		t.Fatalf("current claims = %s/%s, want final/initial", home.Kind, away.Kind)
+	if validateMatchResolution(state.Match, resolution) != nil {
+		t.Fatalf("resolution %+v is not applicable", resolution)
 	}
 }
 
 func TestPlanVerificationDeadline(t *testing.T) {
 	awaitingSecond := resultReportsAwaitingSecond()
-	reportDeadline := awaitingSecond.Verification.ReportDeadlineAt
 	reminderAt := awaitingSecond.Verification.ReminderAt
 	reminded := resultReportsAwaitingSecond()
 	sentAt := reminderAt
 	reminded.Verification.ReminderSentAt = &sentAt
 	responseDeadline := *resultReportsAwaitingResponses().Verification.ResponseDeadlineAt
 	oneResponder := resultReportsAwaitingResponses()
-	oneResponder.Reports = append(oneResponder.Reports,
-		resultReportsReport(resultReportsAwayEntry, resultReportsAwayUser, "final", resultReportsClaim(1, 2)))
+	oneResponder.Reports = append(oneResponder.Reports, resultReportsScreenshot(resultReportsAwayEntry, resultReportsAwayUser))
 	inProgress := verificationState{Match: resultReportsMatch("in_progress", "", "")}
 	resultDue := *inProgress.Match.ResultDueAt
 	inReview := resultReportsAwaitingResponses()
 	inReview.Verification.Phase = "in_review"
-	closed := resultReportsAt(resultReportsAwaitingSecond(), reportDeadline.Add(time.Hour))
+	closed := resultReportsAt(resultReportsAwaitingSecond(), awaitingSecond.Verification.ReportDeadlineAt.Add(time.Hour))
 	closed.Match.CompetitionStatus = "completed"
 	tests := []struct {
 		name        string
@@ -358,16 +378,14 @@ func TestPlanVerificationDeadline(t *testing.T) {
 		{name: "before the reminder", state: resultReportsAt(awaitingSecond, reminderAt.Add(-time.Second)), wantAction: "none"},
 		{name: "reminder due", state: resultReportsAt(awaitingSecond, reminderAt), wantAction: "reminder"},
 		{name: "reminder already sent", state: resultReportsAt(reminded, reminderAt.Add(time.Second)), wantAction: "none"},
-		{name: "report window ends", state: resultReportsAt(awaitingSecond, reportDeadline), wantAction: "finalize",
-			wantState: "forfeit", wantWinner: resultReportsHomeEntry, wantRemoved: []string{resultReportsAwayEntry}, wantReason: "report_timeout"},
-		{name: "response window open", state: resultReportsAt(resultReportsAwaitingResponses(), responseDeadline.Add(-time.Nanosecond)),
+		{name: "screenshot window open", state: resultReportsAt(resultReportsAwaitingResponses(), responseDeadline.Add(-time.Nanosecond)),
 			wantAction: "none"},
-		{name: "response window ends with one responder", state: resultReportsAt(oneResponder, responseDeadline), wantAction: "finalize",
+		{name: "screenshot window ends with one screenshot", state: resultReportsAt(oneResponder, responseDeadline), wantAction: "finalize",
 			wantState: "forfeit", wantWinner: resultReportsAwayEntry, wantRemoved: []string{resultReportsHomeEntry}, wantReason: "response_timeout"},
-		{name: "response window ends with no responder", state: resultReportsAt(resultReportsAwaitingResponses(), responseDeadline),
+		{name: "screenshot window ends with none", state: resultReportsAt(resultReportsAwaitingResponses(), responseDeadline),
 			wantAction: "finalize", wantState: "cancelled",
 			wantRemoved: []string{resultReportsHomeEntry, resultReportsAwayEntry}, wantReason: "response_timeout"},
-		{name: "result deadline passes without a report (R7)", state: resultReportsAt(inProgress, resultDue), wantAction: "finalize",
+		{name: "result deadline passes without a result (R7)", state: resultReportsAt(inProgress, resultDue), wantAction: "finalize",
 			wantState: "cancelled", wantRemoved: []string{resultReportsHomeEntry, resultReportsAwayEntry}, wantReason: "no_result_reported"},
 		{name: "result deadline not yet reached", state: resultReportsAt(inProgress, resultDue.Add(-time.Second)), wantAction: "none"},
 		{name: "match in review", state: resultReportsAt(inReview, responseDeadline.Add(time.Hour)), wantAction: "none"},
@@ -380,7 +398,7 @@ func TestPlanVerificationDeadline(t *testing.T) {
 				t.Fatalf("plan = %+v err = %v, want %s", plan, err, test.wantAction)
 			}
 			if plan.Action == "reminder" && plan.RemindEntryID != resultReportsAwayEntry {
-				t.Fatalf("reminder goes to %s, want the silent away entry", plan.RemindEntryID)
+				t.Fatalf("reminder goes to %s, want the away entry that owes its answer", plan.RemindEntryID)
 			}
 			if plan.Action != "finalize" {
 				return
@@ -439,8 +457,7 @@ func TestPlanVerificationDeadlineEscalatesEvidenceStuckAtGamics(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			state := resultReportsAt(resultReportsAwaitingResponses(), deadline)
 			if test.responded {
-				state.Reports = append(state.Reports,
-					resultReportsReport(resultReportsAwayEntry, resultReportsAwayUser, "final", resultReportsClaim(1, 2)))
+				state.Reports = append(state.Reports, resultReportsScreenshot(resultReportsAwayEntry, resultReportsAwayUser))
 			}
 			state.BlockedEvidence = []blockedEvidence{test.evidence}
 			plan, err := planVerificationDeadline(state)
@@ -456,28 +473,30 @@ func TestPlanVerificationDeadlineEscalatesEvidenceStuckAtGamics(t *testing.T) {
 
 func TestPlanVerificationDeadlineRejectsInconsistentState(t *testing.T) {
 	deadline := *resultReportsAwaitingResponses().Verification.ResponseDeadlineAt
-	twoFinals := resultReportsAt(resultReportsAwaitingResponses(), deadline)
-	twoFinals.Reports = append(twoFinals.Reports,
-		resultReportsReport(resultReportsHomeEntry, resultReportsHomeUser, "final", resultReportsClaim(2, 1)),
-		resultReportsReport(resultReportsAwayEntry, resultReportsAwayUser, "final", resultReportsClaim(1, 2)))
+	twoScreenshots := resultReportsAt(resultReportsAwaitingResponses(), deadline)
+	twoScreenshots.Reports = append(twoScreenshots.Reports,
+		resultReportsScreenshot(resultReportsHomeEntry, resultReportsHomeUser),
+		resultReportsScreenshot(resultReportsAwayEntry, resultReportsAwayUser))
 	rowInProgress := verificationState{Match: resultReportsMatch("in_progress", "", ""),
 		Verification: resultReportsAwaitingSecond().Verification}
 	foreignReport := resultReportsAwaitingSecond()
 	foreignReport.Reports[0].EntryID = resultReportsOutsider
 	responderEvidence := resultReportsAt(resultReportsAwaitingResponses(), deadline)
-	responderEvidence.Reports = append(responderEvidence.Reports,
-		resultReportsReport(resultReportsHomeEntry, resultReportsHomeUser, "final", resultReportsClaim(2, 1)))
+	responderEvidence.Reports = append(responderEvidence.Reports, resultReportsScreenshot(resultReportsHomeEntry, resultReportsHomeUser))
 	responderEvidence.BlockedEvidence = []blockedEvidence{{EntryID: resultReportsHomeEntry, Status: "processing",
 		CreatedAt: deadline.Add(-time.Minute)}}
-	finalWithoutInitial := resultReportsAwaitingSecond()
-	finalWithoutInitial.Reports = append(finalWithoutInitial.Reports,
-		resultReportsReport(resultReportsAwayEntry, resultReportsAwayUser, "final", resultReportsClaim(1, 2)))
+	twoResults := resultReportsAt(resultReportsAwaitingResponses(), deadline)
+	twoResults.Reports = append(twoResults.Reports,
+		resultReportsReport(resultReportsAwayEntry, resultReportsAwayUser, "initial", resultReportsClaim(1, 2)))
+	noRejecter := resultReportsAt(resultReportsAwaitingResponses(), deadline)
+	noRejecter.Verification.RejectedBy = nil
 	for name, state := range map[string]verificationState{
-		"two final reports while awaiting responses":   twoFinals,
+		"two screenshots while awaiting screenshots":   twoScreenshots,
 		"a verification row while the match is live":   rowInProgress,
 		"a report on another entry":                    foreignReport,
-		"blocked evidence for an entry that responded": responderEvidence,
-		"a final report without an initial report":     finalWithoutInitial,
+		"blocked evidence for an entry that sent one":  responderEvidence,
+		"two submitted results in a dispute":           twoResults,
+		"a dispute without the player who rejected it": noRejecter,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := planVerificationDeadline(state); !errors.Is(err, errResultVerificationInvariant) {

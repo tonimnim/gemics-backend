@@ -78,10 +78,10 @@ func (outcome progressionRemovalOutcome) final(match progressionRemovalMatch) pr
 		return progressionRemovalFinal{State: "completed", CompletionReason: "played",
 			Cause: progressionCausePlayerConfirmation, HomeScore: &one, AwayScore: &one}
 	case progressionRemovalRemoveHome:
-		return progressionRemovalFinal{State: "forfeit", CompletionReason: "report_timeout",
+		return progressionRemovalFinal{State: "forfeit", CompletionReason: "response_timeout",
 			Cause: progressionCauseTimeoutForfeit, WinnerEntryID: &away, RemovedEntryIDs: []string{home}}
 	case progressionRemovalRemoveAway:
-		return progressionRemovalFinal{State: "forfeit", CompletionReason: "report_timeout",
+		return progressionRemovalFinal{State: "forfeit", CompletionReason: "response_timeout",
 			Cause: progressionCauseTimeoutForfeit, WinnerEntryID: &home, RemovedEntryIDs: []string{away}}
 	case progressionRemovalRemoveBoth:
 		return progressionRemovalFinal{State: "cancelled", CompletionReason: "no_result_reported",

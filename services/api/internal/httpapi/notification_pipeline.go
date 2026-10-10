@@ -44,14 +44,14 @@ const notificationProjectClaimSQL = `SELECT queued.source_event_id::text,queued.
 	ORDER BY queued.available_at,queued.notification_sequence
 	LIMIT $1 FOR UPDATE OF queued SKIP LOCKED`
 
-// notificationAwaitingEntryReportSQL re-validates a "report your score" push at
+// notificationAwaitingEntryReportSQL re-validates a "confirm the result" push at
 // projection time. An outbox event cannot be retracted, so a lagging projector
-// must not tell a removed entry, an entry that already reported, or an entry
-// whose report window has closed to report now.
+// must not ask a removed entry, an entry that already answered, or an entry
+// whose confirmation window has closed to answer now.
 const notificationAwaitingEntryReportSQL = `SELECT EXISTS (
 	SELECT 1 FROM match_result_verifications verification
 	JOIN competition_entries entry ON entry.id=$2 AND entry.status NOT IN ('withdrawn','disqualified')
-	WHERE verification.match_id=$1 AND verification.phase='awaiting_second_report'
+	WHERE verification.match_id=$1 AND verification.phase='awaiting_confirmation'
 	  AND verification.report_deadline_at>now()
 	  AND NOT EXISTS (SELECT 1 FROM match_result_reports report
 		WHERE report.match_id=$1 AND report.entry_id=$2))`
@@ -84,7 +84,7 @@ type notificationDefinition struct {
 	Data          map[string]any
 	Disposition   string
 	// SkipUnlessAwaitingEntryReport projects the event only while the
-	// RecipientID entry still owes its initial score report.
+	// RecipientID entry still owes its answer to the submitted result.
 	SkipUnlessAwaitingEntryReport bool
 }
 
@@ -421,24 +421,24 @@ func mapNotificationEvent(event notificationOutboxEvent) notificationDefinition 
 	case "match.result_confirmed":
 		return matchNotification(base, event.AggregateID, "result", "result_push", "Result confirmed", "The match result is final and the bracket has been updated.")
 	case "result.report_received", "result.report_reminder":
-		// Only the entry that still owes its report is told; the projector drops
-		// the push once that entry reported, was removed or its window closed.
+		// Only the entry that still owes its answer is told; the projector drops
+		// the push once that entry answered, was removed or its window closed.
 		entryID, ok := payloadUUID(payload, "entryId")
 		if !ok {
 			base.Disposition = notificationDispositionMalformed
 			return base
 		}
-		title, body := "Your opponent reported the score", "Report your score for this match before the deadline."
+		title, body := "Confirm the match result", "Your opponent submitted the result. Confirm or reject it before the deadline."
 		if event.EventType == "result.report_reminder" {
-			title, body = "Report your score now", "Your report window is about to close. If you don't report, you will be removed from the tournament."
+			title, body = "Confirm the result now", "Time is almost up. If you don't confirm or reject it, the submitted result stands."
 		}
 		base = matchNotification(base, event.AggregateID, "result", "result_push", title, body)
 		base.RecipientKind, base.RecipientID = notificationRecipientMatchEntry, entryID
 		base.SkipUnlessAwaitingEntryReport = true
 		return base
 	case "result.mismatch":
-		// Identical for both entries, so the push reveals neither claim.
-		return matchNotification(base, event.AggregateID, "result", "result_push", "Scores don't match", "The reported scores don't match. Check the result and submit your final score with a screenshot before the deadline.")
+		// Identical for both entries: each sends one screenshot.
+		return matchNotification(base, event.AggregateID, "result", "result_push", "Result rejected", "The submitted result was rejected. Send a screenshot of the Full Time screen before the deadline.")
 	case "result.under_review":
 		return matchNotification(base, event.AggregateID, "result", "result_push", "Result under review", "Gamics is reviewing this match. You'll be notified when a decision is made.")
 	case "result.review_decided":
@@ -543,10 +543,8 @@ func entryRemovedNotificationBody(reasonCode json.RawMessage) (string, bool) {
 		return "", false
 	}
 	switch reason {
-	case "report_timeout":
-		return "You didn't report your score in time.", true
 	case "response_timeout":
-		return "You didn't submit your final score in time.", true
+		return "You didn't send your screenshot in time.", true
 	case "no_result_reported":
 		return "No score was reported before the deadline.", true
 	case "platform_review":

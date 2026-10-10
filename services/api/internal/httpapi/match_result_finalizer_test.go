@@ -36,17 +36,20 @@ func TestScoreReportHandlersTakeTheGateBeforeTheMatch(t *testing.T) {
 	assertOrder(t, "lockScoreReportState", locks,
 		"lookupMatchCompetition(", "lockCompetitionProgressionGate(", "lockResultMatch(", "ActorEntryID == \"\"",
 		"lockResultVerification(", "lockResultReports(")
-	for _, handler := range []string{"func (s *Server) createScoreReport(", "func (s *Server) createFinalScoreReport("} {
+	for _, handler := range []string{"func (s *Server) createScoreReport(", "func (s *Server) createResultConfirmation(",
+		"func (s *Server) createResultScreenshot("} {
 		source := resultReportsFunctionSource(t, "match_result_reports.go", handler)
 		assertOrder(t, handler, source, "readIdempotencyKey(", "uuidPattern.MatchString", "decodeJSON(", "s.recordScoreReport(")
 	}
-	initial := resultReportsFunctionSource(t, "match_result_reports.go", "func applyInitialScoreReport(")
-	assertOrder(t, "applyInitialScoreReport", initial,
-		"normalizeScoreClaim(", "planScoreReport(", "openResultVerification(", "insertScoreReport(", "finalizeMatchResolution(")
-	final := resultReportsFunctionSource(t, "match_result_reports.go", "func applyFinalScoreReport(")
-	assertOrder(t, "applyFinalScoreReport", final,
-		"normalizeScoreClaim(", "planFinalReport(", "lockCompletedEvidence(", "insertScoreReport(",
-		"attachFinalReportEvidence(", "finalizeMatchResolution(", "queueResultReview(", "bumpDisputedMatch(")
+	submit := resultReportsFunctionSource(t, "match_result_reports.go", "func applyScoreReport(")
+	assertOrder(t, "applyScoreReport", submit,
+		"normalizeScoreClaim(", "planScoreReport(", "openResultVerification(", "insertScoreReport(", "startScoreReportWindow(")
+	answer := resultReportsFunctionSource(t, "match_result_reports.go", "func applyResultConfirmation(")
+	assertOrder(t, "applyResultConfirmation", answer, "planConfirmation(", "finalizeMatchResolution(", "openScoreMismatch(")
+	screenshot := resultReportsFunctionSource(t, "match_result_reports.go", "func applyResultScreenshot(")
+	assertOrder(t, "applyResultScreenshot", screenshot,
+		"planScreenshot(", "lockCompletedEvidence(", "insertScoreReport(", "attachFinalReportEvidence(",
+		"queueResultReview(", "bumpDisputedMatch(")
 }
 
 func TestFinalizeMatchResolutionOrder(t *testing.T) {
@@ -95,13 +98,13 @@ func TestResultWritesAreVersionAndPhaseGuarded(t *testing.T) {
 	}{
 		{"match_result_reports.go", "func startScoreReportWindow(", []string{"AND version=$3 AND state='in_progress'"}},
 		{"match_result_reports.go", "func openScoreMismatch(", []string{
-			"WHERE match_id=$1 AND phase='awaiting_second_report' AND version=$4",
+			"WHERE match_id=$1 AND phase='awaiting_confirmation' AND version=$4",
 			"AND version=$3 AND state='awaiting_confirmation'"}},
 		{"match_result_finalizer.go", "func bumpDisputedMatch(", []string{"AND version=$3 AND state='disputed'"}},
 		{"match_result_finalizer.go", "func queueResultReview(", []string{
-			"WHERE match_id=$1 AND phase='awaiting_responses' AND version=$2", "bumpDisputedMatch("}},
+			"WHERE match_id=$1 AND phase='awaiting_screenshots' AND version=$2", "bumpDisputedMatch("}},
 		{"match_result_verification_worker.go", "func sendScoreReportReminder(", []string{
-			"AND phase='awaiting_second_report' AND reminder_sent_at IS NULL", "AND report_deadline_at>$2",
+			"AND phase='awaiting_confirmation' AND reminder_sent_at IS NULL", "AND report_deadline_at>$2",
 			"command.RowsAffected() != 1"}},
 		{"match_result_reports.go", "func attachFinalReportEvidence(", []string{
 			"WHERE id=$2 AND bound_id IS NULL AND status='completed'", "command.RowsAffected() != 1"}},
@@ -229,25 +232,25 @@ func TestOnlyOneEvidenceLockerAndRatingsKeepTheirSequence(t *testing.T) {
 	assertFileOmits(t, "result_handlers.go", "lockedSubmission", "resultSubmissionView", "resultMatchStateView", "submitResultInput")
 }
 
-func TestMatchRoomQueryIsBlindToTheOtherEntry(t *testing.T) {
-	// Only booleans may leave the other entry's reports; every other report
-	// read is filtered to the viewer's own entry.
-	if got := strings.Count(matchSelectColumns, "other."); got != 4 {
-		t.Fatalf("matchSelectColumns reads other.* %d times, want 4", got)
+func TestMatchRoomQueryShowsOnlyTheSubmittedResultAndOwnScreenshot(t *testing.T) {
+	// Both entries see the submitted result. Of the other entry's screenshot
+	// only its existence leaves the query; the viewer's screenshot is filtered
+	// to the viewer's own entry.
+	if got := strings.Count(matchSelectColumns, "other."); got != 3 {
+		t.Fatalf("matchSelectColumns reads other.* %d times, want 3", got)
 	}
 	for _, fragment := range []string{
-		"COALESCE(bool_or(other.kind='initial'),false) AS reported",
-		"COALESCE(bool_or(other.kind='final'),false) AS responded",
-		"FROM match_result_reports other WHERE other.match_id=m.id AND other.entry_id<>mine.entry_id",
-		"WHERE report.match_id=m.id AND report.entry_id=mine.entry_id",
+		"WHERE report.match_id=m.id AND report.kind='initial'",
+		"WHERE report.match_id=m.id AND report.kind='final' AND report.entry_id=mine.entry_id",
+		"WHERE other.match_id=m.id AND other.kind='final' AND other.entry_id<>mine.entry_id) AS screenshot",
 		"WHERE m.state='completed' AND submission.match_id=m.id AND submission.status='confirmed'",
 	} {
 		if !strings.Contains(matchSelectColumns, fragment) {
 			t.Errorf("matchSelectColumns does not contain %q", fragment)
 		}
 	}
-	if got := strings.Count(matchSelectColumns, "FROM match_result_reports "); got != 2 {
-		t.Fatalf("matchSelectColumns reads match_result_reports %d times, want 2", got)
+	if got := strings.Count(matchSelectColumns, "FROM match_result_reports "); got != 3 {
+		t.Fatalf("matchSelectColumns reads match_result_reports %d times, want 3", got)
 	}
 }
 
@@ -256,9 +259,9 @@ func TestValidateMatchResolution(t *testing.T) {
 	loser := resultReportsAwayEntry
 	author := resultReportsHomeUser
 	claim := resultReportsClaim(2, 1)
-	valid := matchResolution{FinalState: "forfeit", WinnerEntryID: &winner, CompletionReason: "report_timeout",
-		Cause: progressionCauseTimeoutForfeit, RemoveEntryIDs: []string{loser}, RemovalReason: "report_timeout",
-		Resolution: "report_timeout"}
+	valid := matchResolution{FinalState: "forfeit", WinnerEntryID: &winner, CompletionReason: "response_timeout",
+		Cause: progressionCauseTimeoutForfeit, RemoveEntryIDs: []string{loser}, RemovalReason: "response_timeout",
+		Resolution: "response_timeout"}
 	closed := resultReportsMatch("awaiting_confirmation", "", "")
 	closed.CompetitionStatus = "cancelled"
 	tests := []struct {

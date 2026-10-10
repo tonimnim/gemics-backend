@@ -352,11 +352,10 @@ func loadScreenshotContext(ctx context.Context, queryer rowsQueryer, matchID str
 	if err = rows.Err(); err != nil {
 		return result, err
 	}
-	// Each entry's current claim: its final report, or its first one.
-	rows, err = queryer.Query(ctx, `SELECT DISTINCT ON (entry_id) entry_id::text,home_score,away_score,
+	// The submitted result is the only claim; screenshots carry no score.
+	rows, err = queryer.Query(ctx, `SELECT entry_id::text,home_score,away_score,
 		home_tiebreak_score,away_tiebreak_score,jsonb_array_length(game_results)
-		FROM match_result_reports WHERE match_id=$1
-		ORDER BY entry_id,(kind='final') DESC,reported_at DESC`, matchID)
+		FROM match_result_reports WHERE match_id=$1 AND kind='initial'`, matchID)
 	if err != nil {
 		return result, err
 	}

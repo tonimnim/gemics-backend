@@ -115,7 +115,8 @@ func TestOpenAPIResultVerificationOperations(t *testing.T) {
 		idempotent                  bool
 	}{
 		{"match-score-reports.paths.yaml", "/v1/matches/{matchId}/score-reports", "createScoreReport", true},
-		{"match-score-reports.paths.yaml", "/v1/matches/{matchId}/score-reports/final", "createFinalScoreReport", true},
+		{"match-score-reports.paths.yaml", "/v1/matches/{matchId}/score-reports/confirmation", "createResultConfirmation", true},
+		{"match-score-reports.paths.yaml", "/v1/matches/{matchId}/score-reports/screenshot", "createResultScreenshot", true},
 		{"result-reviews.paths.yaml", "/v1/admin/result-reviews", "listResultReviews", false},
 		{"result-reviews.paths.yaml", "/v1/admin/result-reviews/{id}", "getResultReview", false},
 		{"result-reviews.paths.yaml", "/v1/admin/result-reviews/{id}/decisions", "decideResultReview", true},
@@ -142,11 +143,13 @@ func TestOpenAPIResultVerificationEnums(t *testing.T) {
 		want             []string
 	}{
 		{"match-score-reports.paths.yaml", "MatchLifecycle", []string{"assigned", "ready_for_check_in", "checked_in",
-			"report_required", "awaiting_opponent_report", "mismatch_response_required", "awaiting_opponent_response",
-			"awaiting_resolution", "under_review", "forfeited", "completed", "cancelled", "out_of_competition"}},
-		{"match-score-reports.paths.yaml", "MatchAllowedAction", []string{"check_in", "report_score", "submit_final_score"}},
+			"report_required", "awaiting_opponent_confirmation", "confirmation_required", "screenshot_required",
+			"awaiting_opponent_screenshot", "awaiting_resolution", "under_review", "forfeited", "completed", "cancelled",
+			"out_of_competition"}},
+		{"match-score-reports.paths.yaml", "MatchAllowedAction", []string{"check_in", "report_score", "confirm_result",
+			"reject_result", "submit_screenshot"}},
 		{"match-score-reports.paths.yaml", "MatchCompletionReason", []string{"played", "walkover", "double_no_show",
-			"timeout_forfeit", "reset_not_required", "correction_voided", "report_timeout", "response_timeout",
+			"timeout_forfeit", "reset_not_required", "correction_voided", "response_timeout",
 			"no_result_reported", "platform_review", "competition_cancelled", "referee", "null"}},
 		{"result-reviews.paths.yaml", "ResultReviewDecisionCode", []string{"accept_home", "accept_away", "corrected_score", "remove_both"}},
 		{"result-reviews.paths.yaml", "ResultReviewStatus", []string{"queued", "decided", "closed"}},
@@ -162,29 +165,26 @@ func TestOpenAPIResultVerificationEnums(t *testing.T) {
 	}
 }
 
-// TestOpenAPIPlayerSchemasAreBlind pins the blindness wording on every
-// player-facing schema that exists before a match is resolved (R2).
-func TestOpenAPIPlayerSchemasAreBlind(t *testing.T) {
-	const wording = "never contains the opponent's score before the match is resolved"
+// TestOpenAPIPlayerSchemasHideTheOpponentScreenshot pins the visibility rule
+// on the player-facing schemas: both entries see the submitted result, and of
+// the other entry's screenshot only whether it was sent (R2).
+func TestOpenAPIPlayerSchemasHideTheOpponentScreenshot(t *testing.T) {
 	contract := openAPIFile(t, "openapi.yaml")
 	fragment := openAPIFile(t, "match-score-reports.paths.yaml")
-	for name, schemas := range map[string]struct {
-		source string
-		names  []string
-	}{
-		"openapi.yaml": {contract, []string{"MatchRoom", "ResultVerification", "ScoreReportView",
-			"ScoreReportResponseEnvelope"}},
-		"match-score-reports.paths.yaml": {fragment, []string{"ResultVerification", "ScoreReportView",
-			"ScoreReportResponseEnvelope"}},
-	} {
-		for _, schema := range schemas.names {
-			if !strings.Contains(strings.ToLower(openAPIWords(openAPIBlock(t, schemas.source, schema, 4))), wording) {
-				t.Errorf("%s %s does not state that it %s", name, schema, wording)
-			}
+	for name, source := range map[string]string{"openapi.yaml": contract, "match-score-reports.paths.yaml": fragment} {
+		if words := openAPIWords(openAPIBlock(t, source, "ResultVerification", 4)); !strings.Contains(words,
+			"whether the other entry sent its screenshot") {
+			t.Errorf("%s ResultVerification does not limit the other entry's screenshot to whether it was sent", name)
+		}
+		if block := openAPIBlock(t, source, "ResultVerification", 4); strings.Contains(block, "opponentScreenshot:") {
+			t.Errorf("%s ResultVerification exposes the other entry's screenshot", name)
 		}
 	}
-	if !strings.Contains(openAPIWords(fragment), "Responses, errors and pushes never contain the opponent's score") {
-		t.Error("match-score-reports.paths.yaml header does not state the blindness rule")
+	if !strings.Contains(openAPIWords(openAPIBlock(t, contract, "MatchRoom", 4)), "never the other entry's screenshot") {
+		t.Error("openapi.yaml MatchRoom does not state that it never shows the other entry's screenshot")
+	}
+	if !strings.Contains(openAPIWords(fragment), "Of the other entry's screenshot the room shows only whether it was sent") {
+		t.Error("match-score-reports.paths.yaml header does not state the visibility rule")
 	}
 }
 
@@ -223,9 +223,10 @@ func TestOpenAPIListsEveryResultErrorCode(t *testing.T) {
 	}{
 		{
 			fragment: "match-score-reports.paths.yaml",
-			paths:    []string{"/v1/matches/{matchId}/score-reports", "/v1/matches/{matchId}/score-reports/final"},
-			sources:  []string{"match_result_reports.go", "match_result_verification.go"},
-			extra:    shared,
+			paths: []string{"/v1/matches/{matchId}/score-reports", "/v1/matches/{matchId}/score-reports/confirmation",
+				"/v1/matches/{matchId}/score-reports/screenshot"},
+			sources: []string{"match_result_reports.go", "match_result_verification.go"},
+			extra:   shared,
 		},
 		{
 			fragment: "result-reviews.paths.yaml",

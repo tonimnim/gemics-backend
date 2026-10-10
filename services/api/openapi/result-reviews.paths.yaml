@@ -11,10 +11,9 @@
 # under review cannot list, open or decide that review.
 # Idempotency: both POST operations require an Idempotency-Key scoped to the
 # operator and the review or strike.
-# Blindness: players never see the opponent's claim. Reviewers see both claims
-# and their screenshots here because resolving the mismatch is their job; the
-# player-facing room never contains the opponent's score before the match is
-# resolved.
+# Visibility: reviewers see the submitted result, who rejected it and both
+# players' screenshots here; the player-facing room never shows the other
+# player's screenshot.
 paths:
   /v1/admin/result-reviews:
     get:

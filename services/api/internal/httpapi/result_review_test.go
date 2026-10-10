@@ -24,16 +24,16 @@ const (
 	resultReviewCompetition = "40000000-0000-4000-8000-000000000001"
 )
 
-// resultReviewQueued is T9's outcome: home claimed 2-1 and away 1-2, both
-// entries responded with the same claims, and the review is queued. The home
-// entry's final report comes from a second member of the home team.
+// resultReviewQueued is T9's outcome: home submitted 2-1, away rejected it,
+// and both entries sent a screenshot, the home one from a second member of the
+// home team.
 func resultReviewQueued() (verificationState, lockedReview) {
 	state := resultReportsAwaitingResponses()
 	state.Verification.Phase = "in_review"
 	state.Verification.Version = 3
 	state.Reports = append(state.Reports,
-		resultReportsReport(resultReportsHomeEntry, resultReviewHomeSecond, "final", resultReportsClaim(2, 1)),
-		resultReportsReport(resultReportsAwayEntry, resultReportsAwayUser, "final", resultReportsClaim(1, 2)))
+		resultReportsScreenshot(resultReportsHomeEntry, resultReviewHomeSecond),
+		resultReportsScreenshot(resultReportsAwayEntry, resultReportsAwayUser))
 	review := lockedReview{ID: resultReviewID, MatchID: state.Match.ID,
 		Status: "queued", Reason: "reports_differ", Version: 1}
 	return state, review
@@ -74,22 +74,19 @@ func TestPlanReviewDecisionOutcomes(t *testing.T) {
 		wantRatings  bool
 		wantNoResult bool
 	}{
-		{name: "staff accepts home", actor: resultReviewStaff(), input: resultReviewInput("accept_home"),
-			wantState: "completed", wantWinner: &homeEntry, wantScore: [2]int{2, 1}, wantAuthor: resultReviewHomeSecond,
+		{name: "staff accepts the submitted result", actor: resultReviewStaff(), input: resultReviewInput("accept_home"),
+			wantState: "completed", wantWinner: &homeEntry, wantScore: [2]int{2, 1}, wantAuthor: resultReportsHomeUser,
 			wantDecider: &staff, wantRemoved: []string{}, wantRatings: true},
-		{name: "staff accepts away", actor: resultReviewStaff(), input: resultReviewInput("accept_away"),
-			wantState: "completed", wantWinner: &awayEntry, wantScore: [2]int{1, 2}, wantAuthor: resultReportsAwayUser,
+		{name: "staff corrects the score for the away entry", actor: resultReviewStaff(), input: resultReviewCorrected(0, 1),
+			wantState: "completed", wantWinner: &awayEntry, wantScore: [2]int{0, 1}, wantAuthor: staff,
 			wantDecider: &staff, wantRemoved: []string{}, wantRatings: true},
 		{name: "staff corrects the score", actor: resultReviewStaff(), input: resultReviewCorrected(3, 0),
 			wantState: "completed", wantWinner: &homeEntry, wantScore: [2]int{3, 0}, wantAuthor: staff,
 			wantDecider: &staff, wantRemoved: []string{}, wantRatings: true},
 		{name: "staff removes both", actor: resultReviewStaff(), input: resultReviewInput("remove_both"),
 			wantState: "cancelled", wantRemoved: []string{homeEntry, awayEntry}, wantNoResult: true},
-		{name: "system accepts home", actor: resultReviewSystem(), input: resultReviewInput("accept_home"),
-			wantState: "completed", wantWinner: &homeEntry, wantScore: [2]int{2, 1}, wantAuthor: resultReviewHomeSecond,
-			wantRemoved: []string{}, wantRatings: true},
-		{name: "system accepts away", actor: resultReviewSystem(), input: resultReviewInput("accept_away"),
-			wantState: "completed", wantWinner: &awayEntry, wantScore: [2]int{1, 2}, wantAuthor: resultReportsAwayUser,
+		{name: "system accepts the submitted result", actor: resultReviewSystem(), input: resultReviewInput("accept_home"),
+			wantState: "completed", wantWinner: &homeEntry, wantScore: [2]int{2, 1}, wantAuthor: resultReportsHomeUser,
 			wantRemoved: []string{}, wantRatings: true},
 		{name: "system removes both", actor: resultReviewSystem(), input: resultReviewInput("remove_both"),
 			wantState: "cancelled", wantRemoved: []string{homeEntry, awayEntry}, wantNoResult: true},
@@ -131,7 +128,7 @@ func TestPlanReviewDecisionOutcomes(t *testing.T) {
 
 func TestPlanReviewDecisionRejections(t *testing.T) {
 	decided, closed, stale := "decided", "closed", 2
-	inconsistent := func(state *verificationState, _ *lockedReview) { state.Verification.Phase = "awaiting_responses" }
+	inconsistent := func(state *verificationState, _ *lockedReview) { state.Verification.Phase = "awaiting_screenshots" }
 	tests := []struct {
 		name   string
 		actor  reviewActor
@@ -150,6 +147,8 @@ func TestPlanReviewDecisionRejections(t *testing.T) {
 			http.StatusBadRequest, "invalid_review_decision"},
 		{"system cannot strike", resultReviewSystem(), resultReviewInput("accept_home", resultReportsAwayUser), nil,
 			http.StatusBadRequest, "invalid_strike_user"},
+		{"the side that submitted nothing can't be accepted", resultReviewStaff(), resultReviewInput("accept_away"), nil,
+			http.StatusBadRequest, "invalid_review_decision"},
 		{"elimination tie without penalties", resultReviewStaff(), resultReviewCorrected(1, 1), nil,
 			http.StatusBadRequest, "invalid_score"},
 		{"corrected score above the range", resultReviewStaff(), resultReviewCorrected(100, 0), nil,
@@ -181,27 +180,26 @@ func TestPlanReviewDecisionRejections(t *testing.T) {
 	}
 }
 
-func TestPlanReviewDecisionStrikesOnlyRejectedCurrentClaims(t *testing.T) {
-	homeInitial, homeFinal, away := resultReportsHomeUser, resultReviewHomeSecond, resultReportsAwayUser
+func TestPlanReviewDecisionStrikesOnlyThePlayerProvedWrong(t *testing.T) {
+	submitter, homeScreenshot, rejecter := resultReportsHomeUser, resultReviewHomeSecond, resultReportsAwayUser
 	tests := []struct {
 		name    string
 		input   reviewDecisionInput
 		want    []string
 		allowed bool
 	}{
-		{"accepting home strikes the away reporter", resultReviewInput("accept_home", away), []string{away}, true},
-		{"the accepted side cannot be struck", resultReviewInput("accept_home", homeFinal), nil, false},
-		{"an initial-only reporter of the accepted entry cannot be struck", resultReviewInput("accept_home", homeInitial), nil, false},
-		{"accepting away strikes the home final reporter", resultReviewInput("accept_away", homeFinal), []string{homeFinal}, true},
-		{"a replaced initial claim is not a current claim", resultReviewInput("accept_away", homeInitial), nil, false},
-		{"a correction equal to the home claim strikes only away", resultReviewCorrected(2, 1, away), []string{away}, true},
-		{"a correction equal to the home claim spares home", resultReviewCorrected(2, 1, homeFinal), nil, false},
-		{"a correction matching neither claim strikes both", resultReviewCorrected(3, 0, homeFinal, away),
-			[]string{homeFinal, away}, true},
-		{"removing both may strike either reporter", resultReviewInput("remove_both", away), []string{away}, true},
-		{"removing both may strike both reporters", resultReviewInput("remove_both", away, homeFinal),
-			[]string{homeFinal, away}, true},
-		{"a player who never reported cannot be struck", resultReviewInput("remove_both", resultReportsOutsider), nil, false},
+		{"accepting the submitted result strikes the rejecter", resultReviewInput("accept_home", rejecter), []string{rejecter}, true},
+		{"the submitter cannot be struck when their result stands", resultReviewInput("accept_home", submitter), nil, false},
+		{"a teammate who only sent a screenshot cannot be struck", resultReviewInput("accept_home", homeScreenshot), nil, false},
+		{"a correction away from the submitted result strikes the submitter", resultReviewCorrected(3, 0, submitter),
+			[]string{submitter}, true},
+		{"a correction away from the submitted result spares the rejecter", resultReviewCorrected(3, 0, rejecter), nil, false},
+		{"a correction equal to the submitted result strikes the rejecter", resultReviewCorrected(2, 1, rejecter),
+			[]string{rejecter}, true},
+		{"removing both may strike either player", resultReviewInput("remove_both", rejecter), []string{rejecter}, true},
+		{"removing both may strike both players", resultReviewInput("remove_both", rejecter, submitter),
+			[]string{submitter, rejecter}, true},
+		{"a player who took no part cannot be struck", resultReviewInput("remove_both", resultReportsOutsider), nil, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -225,13 +223,12 @@ func TestPlanReviewDecisionStrikesOnlyRejectedCurrentClaims(t *testing.T) {
 	}
 }
 
-// T16 queues a match where one entry never responded: its initial report is
-// then its current claim and the only one that can be struck.
-func TestPlanReviewDecisionUsesInitialClaimOfANonResponder(t *testing.T) {
+// T16 queues a match where one entry never sent its screenshot; the submitted
+// result is still what staff accept or correct.
+func TestPlanReviewDecisionWithAMissingScreenshot(t *testing.T) {
 	state := resultReportsAwaitingResponses()
 	state.Verification.Phase = "in_review"
-	state.Reports = append(state.Reports,
-		resultReportsReport(resultReportsHomeEntry, resultReportsHomeUser, "final", resultReportsClaim(2, 1)))
+	state.Reports = append(state.Reports, resultReportsScreenshot(resultReportsHomeEntry, resultReportsHomeUser))
 	review := lockedReview{ID: resultReviewID, MatchID: state.Match.ID, Status: "queued", Reason: "evidence_unavailable", Version: 1}
 	resolution, strikes, rejection := planReviewDecision(state, review, resultReviewStaff(),
 		resultReviewInput("accept_home", resultReportsAwayUser))

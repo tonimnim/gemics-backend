@@ -130,18 +130,18 @@ func (s *Server) selectResultVerificationCandidates(ctx context.Context, exclude
 	selectors := []string{
 		`SELECT v.match_id::text,v.competition_id::text FROM match_result_verifications v
 		JOIN competitions c ON c.id=v.competition_id AND c.status NOT IN ('cancelled','completed')
-		WHERE v.phase='awaiting_second_report' AND v.reminder_sent_at IS NULL
+		WHERE v.phase='awaiting_confirmation' AND v.reminder_sent_at IS NULL
 		  AND v.reminder_at<=now() AND v.report_deadline_at>now()
 		  AND NOT (v.match_id = ANY($2::text[]::uuid[]))
 		ORDER BY v.reminder_at,v.match_id LIMIT $1`,
 		`SELECT v.match_id::text,v.competition_id::text FROM match_result_verifications v
 		JOIN competitions c ON c.id=v.competition_id AND c.status NOT IN ('cancelled','completed')
-		WHERE v.phase='awaiting_second_report' AND v.report_deadline_at<=now()
+		WHERE v.phase='awaiting_confirmation' AND v.report_deadline_at<=now()
 		  AND NOT (v.match_id = ANY($2::text[]::uuid[]))
 		ORDER BY v.report_deadline_at,v.match_id LIMIT $1`,
 		`SELECT v.match_id::text,v.competition_id::text FROM match_result_verifications v
 		JOIN competitions c ON c.id=v.competition_id AND c.status NOT IN ('cancelled','completed')
-		WHERE v.phase='awaiting_responses' AND v.response_deadline_at<=now()
+		WHERE v.phase='awaiting_screenshots' AND v.response_deadline_at<=now()
 		  AND NOT (v.match_id = ANY($2::text[]::uuid[]))
 		ORDER BY v.response_deadline_at,v.match_id LIMIT $1`,
 		// R7 is served by matches_deadline_idx.
@@ -201,7 +201,7 @@ func (s *Server) processResultVerificationCandidate(ctx context.Context, candida
 	if state.Reports, err = lockResultReports(ctx, tx, candidate.MatchID); err != nil {
 		return err
 	}
-	if state.Verification != nil && state.Verification.Phase == "awaiting_responses" {
+	if state.Verification != nil && state.Verification.Phase == "awaiting_screenshots" {
 		if state.BlockedEvidence, err = loadBlockedEvidence(ctx, tx, state.Match, state.Verification, state.Reports); err != nil {
 			return err
 		}
@@ -242,7 +242,7 @@ func applyVerificationDeadline(ctx context.Context, tx pgx.Tx, state verificatio
 func sendScoreReportReminder(ctx context.Context, tx pgx.Tx, m lockedResultMatch, v *lockedVerification, entryID string,
 	actor resolutionActor) error {
 	command, err := tx.Exec(ctx, `UPDATE match_result_verifications SET reminder_sent_at=$2,updated_at=now()
-		WHERE match_id=$1 AND phase='awaiting_second_report' AND reminder_sent_at IS NULL
+		WHERE match_id=$1 AND phase='awaiting_confirmation' AND reminder_sent_at IS NULL
 		  AND report_deadline_at>$2`, m.ID, m.DatabaseNow)
 	if err != nil {
 		return err

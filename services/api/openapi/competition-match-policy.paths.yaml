@@ -1,8 +1,8 @@
 # Merge fragment for the player eligibility, typed bracket and match-verification
 # slice. openapi.yaml remains the generated/assembled source of truth; this file
-# deliberately does not duplicate unrelated operations. The blind score-report
-# operations and the room's resultVerification schemas live in
-# match-score-reports.paths.yaml.
+# deliberately does not duplicate unrelated operations. The result operations
+# (submit, confirm or reject, screenshot) and the room's resultVerification
+# schemas live in match-score-reports.paths.yaml.
 paths:
   /v1/competitions/{id}/eligibility:
     get:
@@ -100,9 +100,9 @@ paths:
       tags: [Matches]
       summary: Return a participant match room with an explicit verification policy.
       description: >-
-        The room is the caller's blind view. It never contains the opponent's score before the match
-        is resolved: resultVerification says only whether the opponent reported or responded, and the
-        canonical result appears once the match is completed. home and away carry each side's gameAccount
+        The room is the caller's view. resultVerification shows the submitted result to both entries
+        and says only whether the opponent sent its screenshot after a rejection; the canonical result
+        appears once the match is completed. home and away carry each side's gameAccount
         (in-game name, platform and eFootball User ID) for setting up the Friend Match, which only the two
         entries' players can read.
       security: [{ bearerAuth: [] }]
@@ -235,35 +235,35 @@ components:
       type: object
       additionalProperties: false
       description: >-
-        The windows of the blind dual score report. They are snapshotted when the first report opens
-        verification, so a later rules edit never moves a live deadline; before that they are resolved
-        from the competition's matchVerification rules.
-      required: [reportWindowSeconds, reminderBeforeDeadlineSeconds, responseWindowSeconds, finalReportEvidence]
+        The result windows. They are snapshotted when the result is submitted, so a later rules edit never
+        moves a live deadline; before that they are resolved from the competition's matchVerification rules.
+      required: [reportWindowSeconds, reminderBeforeDeadlineSeconds, responseWindowSeconds, screenshotEvidence]
       properties:
         reportWindowSeconds:
           type: integer
           format: int64
           minimum: 300
           maximum: 3600
-          description: How long the other entry has to report after the first report (10 minutes by default).
+          description: How long the other entry has to confirm or reject the submitted result (10 minutes by default).
         reminderBeforeDeadlineSeconds:
           type: integer
           format: int64
           minimum: 60
-          description: When the reminder push reaches a silent entry, before the report window ends (3 minutes by default). Always less than reportWindowSeconds.
+          description: When the reminder push reaches the entry that hasn't answered, before reportWindowSeconds ends (3 minutes by default). Always less than reportWindowSeconds.
         responseWindowSeconds:
           type: integer
           format: int64
           minimum: 300
           maximum: 3600
-          description: How long each entry has to submit its final score after a mismatch (10 minutes by default).
-        finalReportEvidence:
+          description: How long each entry has to send its screenshot after a rejection (10 minutes by default).
+        screenshotEvidence:
           type: object
           additionalProperties: false
+          description: Each entry sends exactly one screenshot after a rejection.
           required: [minItems, maxItems, mediaTypes]
           properties:
             minItems: { type: integer, const: 1 }
-            maxItems: { type: integer, const: 3 }
+            maxItems: { type: integer, const: 1 }
             mediaTypes:
               type: array
               items: { type: string, enum: [image/jpeg, image/png] }
@@ -429,7 +429,6 @@ components:
             - timeout_forfeit
             - reset_not_required
             - correction_voided
-            - report_timeout
             - response_timeout
             - no_result_reported
             - platform_review

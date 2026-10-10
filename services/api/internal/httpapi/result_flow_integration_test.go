@@ -31,20 +31,20 @@ const resultFlowStrikeBanThreshold = 3
 type resultFlowPlay uint8
 
 const (
-	resultFlowAgree              resultFlowPlay = iota // R4
-	resultFlowSilentAway                               // R5
-	resultFlowNoResponders                             // R6, nobody responds
-	resultFlowOneResponder                             // R6, only home responds
-	resultFlowEqualAfterResponse                       // R6, away's final equals home's claim
-	resultFlowUnreported                               // R7
-	resultFlowAcceptHome                               // R8
-	resultFlowAcceptAway                               // R8
-	resultFlowCorrected                                // R8
-	resultFlowRemoveBoth                               // R8
+	resultFlowAgree            resultFlowPlay = iota // R4: home submits, away confirms
+	resultFlowSilentAway                             // R5: away never answers, so home's result stands
+	resultFlowNoResponders                           // R6: away rejects and nobody sends a screenshot
+	resultFlowOneResponder                           // R6: away rejects and only home sends one
+	resultFlowRejecterResponds                       // R6: away rejects and only away sends one
+	resultFlowUnreported                             // R7
+	resultFlowAcceptHome                             // R8: home's submitted result is accepted
+	resultFlowAcceptAway                             // R8: away's submitted result is accepted
+	resultFlowCorrected                              // R8
+	resultFlowRemoveBoth                             // R8
 )
 
 func (play resultFlowPlay) String() string {
-	return [...]string{"agree", "silent away", "no responders", "one responder", "equal after response",
+	return [...]string{"agree", "silent away", "no responders", "one responder", "rejecter responds",
 		"unreported", "accept home", "accept away", "corrected score", "remove both"}[play]
 }
 
@@ -224,35 +224,36 @@ func resultFlowExecute(t *testing.T, h resultFlowHarness, sides resultReportsSid
 	slices.Sort(both)
 	switch play {
 	case resultFlowAgree:
-		resultReportsMustPost(t, h.Server, sides.HomeUser, sides.MatchID, "initial-report-1", resultReportsBody(2, 1), false)
-		resultReportsMustPost(t, h.Server, sides.AwayUser, sides.MatchID, "initial-report-1", resultReportsBody(2, 1), false)
+		resultReportsMustPost(t, h.Server, sides.HomeUser, sides.MatchID, "result-1", resultReportsBody(2, 1), "")
+		resultReportsMustPost(t, h.Server, sides.AwayUser, sides.MatchID, "confirm-1", resultReportsAnswer("confirm"), "confirmation")
 		return resultFlowExpectation{State: "completed", Reason: "played", Resolution: "agreed", Origin: "agreed_reports",
-			Winner: &home, Score: [2]int{2, 1}, Author: sides.HomeUser, Confirmer: sides.AwayUser, Rated: true, Initials: 2}
+			Winner: &home, Score: [2]int{2, 1}, Author: sides.HomeUser, Confirmer: sides.AwayUser, Rated: true, Initials: 1}
 	case resultFlowSilentAway:
-		resultReportsMustPost(t, h.Server, sides.HomeUser, sides.MatchID, "initial-report-1", resultReportsBody(2, 1), false)
+		resultReportsMustPost(t, h.Server, sides.HomeUser, sides.MatchID, "result-1", resultReportsBody(2, 1), "")
 		shiftVerificationClock(t, h.Pool, sides.MatchID, 10*time.Minute+time.Second)
 		resultReportsProcess(t, h.Server, sides)
-		return resultFlowExpectation{State: "forfeit", Reason: "report_timeout", Resolution: "report_timeout",
-			Winner: &home, Removed: []string{away}, Initials: 1}
+		return resultFlowExpectation{State: "completed", Reason: "played", Resolution: "confirmation_timeout",
+			Origin: "unanswered", Winner: &home, Score: [2]int{2, 1}, Author: sides.HomeUser, Rated: true, Initials: 1}
 	case resultFlowNoResponders:
-		resultFlowMismatch(t, h, sides)
+		resultFlowReject(t, h, sides, "home", 2, 1)
 		shiftVerificationClock(t, h.Pool, sides.MatchID, 11*time.Minute)
 		resultReportsProcess(t, h.Server, sides)
 		return resultFlowExpectation{State: "cancelled", Reason: "response_timeout", Resolution: "response_timeout",
-			Removed: both, Mismatch: true, Initials: 2}
+			Removed: both, Mismatch: true, Initials: 1}
 	case resultFlowOneResponder:
-		resultFlowMismatch(t, h, sides)
-		resultFlowRespond(t, h, sides.MatchID, sides.HomeUser, 2, 1)
+		resultFlowReject(t, h, sides, "home", 2, 1)
+		resultFlowRespond(t, h, sides.MatchID, sides.HomeUser)
 		shiftVerificationClock(t, h.Pool, sides.MatchID, 11*time.Minute)
 		resultReportsProcess(t, h.Server, sides)
 		return resultFlowExpectation{State: "forfeit", Reason: "response_timeout", Resolution: "response_timeout",
-			Winner: &home, Removed: []string{away}, Mismatch: true, Initials: 2, Finals: 1}
-	case resultFlowEqualAfterResponse:
-		resultFlowMismatch(t, h, sides)
-		resultFlowRespond(t, h, sides.MatchID, sides.AwayUser, 2, 1)
-		return resultFlowExpectation{State: "completed", Reason: "played", Resolution: "agreed", Origin: "agreed_reports",
-			Winner: &home, Score: [2]int{2, 1}, Author: sides.HomeUser, Confirmer: sides.AwayUser, Rated: true,
-			Mismatch: true, Initials: 2, Finals: 1}
+			Winner: &home, Removed: []string{away}, Mismatch: true, Initials: 1, Finals: 1}
+	case resultFlowRejecterResponds:
+		resultFlowReject(t, h, sides, "home", 2, 1)
+		resultFlowRespond(t, h, sides.MatchID, sides.AwayUser)
+		shiftVerificationClock(t, h.Pool, sides.MatchID, 11*time.Minute)
+		resultReportsProcess(t, h.Server, sides)
+		return resultFlowExpectation{State: "forfeit", Reason: "response_timeout", Resolution: "response_timeout",
+			Winner: &away, Removed: []string{home}, Mismatch: true, Initials: 1, Finals: 1}
 	case resultFlowUnreported:
 		// Later rounds are scheduled hours ahead; two days puts every deadline
 		// behind the database clock.
@@ -264,49 +265,65 @@ func resultFlowExecute(t *testing.T, h resultFlowHarness, sides resultReportsSid
 	}
 }
 
-// resultFlowMismatch files differing initial reports: home claims 2-1, away 1-2.
-func resultFlowMismatch(t *testing.T, h resultFlowHarness, sides resultReportsSides) {
+// resultFlowReject has one entry ("home" or "away") submit a result and the
+// other reject it, which opens the screenshot window.
+func resultFlowReject(t *testing.T, h resultFlowHarness, sides resultReportsSides, submitter string, home, away int) {
 	t.Helper()
-	resultReportsMustPost(t, h.Server, sides.HomeUser, sides.MatchID, "initial-report-1", resultReportsBody(2, 1), false)
-	room := resultReportsMustPost(t, h.Server, sides.AwayUser, sides.MatchID, "initial-report-1", resultReportsBody(1, 2), false)
-	if room.State != "disputed" || room.ResultVerification.Phase != "awaiting_responses" {
-		t.Fatalf("differing reports did not open the response window: %+v", room)
+	submitterUser, rejecterUser := sides.HomeUser, sides.AwayUser
+	if submitter == "away" {
+		submitterUser, rejecterUser = sides.AwayUser, sides.HomeUser
+	}
+	resultReportsMustPost(t, h.Server, submitterUser, sides.MatchID, "result-1", resultReportsBody(home, away), "")
+	room := resultReportsMustPost(t, h.Server, rejecterUser, sides.MatchID, "reject-1", resultReportsAnswer("reject"), "confirmation")
+	if room.State != "disputed" || room.ResultVerification.Phase != "awaiting_screenshots" {
+		t.Fatalf("the rejection did not open the screenshot window: %+v", room)
 	}
 }
 
-// resultFlowRespond files a final score with one freshly processed screenshot.
-func resultFlowRespond(t *testing.T, h resultFlowHarness, matchID, userID string, home, away int) string {
+// resultFlowRespond sends one freshly processed screenshot.
+func resultFlowRespond(t *testing.T, h resultFlowHarness, matchID, userID string) string {
 	t.Helper()
 	evidenceID := resultReportsInsertEvidence(t, h.Pool, userID, "completed", time.Now())
-	resultReportsMustPost(t, h.Server, userID, matchID, "final-report-1", resultReportsBody(home, away, evidenceID), true)
+	resultReportsMustPost(t, h.Server, userID, matchID, "screenshot-1", resultReportsShot(evidenceID), "screenshot")
 	return evidenceID
 }
 
-// resultFlowReview sends the match to the Gamics queue with differing final
-// reports and decides it as the unconflicted reviewer. Strikes always hit the
-// reporters of the claims the decision rejects.
+// resultFlowReview sends the match to the Gamics queue (a rejected result and
+// both screenshots) and decides it as the unconflicted reviewer. Strikes hit
+// the player the decision proves wrong.
 func resultFlowReview(t *testing.T, h resultFlowHarness, sides resultReportsSides, play resultFlowPlay) resultFlowExpectation {
 	t.Helper()
-	resultFlowMismatch(t, h, sides)
-	resultFlowRespond(t, h, sides.MatchID, sides.HomeUser, 2, 1)
-	awayEvidence := resultFlowRespond(t, h, sides.MatchID, sides.AwayUser, 1, 2)
+	submitter, submitted := "home", [2]int{2, 1}
+	if play == resultFlowAcceptAway {
+		submitter, submitted = "away", [2]int{1, 2}
+	}
+	resultFlowReject(t, h, sides, submitter, submitted[0], submitted[1])
+	resultFlowRespond(t, h, sides.MatchID, sides.HomeUser)
+	awayEvidence := resultFlowRespond(t, h, sides.MatchID, sides.AwayUser)
 	reviewID := resultFlowReviewID(t, h.Pool, sides.MatchID)
 	if queue := resultFlowListReviews(t, h, h.StaffID, "status=queued&competitionId="+sides.CompetitionID); !slices.Contains(queue, reviewID) {
 		t.Fatalf("review %s is missing from the queue %v", reviewID, queue)
 	}
 	detail := resultFlowGetReview(t, h, h.StaffID, reviewID)
-	if detail.Status != "queued" || detail.Reason != "reports_differ" || detail.Reports.Home.Final == nil ||
-		detail.Reports.Away.Final == nil || detail.Reports.Home.Final.HomeScore != 2 || detail.Reports.Away.Final.AwayScore != 2 ||
+	submittedReport := detail.Reports.Home.Initial
+	rejecter := sides.AwayUser
+	if submitter == "away" {
+		submittedReport, rejecter = detail.Reports.Away.Initial, sides.HomeUser
+	}
+	if detail.Status != "queued" || detail.Reason != "reports_differ" || submittedReport == nil ||
+		submittedReport.HomeScore == nil || *submittedReport.HomeScore != submitted[0] ||
+		detail.Verification.RejectedBy == nil || *detail.Verification.RejectedBy != rejecter ||
+		detail.Reports.Home.Final == nil || detail.Reports.Away.Final == nil || detail.Reports.Away.Final.HomeScore != nil ||
 		len(detail.Reports.Away.Final.Evidence) != 1 || detail.Reports.Away.Final.Evidence[0].ID != awayEvidence {
 		t.Fatalf("unexpected review detail %+v", detail)
 	}
 	if code := resultReportsGet(t, h.Server.getEvidenceAccess, h.StaffID, "id", awayEvidence).Code; code != http.StatusOK {
-		t.Fatalf("the reviewer cannot open a final report's screenshot: %d", code)
+		t.Fatalf("the reviewer cannot open a screenshot: %d", code)
 	}
 	home, away := sides.HomeEntry, sides.AwayEntry
 	body := map[string]any{"expectedVersion": detail.Version, "note": "Screenshots decide this match."}
 	expected := resultFlowExpectation{State: "completed", Reason: "platform_review", Resolution: "platform_review",
-		Origin: "platform_review", Confirmer: h.StaffID, Rated: true, Reviewed: true, Mismatch: true, Initials: 2, Finals: 2}
+		Origin: "platform_review", Confirmer: h.StaffID, Rated: true, Reviewed: true, Mismatch: true, Initials: 1, Finals: 2}
 	switch play {
 	case resultFlowAcceptHome:
 		body["decision"], body["strikeUserIds"] = "accept_home", []string{sides.AwayUser}
@@ -315,9 +332,10 @@ func resultFlowReview(t *testing.T, h resultFlowHarness, sides resultReportsSide
 		body["decision"], body["strikeUserIds"] = "accept_away", []string{sides.HomeUser}
 		expected.Winner, expected.Score, expected.Author, expected.Strikes = &away, [2]int{1, 2}, sides.AwayUser, []string{sides.HomeUser}
 	case resultFlowCorrected:
-		body["decision"], body["strikeUserIds"] = "corrected_score", []string{sides.AwayUser}
+		// 3-0 isn't the submitted 2-1, so the submitter is the one proved wrong.
+		body["decision"], body["strikeUserIds"] = "corrected_score", []string{sides.HomeUser}
 		body["correctedScore"] = map[string]any{"homeScore": 3, "awayScore": 0}
-		expected.Winner, expected.Score, expected.Author, expected.Strikes = &home, [2]int{3, 0}, h.StaffID, []string{sides.AwayUser}
+		expected.Winner, expected.Score, expected.Author, expected.Strikes = &home, [2]int{3, 0}, h.StaffID, []string{sides.HomeUser}
 	case resultFlowRemoveBoth:
 		body["decision"], body["strikeUserIds"] = "remove_both", []string{sides.HomeUser, sides.AwayUser}
 		expected.State, expected.Origin, expected.Confirmer, expected.Rated = "cancelled", "", "", false
@@ -500,8 +518,8 @@ func resultFlowAssertAuditAndPushes(t *testing.T, pool *pgxpool.Pool, sides resu
 		reviews = 1
 	}
 	for action, want := range map[string]int{
-		terminal[0]: 1, "result.reported": expected.Initials, "result.final_reported": expected.Finals,
-		"result.mismatch": mismatches, "result.review_queued": reviews,
+		terminal[0]: 1, "result.reported": expected.Initials, "result.screenshot_submitted": expected.Finals,
+		"result.rejected": mismatches, "result.review_queued": reviews,
 	} {
 		if got := resultReportsCount(t, pool, `SELECT count(*) FROM audit_events WHERE subject_type='match'
 			AND subject_id=$1 AND action=$2`, sides.MatchID, action); got != want {
@@ -550,12 +568,12 @@ func TestIntegrationResultFlowSingleElimination(t *testing.T) {
 	options := integrationSeedOptions{Format: "single_elimination", Entries: 8, ThirdPlace: true}
 	resultFlowRunScenarios(t, []resultFlowScenario{
 		{
-			Name: "silence, one responder, agreement after a response and three review decisions", Options: options,
+			Name: "silence, one screenshot each way and three review decisions", Options: options,
 			Rules: []resultFlowRule{
 				{Bracket: "main", Round: 1, Number: 2, Play: resultFlowSilentAway},
 				{Bracket: "main", Round: 1, Number: 3, Play: resultFlowOneResponder},
 				{Bracket: "main", Round: 1, Number: 4, Play: resultFlowAcceptAway},
-				{Bracket: "main", Round: 2, Number: 1, Play: resultFlowEqualAfterResponse},
+				{Bracket: "main", Round: 2, Number: 1, Play: resultFlowRejecterResponds},
 				{Bracket: "main", Round: 2, Number: 2, Play: resultFlowCorrected},
 				{Bracket: "main", Round: 3, Number: 1, Play: resultFlowRemoveBoth},
 			},
@@ -588,13 +606,13 @@ func TestIntegrationResultFlowSingleElimination(t *testing.T) {
 func TestIntegrationResultFlowDoubleElimination(t *testing.T) {
 	resultFlowRunScenarios(t, []resultFlowScenario{
 		{
-			Name: "four entries: silence, reviews and agreement after a response", Options: integrationSeedOptions{
+			Name: "four entries: a removal, reviews and the rejecter's lone screenshot", Options: integrationSeedOptions{
 				Format: "double_elimination", Entries: 4},
 			Rules: []resultFlowRule{
-				{Bracket: "winners", Round: 1, Number: 1, Play: resultFlowSilentAway},
+				{Bracket: "winners", Round: 1, Number: 1, Play: resultFlowOneResponder},
 				{Bracket: "winners", Round: 1, Number: 2, Play: resultFlowAcceptHome},
 				{Bracket: "winners", Round: 2, Number: 1, Play: resultFlowCorrected},
-				{Bracket: "losers", Round: 2, Number: 1, Play: resultFlowEqualAfterResponse},
+				{Bracket: "losers", Round: 2, Number: 1, Play: resultFlowRejecterResponds},
 				{Bracket: "grand_final", Round: 1, Number: 1, Play: resultFlowAcceptAway},
 			},
 			Check: func(t *testing.T, h resultFlowHarness, run resultFlowRun) {
@@ -636,9 +654,7 @@ func TestIntegrationResultFlowRoundRobin(t *testing.T) {
 				{Bracket: "group_a", Round: 1, Play: resultFlowSilentAway},
 				{Bracket: "group_a", Round: 1, Play: resultFlowAcceptAway},
 				{Bracket: "group_b", Round: 1, Play: resultFlowRemoveBoth},
-				{Bracket: "group_b", Round: 1, Play: resultFlowEqualAfterResponse},
-				// One group_a entry is gone, so each later group_a round keeps
-				// exactly one playable fixture.
+				{Bracket: "group_b", Round: 1, Play: resultFlowRejecterResponds},
 				{Bracket: "group_a", Round: 2, Play: resultFlowCorrected},
 				{Bracket: "group_a", Round: 3, Play: resultFlowOneResponder},
 			},
@@ -812,9 +828,9 @@ func TestIntegrationResultFlowConflictedReviewers(t *testing.T) {
 	h := resultFlowSetup(t)
 	seeded := seedIntegrationCompetition(t, h.Pool, integrationSeedOptions{Format: "single_elimination", Entries: 4})
 	sides := resultReportsStart(t, h.Pool, readyIntegrationMatches(t, h.Pool, seeded.ID)[0])
-	resultFlowMismatch(t, h, sides)
-	resultFlowRespond(t, h, sides.MatchID, sides.HomeUser, 2, 1)
-	resultFlowRespond(t, h, sides.MatchID, sides.AwayUser, 1, 2)
+	resultFlowReject(t, h, sides, "home", 2, 1)
+	resultFlowRespond(t, h, sides.MatchID, sides.HomeUser)
+	resultFlowRespond(t, h, sides.MatchID, sides.AwayUser)
 	reviewID := resultFlowReviewID(t, h.Pool, sides.MatchID)
 
 	resultFlowExec(t, h.Pool, `INSERT INTO platform_staff_roles(user_id,role) VALUES ($1,'reviewer')`, sides.HomeUser)
@@ -868,11 +884,11 @@ func TestIntegrationResultFlowCompetitionCancellation(t *testing.T) {
 		started = append(started, resultReportsStart(t, h.Pool, matchID))
 	}
 	awaiting, responding, reviewing := started[1], started[2], started[3]
-	resultReportsMustPost(t, h.Server, awaiting.HomeUser, awaiting.MatchID, "initial-report-1", resultReportsBody(2, 1), false)
-	resultFlowMismatch(t, h, responding)
-	resultFlowMismatch(t, h, reviewing)
-	resultFlowRespond(t, h, reviewing.MatchID, reviewing.HomeUser, 2, 1)
-	resultFlowRespond(t, h, reviewing.MatchID, reviewing.AwayUser, 1, 2)
+	resultReportsMustPost(t, h.Server, awaiting.HomeUser, awaiting.MatchID, "result-1", resultReportsBody(2, 1), "")
+	resultFlowReject(t, h, responding, "home", 2, 1)
+	resultFlowReject(t, h, reviewing, "home", 2, 1)
+	resultFlowRespond(t, h, reviewing.MatchID, reviewing.HomeUser)
+	resultFlowRespond(t, h, reviewing.MatchID, reviewing.AwayUser)
 	reviewID := resultFlowReviewID(t, h.Pool, reviewing.MatchID)
 
 	request := resultFlowStaffRequest(t, http.MethodPost, "/", seeded.OrganizerID, `{"status":"cancelled","reason":"Venue closed."}`)
@@ -954,14 +970,16 @@ func resultFlowRace(t *testing.T, first, second func()) {
 	}
 }
 
-// resultFlowSilentAwayDue files the home report of the first semifinal and
-// lets the away entry's report window expire.
+// resultFlowSilentAwayDue has the away entry of the first semifinal reject
+// home's result and then send no screenshot, while home sends theirs, and lets
+// the screenshot window expire: the worker is due to remove the away entry.
 func resultFlowSilentAwayDue(t *testing.T, h resultFlowHarness) (integrationCompetition, resultReportsSides) {
 	t.Helper()
 	seeded := seedIntegrationCompetition(t, h.Pool, integrationSeedOptions{Format: "single_elimination", Entries: 4})
 	sides := resultReportsStart(t, h.Pool, readyIntegrationMatches(t, h.Pool, seeded.ID)[0])
-	resultReportsMustPost(t, h.Server, sides.HomeUser, sides.MatchID, "initial-report-1", resultReportsBody(2, 1), false)
-	shiftVerificationClock(t, h.Pool, sides.MatchID, 10*time.Minute+time.Second)
+	resultFlowReject(t, h, sides, "home", 2, 1)
+	resultFlowRespond(t, h, sides.MatchID, sides.HomeUser)
+	shiftVerificationClock(t, h.Pool, sides.MatchID, 11*time.Minute)
 	return seeded, sides
 }
 

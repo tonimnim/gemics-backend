@@ -435,15 +435,14 @@ func (f *screenshotFakeReader) set(evidenceID string, answer visionReadResponse)
 	f.answers[evidenceID] = answer
 }
 
-// screenshotDispute starts a match whose two players dispute the score, each
-// with one screenshot.
-func screenshotDispute(t *testing.T, h resultFlowHarness, matchID string,
-	homeClaim, awayClaim [2]int) (resultReportsSides, string, string) {
+// screenshotDispute starts a match whose home player submits a result that
+// the away player rejects; each then sends one screenshot.
+func screenshotDispute(t *testing.T, h resultFlowHarness, matchID string, submitted [2]int) (resultReportsSides, string, string) {
 	t.Helper()
 	sides := resultReportsStart(t, h.Pool, matchID)
-	resultFlowMismatch(t, h, sides)
-	homeEvidence := resultFlowRespond(t, h, sides.MatchID, sides.HomeUser, homeClaim[0], homeClaim[1])
-	awayEvidence := resultFlowRespond(t, h, sides.MatchID, sides.AwayUser, awayClaim[0], awayClaim[1])
+	resultFlowReject(t, h, sides, "home", submitted[0], submitted[1])
+	homeEvidence := resultFlowRespond(t, h, sides.MatchID, sides.HomeUser)
+	awayEvidence := resultFlowRespond(t, h, sides.MatchID, sides.AwayUser)
 	return sides, homeEvidence, awayEvidence
 }
 
@@ -490,7 +489,7 @@ func TestIntegrationScreenshotReaderLearnsFromStaffAndDecidesOnlyWhenSafe(t *tes
 	semifinals := readyIntegrationMatches(t, h.Pool, seeded.ID)
 
 	// Semifinal one: nobody's team names are known, so it waits for staff.
-	one, oneHome, oneAway := screenshotDispute(t, h, semifinals[0], [2]int{2, 1}, [2]int{1, 2})
+	one, oneHome, oneAway := screenshotDispute(t, h, semifinals[0], [2]int{2, 1})
 	mugz := screenshotSample("Mugz FC", 2, "SQUAD 0", 1, sampleMugz)
 	fake.set(oneHome, mugz)
 	fake.set(oneAway, mugz)
@@ -519,9 +518,9 @@ func TestIntegrationScreenshotReaderLearnsFromStaffAndDecidesOnlyWhenSafe(t *tes
 		($2,'tigerssc','Tigers SC')`, two.HomeUser, two.AwayUser)
 	resultFlowExec(t, h.Pool, `UPDATE users SET display_name='Lions FC' WHERE id=$1`, two.AwayUser)
 	resultFlowExec(t, h.Pool, `UPDATE game_accounts SET in_game_name='Lions FC' WHERE user_id=$1`, two.AwayUser)
-	resultFlowMismatch(t, h, two)
-	twoHome := resultFlowRespond(t, h, two.MatchID, two.HomeUser, 3, 0)
-	twoAway := resultFlowRespond(t, h, two.MatchID, two.AwayUser, 0, 3)
+	resultFlowReject(t, h, two, "home", 3, 0)
+	twoHome := resultFlowRespond(t, h, two.MatchID, two.HomeUser)
+	twoAway := resultFlowRespond(t, h, two.MatchID, two.AwayUser)
 	lions := screenshotSample("Lions FC", 3, "Tigers SC", 0, sampleMzee)
 	lions.ImageHash = "1111222233334444"
 	fake.set(twoHome, lions)
@@ -538,11 +537,11 @@ func TestIntegrationScreenshotReaderLearnsFromStaffAndDecidesOnlyWhenSafe(t *tes
 		t.Fatalf("an automatic decision taught names: %d %v", confirmations, err)
 	}
 
-	// The final: the away player forges a 1-2 to back their claim.
+	// The final: the away player rejects home's 2-1 and forges a 1-2.
 	final := resultReportsStart(t, h.Pool, readyIntegrationMatches(t, h.Pool, seeded.ID)[0])
-	resultFlowMismatch(t, h, final)
-	finalHome := resultFlowRespond(t, h, final.MatchID, final.HomeUser, 2, 1)
-	finalAway := resultFlowRespond(t, h, final.MatchID, final.AwayUser, 1, 2)
+	resultFlowReject(t, h, final, "home", 2, 1)
+	finalHome := resultFlowRespond(t, h, final.MatchID, final.HomeUser)
+	finalAway := resultFlowRespond(t, h, final.MatchID, final.AwayUser)
 	names := map[string]string{one.HomeUser: "Mugz FC", two.HomeUser: "Lions FC"}
 	honest := screenshotSample(names[final.HomeUser], 2, names[final.AwayUser], 1,
 		map[string][]int{"possession": {55, 45}, "shotsOnTarget": {6, 3}, "saves": {2, 4}})
@@ -642,8 +641,7 @@ func TestIntegrationScreenshotReaderSurvivesOutagesAndStaleClaims(t *testing.T) 
 	h, fake, tick, closeReader := screenshotReaderHarness(t)
 	defer closeReader()
 	seeded := seedIntegrationCompetition(t, h.Pool, integrationSeedOptions{Format: "single_elimination", Entries: 2})
-	sides, homeEvidence, awayEvidence := screenshotDispute(t, h, readyIntegrationMatches(t, h.Pool, seeded.ID)[0],
-		[2]int{2, 1}, [2]int{1, 2})
+	sides, homeEvidence, awayEvidence := screenshotDispute(t, h, readyIntegrationMatches(t, h.Pool, seeded.ID)[0], [2]int{2, 1})
 	readingState := func(evidenceID string) (string, int, int) {
 		t.Helper()
 		var status string

@@ -70,11 +70,13 @@ type staffReporterView struct {
 
 // staffReportView is one blind claim as Gamics staff see it. Screenshots are
 // fetched through GET /v1/evidence/{id}, which re-checks the reviewer.
+// staffReportView is a submitted result ("initial") or a screenshot
+// submission ("final"), which has no score.
 type staffReportView struct {
 	ID         string                    `json:"id"`
 	ReportedBy staffReporterView         `json:"reportedBy"`
-	HomeScore  int                       `json:"homeScore"`
-	AwayScore  int                       `json:"awayScore"`
+	HomeScore  *int                      `json:"homeScore"`
+	AwayScore  *int                      `json:"awayScore"`
 	Tiebreak   *tiebreakScoreInput       `json:"tiebreak"`
 	Games      []gameScoreInput          `json:"games"`
 	ReportedAt time.Time                 `json:"reportedAt"`
@@ -97,6 +99,7 @@ type resultReviewVerificationView struct {
 	ReportDeadlineAt   time.Time  `json:"reportDeadlineAt"`
 	MismatchAt         *time.Time `json:"mismatchAt"`
 	ResponseDeadlineAt *time.Time `json:"responseDeadlineAt"`
+	RejectedBy         *string    `json:"rejectedBy"`
 }
 
 type resultReviewWindowUploadView struct {
@@ -492,6 +495,7 @@ func queryResultReviewHead(ctx context.Context, queryer rowsQueryer, reviewID, v
 		&detail.Participants.Away.DisplayName, &detail.Participants.Away.Handle,
 		&detail.Verification.FirstReportEntryID, &detail.Verification.FirstReportedAt,
 		&detail.Verification.ReportDeadlineAt, &detail.Verification.MismatchAt, &detail.Verification.ResponseDeadlineAt,
+		&detail.Verification.RejectedBy,
 		&conflicted)
 	err := queryer.QueryRow(ctx, `SELECT `+resultReviewSummaryColumns+`,
 		review.note,review.decider_kind,review.decider_ref,review.corrected_home_score,review.corrected_away_score,
@@ -500,7 +504,7 @@ func queryResultReviewHead(ctx context.Context, queryer rowsQueryer, reviewID, v
 		home.id::text,home.status,home.captain_user_id::text,home.display_name,home_profile.handle,
 		away.id::text,away.status,away.captain_user_id::text,away.display_name,away_profile.handle,
 		verification.first_report_entry_id::text,verification.first_reported_at,verification.report_deadline_at,
-		verification.mismatch_at,verification.response_deadline_at,
+		verification.mismatch_at,verification.response_deadline_at,verification.rejected_by::text,
 		`+resultReviewConflictClause("m", "$2::uuid")+resultReviewFrom+`
 		JOIN match_result_verifications verification ON verification.match_id=review.match_id
 		JOIN competition_entries home ON home.id=m.home_entry_id
@@ -568,8 +572,10 @@ func queryResultReviewReports(ctx context.Context, queryer rowsQueryer, matchID 
 		if tiebreakType != nil && homeTiebreak != nil && awayTiebreak != nil {
 			view.Tiebreak = &tiebreakScoreInput{Type: *tiebreakType, HomeScore: *homeTiebreak, AwayScore: *awayTiebreak}
 		}
-		if err = decodeStoredJSON(games, &view.Games, "report games"); err != nil {
-			return nil, err
+		if games != nil {
+			if err = decodeStoredJSON(games, &view.Games, "report games"); err != nil {
+				return nil, err
+			}
 		}
 		if err = decodeStoredJSON(evidence, &view.Evidence, "report evidence"); err != nil {
 			return nil, err
@@ -580,7 +586,8 @@ func queryResultReviewReports(ctx context.Context, queryer rowsQueryer, matchID 
 	return reports, rows.Err()
 }
 
-// placeReport files a claim under its entry's side and kind.
+// placeReport files the submitted result or a screenshot under its entry's
+// side.
 func (detail *resultReviewDetail) placeReport(report resultReviewReport) {
 	side := &detail.Reports.Home
 	if report.EntryID == detail.Participants.Away.EntryID {
@@ -596,11 +603,13 @@ func (detail *resultReviewDetail) placeReport(report resultReviewReport) {
 	side.Initial = &view
 }
 
-// queryReporterActiveStrikes counts the active strikes of everyone who
-// reported on the match, including reporters with none.
+// queryReporterActiveStrikes counts the active strikes of everyone who took
+// part in the result (submitted it, rejected it or sent a screenshot),
+// including players with none.
 func queryReporterActiveStrikes(ctx context.Context, queryer rowsQueryer, matchID string) (map[string]int, error) {
 	rows, err := queryer.Query(ctx, `SELECT reporter.user_id::text,count(strike.id)::integer
-		FROM (SELECT DISTINCT reported_by AS user_id FROM match_result_reports WHERE match_id=$1) reporter
+		FROM (SELECT reported_by AS user_id FROM match_result_reports WHERE match_id=$1
+			UNION SELECT rejected_by FROM match_result_verifications WHERE match_id=$1 AND rejected_by IS NOT NULL) reporter
 		LEFT JOIN player_strikes strike ON strike.user_id=reporter.user_id AND strike.revoked_at IS NULL
 		GROUP BY reporter.user_id ORDER BY reporter.user_id`, matchID)
 	if err != nil {

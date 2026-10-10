@@ -27,8 +27,8 @@ func TestResultVerificationSelectorsAreBoundedAndLockFree(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		"v.reminder_sent_at IS NULL\n\t\t  AND v.reminder_at<=now() AND v.report_deadline_at>now()",
-		"WHERE v.phase='awaiting_second_report' AND v.report_deadline_at<=now()",
-		"WHERE v.phase='awaiting_responses' AND v.response_deadline_at<=now()",
+		"WHERE v.phase='awaiting_confirmation' AND v.report_deadline_at<=now()",
+		"WHERE v.phase='awaiting_screenshots' AND v.response_deadline_at<=now()",
 		"WHERE m.state='in_progress' AND m.result_due_at IS NOT NULL AND m.result_due_at<=now()",
 		"ORDER BY m.result_due_at,m.id LIMIT $1",
 	} {

@@ -119,7 +119,7 @@ func invalidReviewDecision(message string) *planRejection {
 
 func invalidStrikeUser() *planRejection {
 	return &planRejection{Status: http.StatusBadRequest, Code: "invalid_strike_user",
-		Message: "Strikes can only be recorded against up to two reporters whose claims this decision rejects."}
+		Message: "Strikes can only be recorded against a player this decision proves wrong."}
 }
 
 // lockedReview is the match_result_reviews row taken FOR UPDATE.
@@ -149,9 +149,9 @@ func (rejection *reviewDecisionRejection) Error() string {
 }
 
 // planReviewDecision turns a Gamics decision into the match's terminal
-// outcome and the strikes to record. Only reporters of a current claim that
-// the decision rejects can be struck: never the accepted side, and never an
-// initial-only reporter whose entry's final report replaced that claim.
+// outcome and the strikes to record. Only the side the decision proves wrong
+// can be struck: the rejecter when the submitted result stands, the submitter
+// when the score is corrected away from it, and either for remove_both.
 func planReviewDecision(s verificationState, review lockedReview, actor reviewActor,
 	input reviewDecisionInput) (matchResolution, []string, *planRejection) {
 	invariant := func(cause error) *planRejection {
@@ -174,19 +174,25 @@ func planReviewDecision(s verificationState, review lockedReview, actor reviewAc
 		return matchResolution{}, nil, &planRejection{Status: http.StatusBadRequest, Code: "invalid_strike_user",
 			Message: "An automated decision cannot record strikes."}
 	}
-	home, away := currentClaims(s)
-	if err := reviewStateError(s, review, home, away); err != nil {
+	submitted := s.submittedReport()
+	if err := reviewStateError(s, review, submitted); err != nil {
 		return matchResolution{}, nil, invariant(err)
 	}
+	submitter, rejecter := submitted.ReportedBy, *s.Verification.RejectedBy
+	submittedSide := "away"
+	if sameOptionalString(&submitted.EntryID, s.Match.HomeEntryID) {
+		submittedSide = "home"
+	}
 	var resolution matchResolution
-	var rejected []verificationReport
+	var wrong []string
 	switch input.Decision {
-	case "accept_home":
-		resolution = s.reviewedResult(home.Claim, home.ReportedBy, actor)
-		rejected = claimsRejectedBy(home.Claim, *away)
-	case "accept_away":
-		resolution = s.reviewedResult(away.Claim, away.ReportedBy, actor)
-		rejected = claimsRejectedBy(away.Claim, *home)
+	case "accept_home", "accept_away":
+		if input.Decision != "accept_"+submittedSide {
+			return matchResolution{}, nil, invalidReviewDecision(
+				"Only the submitted result can be accepted. Enter a corrected score instead.")
+		}
+		resolution = s.reviewedResult(submitted.Claim, submitter, actor)
+		wrong = []string{rejecter}
 	case "corrected_score":
 		if input.CorrectedScore == nil {
 			return matchResolution{}, nil, invalidReviewDecision("A corrected score is required for corrected_score.")
@@ -196,16 +202,19 @@ func planReviewDecision(s verificationState, review lockedReview, actor reviewAc
 			return matchResolution{}, nil, &planRejection{Status: http.StatusBadRequest, Code: "invalid_score", Message: message}
 		}
 		resolution = s.reviewedResult(claim, *actor.UserID, actor)
-		rejected = claimsRejectedBy(claim, *home, *away)
+		wrong = []string{submitter}
+		if claim.equal(submitted.Claim) {
+			wrong = []string{rejecter}
+		}
 	case "remove_both":
 		resolution = s.reviewRemoval()
-		rejected = []verificationReport{*home, *away}
+		wrong = []string{submitter, rejecter}
 	default:
 		return matchResolution{}, nil, invalidReviewDecision("Choose accept_home, accept_away, corrected_score or remove_both.")
 	}
 	strikes := slices.Clone(input.StrikeUserIDs)
 	for _, userID := range strikes {
-		if !slices.ContainsFunc(rejected, func(report verificationReport) bool { return report.ReportedBy == userID }) {
+		if !slices.Contains(wrong, userID) {
 			return matchResolution{}, nil, invalidStrikeUser()
 		}
 	}
@@ -214,28 +223,18 @@ func planReviewDecision(s verificationState, review lockedReview, actor reviewAc
 }
 
 // reviewStateError is the review planner's invariant: the locked state is
-// consistent and is the review's disputed match, in review with two claims.
-func reviewStateError(s verificationState, review lockedReview, home, away *verificationReport) error {
+// consistent and is the review's disputed match, in review with a submitted
+// and rejected result.
+func reviewStateError(s verificationState, review lockedReview, submitted *verificationReport) error {
 	if err := s.consistencyError(); err != nil {
 		return err
 	}
 	if review.MatchID != s.Match.ID || s.Match.State != "disputed" || s.Verification == nil ||
-		s.Verification.Phase != "in_review" || home == nil || away == nil {
-		return fmt.Errorf("%w: the review's match is not disputed and in review with two claims",
+		s.Verification.Phase != "in_review" || submitted == nil || s.Verification.RejectedBy == nil {
+		return fmt.Errorf("%w: the review's match is not disputed and in review with a rejected result",
 			errResultVerificationInvariant)
 	}
 	return nil
-}
-
-// claimsRejectedBy returns the current claims that differ from the decided one.
-func claimsRejectedBy(decided scoreClaim, claims ...verificationReport) []verificationReport {
-	rejected := make([]verificationReport, 0, len(claims))
-	for _, claim := range claims {
-		if !claim.Claim.equal(decided) {
-			rejected = append(rejected, claim)
-		}
-	}
-	return rejected
 }
 
 // reviewedResult confirms the decided score (T13). The accepted claim's

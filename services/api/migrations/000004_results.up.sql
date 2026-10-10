@@ -135,7 +135,7 @@ CREATE TABLE result_submissions (
     CONSTRAINT result_submissions_home_score_check CHECK ((home_score >= 0)),
     CONSTRAINT result_submissions_match_version_positive_chk CHECK ((match_version > 0)),
     CONSTRAINT result_submissions_not_self_superseding_chk CHECK (((supersedes_id IS NULL) OR (supersedes_id <> id))),
-    CONSTRAINT result_submissions_origin_chk CHECK ((origin = ANY (ARRAY['legacy'::text, 'agreed_reports'::text, 'platform_review'::text]))),
+    CONSTRAINT result_submissions_origin_chk CHECK ((origin = ANY (ARRAY['legacy'::text, 'agreed_reports'::text, 'unanswered'::text, 'platform_review'::text]))),
     CONSTRAINT result_submissions_score_upper_bound_chk CHECK (((home_score <= 99) AND (away_score <= 99))),
     CONSTRAINT result_submissions_status_check CHECK ((status = ANY (ARRAY['pending_confirmation'::text, 'confirmed'::text, 'disputed'::text, 'rejected'::text, 'superseded'::text]))),
     CONSTRAINT result_submissions_tiebreak_chk CHECK ((((tiebreak_type IS NULL) AND (home_tiebreak_score IS NULL) AND (away_tiebreak_score IS NULL)) OR ((tiebreak_type = 'penalties'::text) AND (home_score = away_score) AND (home_tiebreak_score IS NOT NULL) AND (away_tiebreak_score IS NOT NULL) AND ((home_tiebreak_score >= 0) AND (home_tiebreak_score <= 99)) AND ((away_tiebreak_score >= 0) AND (away_tiebreak_score <= 99)) AND (home_tiebreak_score <> away_tiebreak_score))))
@@ -163,29 +163,30 @@ CREATE TABLE match_result_verifications (
     reminder_sent_at timestamp with time zone,
     mismatch_at timestamp with time zone,
     response_deadline_at timestamp with time zone,
+    rejected_by uuid,
     resolution text,
     resolved_at timestamp with time zone,
     canonical_submission_id uuid,
     version integer DEFAULT 1 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT match_result_verifications_mismatch_pair_chk CHECK ((((mismatch_at IS NULL) = (response_deadline_at IS NULL)) AND ((response_deadline_at IS NULL) OR (response_deadline_at > mismatch_at)))),
-    CONSTRAINT match_result_verifications_phase_check CHECK ((phase = ANY (ARRAY['awaiting_second_report'::text, 'awaiting_responses'::text, 'in_review'::text, 'resolved'::text]))),
-    CONSTRAINT match_result_verifications_phase_chk CHECK ((((phase = 'awaiting_second_report'::text) AND (mismatch_at IS NULL) AND (resolution IS NULL)) OR ((phase = ANY (ARRAY['awaiting_responses'::text, 'in_review'::text])) AND (mismatch_at IS NOT NULL) AND (resolution IS NULL)) OR ((phase = 'resolved'::text) AND (resolution IS NOT NULL)))),
+    CONSTRAINT match_result_verifications_mismatch_pair_chk CHECK ((((mismatch_at IS NULL) = (response_deadline_at IS NULL)) AND ((mismatch_at IS NULL) = (rejected_by IS NULL)) AND ((response_deadline_at IS NULL) OR (response_deadline_at > mismatch_at)))),
+    CONSTRAINT match_result_verifications_phase_check CHECK ((phase = ANY (ARRAY['awaiting_confirmation'::text, 'awaiting_screenshots'::text, 'in_review'::text, 'resolved'::text]))),
+    CONSTRAINT match_result_verifications_phase_chk CHECK ((((phase = 'awaiting_confirmation'::text) AND (mismatch_at IS NULL) AND (resolution IS NULL)) OR ((phase = ANY (ARRAY['awaiting_screenshots'::text, 'in_review'::text])) AND (mismatch_at IS NOT NULL) AND (resolution IS NULL)) OR ((phase = 'resolved'::text) AND (resolution IS NOT NULL)))),
     CONSTRAINT match_result_verifications_reminder_lead_chk CHECK ((reminder_lead_seconds <= (report_window_seconds - 60))),
     CONSTRAINT match_result_verifications_reminder_lead_seconds_check CHECK ((reminder_lead_seconds >= 60)),
     CONSTRAINT match_result_verifications_report_window_chk CHECK (((first_reported_at < reminder_at) AND (reminder_at < report_deadline_at))),
     CONSTRAINT match_result_verifications_report_window_seconds_check CHECK (((report_window_seconds >= 300) AND (report_window_seconds <= 3600))),
-    CONSTRAINT match_result_verifications_resolution_check CHECK ((resolution = ANY (ARRAY['agreed'::text, 'report_timeout'::text, 'response_timeout'::text, 'platform_review'::text, 'competition_cancelled'::text]))),
+    CONSTRAINT match_result_verifications_resolution_check CHECK ((resolution = ANY (ARRAY['agreed'::text, 'confirmation_timeout'::text, 'response_timeout'::text, 'platform_review'::text, 'competition_cancelled'::text]))),
     CONSTRAINT match_result_verifications_resolved_at_chk CHECK (((resolution IS NULL) = (resolved_at IS NULL))),
     CONSTRAINT match_result_verifications_response_window_seconds_check CHECK (((response_window_seconds >= 300) AND (response_window_seconds <= 3600))),
     CONSTRAINT match_result_verifications_version_check CHECK ((version > 0))
 );
 ALTER TABLE ONLY match_result_verifications
     ADD CONSTRAINT match_result_verifications_pkey PRIMARY KEY (match_id);
-CREATE INDEX match_result_verifications_reminder_idx ON match_result_verifications USING btree (reminder_at, match_id) WHERE ((phase = 'awaiting_second_report'::text) AND (reminder_sent_at IS NULL));
-CREATE INDEX match_result_verifications_report_deadline_idx ON match_result_verifications USING btree (report_deadline_at, match_id) WHERE (phase = 'awaiting_second_report'::text);
-CREATE INDEX match_result_verifications_response_deadline_idx ON match_result_verifications USING btree (response_deadline_at, match_id) WHERE (phase = 'awaiting_responses'::text);
+CREATE INDEX match_result_verifications_reminder_idx ON match_result_verifications USING btree (reminder_at, match_id) WHERE ((phase = 'awaiting_confirmation'::text) AND (reminder_sent_at IS NULL));
+CREATE INDEX match_result_verifications_report_deadline_idx ON match_result_verifications USING btree (report_deadline_at, match_id) WHERE (phase = 'awaiting_confirmation'::text);
+CREATE INDEX match_result_verifications_response_deadline_idx ON match_result_verifications USING btree (response_deadline_at, match_id) WHERE (phase = 'awaiting_screenshots'::text);
 
 -- match_result_reports
 
@@ -196,14 +197,15 @@ CREATE TABLE match_result_reports (
     entry_id uuid NOT NULL,
     reported_by uuid NOT NULL,
     kind text NOT NULL,
-    home_score integer NOT NULL,
-    away_score integer NOT NULL,
+    home_score integer,
+    away_score integer,
     tiebreak_type text,
     home_tiebreak_score integer,
     away_tiebreak_score integer,
-    game_results jsonb NOT NULL,
+    game_results jsonb,
     match_version integer NOT NULL,
     reported_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT match_result_reports_kind_claim_chk CHECK ((((kind = 'initial'::text) AND (home_score IS NOT NULL) AND (away_score IS NOT NULL) AND (game_results IS NOT NULL)) OR ((kind = 'final'::text) AND (home_score IS NULL) AND (away_score IS NULL) AND (tiebreak_type IS NULL) AND (game_results IS NULL)))),
     CONSTRAINT match_result_reports_away_score_check CHECK (((away_score >= 0) AND (away_score <= 99))),
     CONSTRAINT match_result_reports_games_array_chk CHECK (((jsonb_typeof(game_results) = 'array'::text) AND ((jsonb_array_length(game_results) >= 1) AND (jsonb_array_length(game_results) <= 99)))),
     CONSTRAINT match_result_reports_home_score_check CHECK (((home_score >= 0) AND (home_score <= 99))),
@@ -222,7 +224,7 @@ CREATE TABLE match_result_report_evidence (
     report_id uuid NOT NULL,
     evidence_id uuid NOT NULL,
     "position" smallint NOT NULL,
-    CONSTRAINT match_result_report_evidence_position_check CHECK ((("position" >= 0) AND ("position" <= 2)))
+    CONSTRAINT match_result_report_evidence_position_check CHECK (("position" = 0))
 );
 ALTER TABLE ONLY match_result_report_evidence
     ADD CONSTRAINT match_result_report_evidence_evidence_id_key UNIQUE (evidence_id);
@@ -469,6 +471,8 @@ ALTER TABLE ONLY match_result_verifications
     ADD CONSTRAINT match_result_verifications_canonical_submission_id_match_i_fkey FOREIGN KEY (canonical_submission_id, match_id) REFERENCES result_submissions(id, match_id);
 ALTER TABLE ONLY match_result_verifications
     ADD CONSTRAINT match_result_verifications_first_report_entry_id_competiti_fkey FOREIGN KEY (first_report_entry_id, competition_id) REFERENCES competition_entries(id, competition_id);
+ALTER TABLE ONLY match_result_verifications
+    ADD CONSTRAINT match_result_verifications_rejected_by_fkey FOREIGN KEY (rejected_by) REFERENCES users(id);
 ALTER TABLE ONLY match_result_verifications
     ADD CONSTRAINT match_result_verifications_match_id_competition_id_fkey FOREIGN KEY (match_id, competition_id) REFERENCES matches(id, competition_id) ON DELETE CASCADE;
 ALTER TABLE ONLY player_strikes

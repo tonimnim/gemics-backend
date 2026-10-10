@@ -76,39 +76,46 @@ type matchVerificationPolicyResponse struct {
 	ReportWindowSeconds           int64 `json:"reportWindowSeconds"`
 	ReminderBeforeDeadlineSeconds int64 `json:"reminderBeforeDeadlineSeconds"`
 	ResponseWindowSeconds         int64 `json:"responseWindowSeconds"`
-	FinalReportEvidence           struct {
+	ScreenshotEvidence            struct {
 		MinItems   int      `json:"minItems"`
 		MaxItems   int      `json:"maxItems"`
 		MediaTypes []string `json:"mediaTypes"`
-	} `json:"finalReportEvidence"`
+	} `json:"screenshotEvidence"`
 }
 
-// scoreReportView is one of the viewer's own reports. The room never carries a
-// view of the other entry's report (R2).
-type scoreReportView struct {
-	ID          string              `json:"id"`
-	Kind        string              `json:"kind"`
-	HomeScore   int                 `json:"homeScore"`
-	AwayScore   int                 `json:"awayScore"`
-	Tiebreak    *tiebreakScoreInput `json:"tiebreak"`
-	Games       []gameScoreInput    `json:"games"`
-	EvidenceIDs []string            `json:"evidenceIds,omitempty"`
-	ReportedAt  time.Time           `json:"reportedAt"`
+// submittedResultView is the result one entry submitted. Both entries see it:
+// the other entry confirms or rejects it.
+type submittedResultView struct {
+	ID            string              `json:"id"`
+	Side          string              `json:"side"`
+	SubmittedByMe bool                `json:"submittedByMe"`
+	HomeScore     int                 `json:"homeScore"`
+	AwayScore     int                 `json:"awayScore"`
+	Tiebreak      *tiebreakScoreInput `json:"tiebreak"`
+	Games         []gameScoreInput    `json:"games"`
+	SubmittedAt   time.Time           `json:"submittedAt"`
 }
 
-// matchResultVerificationResponse is the viewer's blind view of the result
-// verification. About the other entry it says only whether it reported or
-// responded.
+// screenshotView is the viewer's own screenshot after a rejection. The room
+// never carries the other entry's screenshot, only whether it sent one.
+type screenshotView struct {
+	ID          string    `json:"id"`
+	EvidenceID  string    `json:"evidenceId"`
+	SubmittedAt time.Time `json:"submittedAt"`
+}
+
+// matchResultVerificationResponse is the viewer's view of the result: the
+// submitted result, the viewer's screenshot after a rejection, and the
+// deadline of the current step.
 type matchResultVerificationResponse struct {
-	Phase             string           `json:"phase"`
-	MyReport          *scoreReportView `json:"myReport"`
-	MyFinalReport     *scoreReportView `json:"myFinalReport"`
-	OpponentReported  bool             `json:"opponentReported"`
-	OpponentResponded bool             `json:"opponentResponded"`
-	ReportDeadline    *time.Time       `json:"reportDeadline"`
-	ResponseDeadline  *time.Time       `json:"responseDeadline"`
-	Resolution        *string          `json:"resolution"`
-	EntryRemoved      bool             `json:"entryRemoved"`
+	Phase                       string               `json:"phase"`
+	SubmittedResult             *submittedResultView `json:"submittedResult"`
+	MyScreenshot                *screenshotView      `json:"myScreenshot"`
+	OpponentScreenshotSubmitted bool                 `json:"opponentScreenshotSubmitted"`
+	ConfirmationDeadline        *time.Time           `json:"confirmationDeadline"`
+	ScreenshotDeadline          *time.Time           `json:"screenshotDeadline"`
+	Resolution                  *string              `json:"resolution"`
+	EntryRemoved                bool                 `json:"entryRemoved"`
 }
 
 // matchRemovalView is an entry this match removed from the tournament. A
@@ -237,10 +244,9 @@ type matchRecord struct {
 	ReportDeadlineAt       *time.Time
 	ResponseDeadlineAt     *time.Time
 	VerificationResolution *string
-	MyInitialReport        *scoreReportView
-	MyFinalReport          *scoreReportView
-	OpponentReported       bool
-	OpponentResponded      bool
+	SubmittedResult        *submittedResultView
+	MyScreenshot           *screenshotView
+	OpponentScreenshot     bool
 	ConfirmedResult        *matchConfirmedResultResponse
 	Removals               []matchRemovalView
 }
@@ -287,7 +293,7 @@ const matchSelectColumns = `
 		COALESCE(away_player.has_avatar,false),away_player.in_game_name,away_player.platform,away_player.publisher_player_id,
 		verification.phase,verification.report_window_seconds,verification.reminder_lead_seconds,
 		verification.response_window_seconds,verification.report_deadline_at,verification.response_deadline_at,
-		verification.resolution,my_reports.reports,opponent.reported,opponent.responded,confirmed.result,
+		verification.resolution,submitted.result,my_screenshot.screenshot,opponent.screenshot,confirmed.result,
 		removed.removals
 	FROM matches m
 	JOIN competitions c ON c.id=m.competition_id
@@ -337,21 +343,27 @@ const matchSelectColumns = `
 	LEFT JOIN match_check_ins away_checkin ON away_checkin.match_id=m.id AND away_checkin.entry_id=m.away_entry_id
 	LEFT JOIN match_result_verifications verification ON verification.match_id=m.id
 	LEFT JOIN LATERAL (
-		SELECT json_object_agg(report.kind,json_build_object(
-			'id',report.id,'kind',report.kind,'homeScore',report.home_score,'awayScore',report.away_score,
+		SELECT json_build_object('id',report.id,'entryId',report.entry_id,
+			'homeScore',report.home_score,'awayScore',report.away_score,
 			'tiebreak',CASE WHEN report.tiebreak_type IS NULL THEN NULL ELSE json_build_object(
 				'type',report.tiebreak_type,'homeScore',report.home_tiebreak_score,
 				'awayScore',report.away_tiebreak_score) END,
-			'games',report.game_results,'reportedAt',report.reported_at,
-			'evidenceIds',(SELECT COALESCE(json_agg(evidence.evidence_id::text ORDER BY evidence.position),'[]'::json)
-				FROM match_result_report_evidence evidence WHERE evidence.report_id=report.id))) AS reports
+			'games',report.game_results,'submittedAt',report.reported_at) AS result
 		FROM match_result_reports report
-		WHERE report.match_id=m.id AND report.entry_id=mine.entry_id
-	) my_reports ON true
+		WHERE report.match_id=m.id AND report.kind='initial'
+		LIMIT 1
+	) submitted ON true
 	LEFT JOIN LATERAL (
-		SELECT COALESCE(bool_or(other.kind='initial'),false) AS reported,
-			COALESCE(bool_or(other.kind='final'),false) AS responded
-		FROM match_result_reports other WHERE other.match_id=m.id AND other.entry_id<>mine.entry_id
+		SELECT json_build_object('id',report.id,'evidenceId',evidence.evidence_id,
+			'submittedAt',report.reported_at) AS screenshot
+		FROM match_result_reports report
+		JOIN match_result_report_evidence evidence ON evidence.report_id=report.id
+		WHERE report.match_id=m.id AND report.kind='final' AND report.entry_id=mine.entry_id
+		LIMIT 1
+	) my_screenshot ON true
+	LEFT JOIN LATERAL (
+		SELECT EXISTS (SELECT 1 FROM match_result_reports other
+			WHERE other.match_id=m.id AND other.kind='final' AND other.entry_id<>mine.entry_id) AS screenshot
 	) opponent ON true
 	LEFT JOIN LATERAL (
 		SELECT json_build_object('homeScore',submission.home_score,'awayScore',submission.away_score,
@@ -671,7 +683,7 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 	records := make([]matchRecord, 0)
 	for rows.Next() {
 		var record matchRecord
-		var reports, confirmed, removals []byte
+		var submitted, screenshot, confirmed, removals []byte
 		if err := rows.Scan(
 			&record.ID, &record.CompetitionID, &record.CompetitionName, &record.GameID, &record.GameName,
 			&record.StageID, &record.StageName, &record.StageFormat, &record.BestOf, &record.StageConfig, &record.RulesSnapshot,
@@ -687,12 +699,12 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 			&record.AwayIdentity.PublisherPlayerID,
 			&record.VerificationPhase, &record.ReportWindowSeconds, &record.ReminderLeadSeconds,
 			&record.ResponseWindowSeconds, &record.ReportDeadlineAt, &record.ResponseDeadlineAt,
-			&record.VerificationResolution, &reports, &record.OpponentReported, &record.OpponentResponded, &confirmed,
+			&record.VerificationResolution, &submitted, &screenshot, &record.OpponentScreenshot, &confirmed,
 			&removals,
 		); err != nil {
 			return nil, err
 		}
-		if err := record.decodeResultViews(reports, confirmed); err != nil {
+		if err := record.decodeResultViews(submitted, screenshot, confirmed); err != nil {
 			return nil, err
 		}
 		if err := record.decodeRemovals(removals); err != nil {
@@ -703,23 +715,33 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 	return records, rows.Err()
 }
 
-// decodeResultViews reads the viewer's own reports and the confirmed result,
-// which the room query builds as JSON.
-func (record *matchRecord) decodeResultViews(reports, confirmed []byte) error {
-	if len(reports) > 0 {
-		var own struct {
-			Initial *scoreReportView `json:"initial"`
-			Final   *scoreReportView `json:"final"`
+// decodeResultViews reads the submitted result, the viewer's screenshot and
+// the confirmed result, which the room query builds as JSON.
+func (record *matchRecord) decodeResultViews(submitted, screenshot, confirmed []byte) error {
+	if len(submitted) > 0 {
+		var view struct {
+			submittedResultView
+			EntryID string `json:"entryId"`
 		}
-		if err := json.Unmarshal(reports, &own); err != nil {
+		if err := json.Unmarshal(submitted, &view); err != nil {
 			return err
 		}
-		for _, report := range []*scoreReportView{own.Initial, own.Final} {
-			if report != nil {
-				report.ReportedAt = report.ReportedAt.UTC()
-			}
+		result := view.submittedResultView
+		result.SubmittedAt = result.SubmittedAt.UTC()
+		result.Side = "away"
+		if sameOptionalString(&view.EntryID, record.HomeEntryID) {
+			result.Side = "home"
 		}
-		record.MyInitialReport, record.MyFinalReport = own.Initial, own.Final
+		result.SubmittedByMe = view.EntryID == record.CurrentEntryID
+		record.SubmittedResult = &result
+	}
+	if len(screenshot) > 0 {
+		var view screenshotView
+		if err := json.Unmarshal(screenshot, &view); err != nil {
+			return err
+		}
+		view.SubmittedAt = view.SubmittedAt.UTC()
+		record.MyScreenshot = &view
 	}
 	if len(confirmed) > 0 {
 		var result matchConfirmedResultResponse
@@ -799,24 +821,23 @@ func (record matchRecord) verificationSettings(resolved matchVerificationSetting
 	}
 }
 
-// resultVerification is the viewer's blind view. Each deadline is shown only
-// in the phase it governs. entryRemoved is scoped to this match: an entry
-// removed by a later match keeps false on the matches it played before.
+// resultVerification is the viewer's view of the result. Each deadline is
+// shown only in the step it governs. entryRemoved is scoped to this match: an
+// entry removed by a later match keeps false on the matches it played before.
 func (record matchRecord) resultVerification() matchResultVerificationResponse {
 	view := matchResultVerificationResponse{
-		Phase: "not_started", MyReport: record.MyInitialReport, MyFinalReport: record.MyFinalReport,
-		OpponentReported: record.OpponentReported, OpponentResponded: record.OpponentResponded,
-		Resolution:   record.VerificationResolution,
+		Phase: "not_started", SubmittedResult: record.SubmittedResult, MyScreenshot: record.MyScreenshot,
+		OpponentScreenshotSubmitted: record.OpponentScreenshot, Resolution: record.VerificationResolution,
 		EntryRemoved: record.removedHere(record.CurrentEntryID),
 	}
 	if record.VerificationPhase != nil {
 		view.Phase = *record.VerificationPhase
 	}
 	switch view.Phase {
-	case "awaiting_second_report":
-		view.ReportDeadline = utcTime(record.ReportDeadlineAt)
-	case "awaiting_responses":
-		view.ResponseDeadline = utcTime(record.ResponseDeadlineAt)
+	case "awaiting_confirmation":
+		view.ConfirmationDeadline = utcTime(record.ReportDeadlineAt)
+	case "awaiting_screenshots":
+		view.ScreenshotDeadline = utcTime(record.ResponseDeadlineAt)
 	}
 	return view
 }
@@ -924,28 +945,28 @@ func (record matchRecord) presentation(now time.Time, opensAt, closesAt *time.Ti
 		switch {
 		case !deadlineOpen(record.ResultDueAt, now, true):
 			return "awaiting_resolution", actions
-		case record.HomeCheckedInAt != nil && record.AwayCheckedInAt != nil && record.MyInitialReport == nil:
+		case record.HomeCheckedInAt != nil && record.AwayCheckedInAt != nil:
 			return "report_required", append(actions, "report_score")
 		default:
 			return "checked_in", actions
 		}
 	case "awaiting_confirmation":
 		switch {
-		case record.MyInitialReport != nil:
-			return "awaiting_opponent_report", actions
+		case record.SubmittedResult != nil && record.SubmittedResult.SubmittedByMe:
+			return "awaiting_opponent_confirmation", actions
 		case deadlineOpen(record.ReportDeadlineAt, now, false):
-			return "report_required", append(actions, "report_score")
+			return "confirmation_required", append(actions, "confirm_result", "reject_result")
 		default:
 			return "awaiting_resolution", actions
 		}
 	case "disputed":
 		switch {
-		case record.VerificationPhase == nil || *record.VerificationPhase != "awaiting_responses":
+		case record.VerificationPhase == nil || *record.VerificationPhase != "awaiting_screenshots":
 			return "under_review", actions
-		case record.MyFinalReport != nil:
-			return "awaiting_opponent_response", actions
+		case record.MyScreenshot != nil:
+			return "awaiting_opponent_screenshot", actions
 		case deadlineOpen(record.ResponseDeadlineAt, now, false):
-			return "mismatch_response_required", append(actions, "submit_final_score")
+			return "screenshot_required", append(actions, "submit_screenshot")
 		default:
 			return "awaiting_resolution", actions
 		}

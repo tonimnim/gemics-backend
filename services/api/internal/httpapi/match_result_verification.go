@@ -15,9 +15,8 @@ import (
 // sequence of writes produces. Callers roll back instead of guessing.
 var errResultVerificationInvariant = errors.New("result verification state is inconsistent")
 
-// scoreReportInput is one blind score claim. games is optional: without it the
-// server derives one aggregate game, so honest players never mismatch on how
-// they broke the score down (D6).
+// scoreReportInput is a submitted result. games is optional: without it the
+// server derives one aggregate game (D6).
 type scoreReportInput struct {
 	HomeScore           int                 `json:"homeScore"`
 	AwayScore           int                 `json:"awayScore"`
@@ -26,8 +25,8 @@ type scoreReportInput struct {
 	DeclarationAccepted bool                `json:"declarationAccepted"`
 }
 
-// scoreClaim is a validated claim. Claims agree on totals and tiebreak only;
-// the games breakdown never decides agreement (D6).
+// scoreClaim is a validated result. Two results are equal on totals and
+// tiebreak only; the games breakdown never decides equality (D6).
 type scoreClaim struct {
 	HomeScore, AwayScore int
 	Tiebreak             *tiebreakScoreInput
@@ -85,15 +84,6 @@ func (claim scoreClaim) tiebreakColumns() (*string, *int, *int) {
 	return &tiebreak.Type, &tiebreak.HomeScore, &tiebreak.AwayScore
 }
 
-// agreedGames is the canonical breakdown of an agreement: the shared games when
-// both sides sent identical ones, otherwise one aggregate game.
-func agreedGames(home, away scoreClaim) []gameScoreInput {
-	if len(home.Games) > 0 && slices.Equal(home.Games, away.Games) {
-		return slices.Clone(home.Games)
-	}
-	return []gameScoreInput{{HomeScore: home.HomeScore, AwayScore: home.AwayScore}}
-}
-
 type verificationReport struct {
 	ID, EntryID, ReportedBy, Kind string
 	Claim                         scoreClaim
@@ -107,12 +97,13 @@ type lockedVerification struct {
 	Phase, FirstReportEntryID                      string
 	ReportDeadlineAt, ReminderAt                   time.Time
 	ReminderSentAt, MismatchAt, ResponseDeadlineAt *time.Time
+	RejectedBy                                     *string
 	ResponseWindow                                 time.Duration
 	Version                                        int
 }
 
-// blockedEvidence is an upload by a non-responding entry that may still be
-// stuck in Gamics' own screenshot pipeline (T16).
+// blockedEvidence is an upload by an entry that sent no screenshot and may
+// still be stuck in Gamics' own screenshot pipeline (T16).
 type blockedEvidence struct {
 	EvidenceID, EntryID, UploadedBy, Status string
 	ProcessingErrorCode                     *string
@@ -125,12 +116,11 @@ type verificationState struct {
 	Match           lockedResultMatch
 	Verification    *lockedVerification
 	Reports         []verificationReport // sorted by entry_id, kind
-	BlockedEvidence []blockedEvidence    // loaded only while awaiting responses
+	BlockedEvidence []blockedEvidence    // loaded only while awaiting screenshots
 }
 
 // planRejection is a client-facing refusal. Its code and message depend only
-// on the caller's own entry and the shared deadlines, never on the other
-// entry's claim (R2).
+// on the caller's own entry, the submitted result and the shared deadlines.
 type planRejection struct {
 	Status        int
 	Code, Message string
@@ -143,12 +133,12 @@ type planRejection struct {
 type matchResolution struct {
 	FinalState       string // completed | forfeit | cancelled
 	WinnerEntryID    *string
-	CompletionReason string      // played | report_timeout | response_timeout | no_result_reported | platform_review
+	CompletionReason string      // played | response_timeout | no_result_reported | platform_review
 	Cause            string      // progressionCause*
 	Claim            *scoreClaim // non-nil iff completed
 	ClaimAuthorID    *string     // result_submissions.submitted_by
 	ConfirmerID      *string     // result_submissions.decided_by
-	Origin           string      // agreed_reports | platform_review
+	Origin           string      // agreed_reports | unanswered | platform_review
 	RemoveEntryIDs   []string    // sorted, distinct, subset of {home, away}, never the winner
 	RemovalReason    string
 	Resolution       string // verification resolution; "" when there is no row (R7)
@@ -175,18 +165,19 @@ func unknownPlanAction(action planAction) error {
 	return fmt.Errorf("%w: unknown plan action %q", errResultVerificationInvariant, action)
 }
 
-// reportPlan answers an initial report: "open" starts the report window (T2),
-// "finalize" confirms an agreement (T4) and "mismatch" opens the response
-// window (T5).
+// reportPlan answers a submitted result with "open", which starts the
+// confirmation window (T2), and the other entry's answer with "finalize", which
+// confirms the result (T4), or "mismatch", which opens the screenshot window
+// (T5).
 type reportPlan struct {
 	Action             planAction
 	Resolution         matchResolution
 	ResponseDeadlineAt time.Time
 }
 
-// responsePlan answers a final report: "finalize" confirms an agreement (T7),
-// "wait" keeps the response window open (T8) and "review" queues the match for
-// Gamics (T9).
+// responsePlan answers a screenshot: "wait" keeps the screenshot window open
+// for the other entry (T8) and "review" queues the match for Gamics once both
+// sent theirs (T9).
 type responsePlan struct {
 	Action     planAction
 	Resolution matchResolution
@@ -200,67 +191,84 @@ type deadlinePlan struct {
 	RemindEntryID string
 }
 
-// planScoreReport decides an entry's initial blind report. At the exact
-// deadline instant the report is rejected, matching the worker, which acts.
-func planScoreReport(s verificationState, entryID string, c scoreClaim) (reportPlan, *planRejection) {
+// planScoreReport decides a submitted result. Either entry submits it, once,
+// while the match is in progress; the other entry then confirms or rejects it.
+// At the exact resultDueAt instant it is refused, matching the worker, which
+// acts.
+func planScoreReport(s verificationState, entryID string) (reportPlan, *planRejection) {
 	if rejection := s.reportPreconditions(entryID); rejection != nil {
 		return reportPlan{}, rejection
 	}
-	if s.report(entryID, "initial") != nil {
-		return reportPlan{}, &planRejection{Status: http.StatusConflict, Code: "report_already_submitted",
-			Message: "Your side has already reported a score for this match."}
-	}
-	var deadline *time.Time
 	switch s.Match.State {
 	case "in_progress":
-		deadline = s.Match.ResultDueAt
 	case "awaiting_confirmation":
-		deadline = &s.Verification.ReportDeadlineAt
+		if s.Verification.FirstReportEntryID == entryID {
+			return reportPlan{}, &planRejection{Status: http.StatusConflict, Code: "result_already_submitted",
+				Message: "Your side has already submitted the result for this match."}
+		}
+		return reportPlan{}, &planRejection{Status: http.StatusConflict, Code: "result_awaiting_confirmation",
+			Message: "Your opponent has already submitted the result. Confirm or reject it."}
 	default:
 		return reportPlan{}, &planRejection{Status: http.StatusConflict, Code: "report_not_allowed",
-			Message: "This match is not accepting score reports."}
+			Message: "This match is not accepting results."}
 	}
-	if deadline != nil && !s.Match.DatabaseNow.Before(*deadline) {
+	if due := s.Match.ResultDueAt; due != nil && !s.Match.DatabaseNow.Before(*due) {
 		return reportPlan{}, &planRejection{Status: http.StatusConflict, Code: "report_window_closed",
-			Message: "The score report window for this match has closed."}
+			Message: "The time to submit a result for this match has passed."}
 	}
-	if s.Verification == nil {
-		return reportPlan{Action: planOpen}, nil
-	}
-	home, away := currentClaims(s.withReport(s.prospectiveReport(entryID, "initial", c)))
-	if home.Claim.equal(away.Claim) {
-		return reportPlan{Action: planFinalize, Resolution: s.agreement(*home, *away)}, nil
-	}
-	return reportPlan{Action: planMismatch, ResponseDeadlineAt: s.Match.DatabaseNow.Add(s.Verification.ResponseWindow)}, nil
+	return reportPlan{Action: planOpen}, nil
 }
 
-// planFinalReport decides an entry's one response to a mismatch. The claims
-// are re-compared after every response (R6).
-func planFinalReport(s verificationState, entryID string, c scoreClaim) (responsePlan, *planRejection) {
+// planConfirmation decides the other entry's answer to the submitted result:
+// confirming finalizes it (T4) and rejecting opens the screenshot window (T5).
+// At the exact deadline instant the answer is refused, matching the worker,
+// which then lets the submitted result stand.
+func planConfirmation(s verificationState, entryID string, confirm bool) (reportPlan, *planRejection) {
+	if rejection := s.reportPreconditions(entryID); rejection != nil {
+		return reportPlan{}, rejection
+	}
+	if s.Match.State != "awaiting_confirmation" {
+		return reportPlan{}, &planRejection{Status: http.StatusConflict, Code: "confirmation_not_allowed",
+			Message: "There is no submitted result to confirm or reject."}
+	}
+	v := s.Verification
+	if v.FirstReportEntryID == entryID {
+		return reportPlan{}, &planRejection{Status: http.StatusConflict, Code: "own_result",
+			Message: "Your opponent confirms or rejects the result you submitted."}
+	}
+	if !s.Match.DatabaseNow.Before(v.ReportDeadlineAt) {
+		return reportPlan{}, &planRejection{Status: http.StatusConflict, Code: "confirmation_window_closed",
+			Message: "The time to confirm or reject this result has passed."}
+	}
+	if confirm {
+		confirmer := s.Match.ActorUserID
+		return reportPlan{Action: planFinalize, Resolution: s.submittedResult(&confirmer)}, nil
+	}
+	return reportPlan{Action: planMismatch, ResponseDeadlineAt: s.Match.DatabaseNow.Add(v.ResponseWindow)}, nil
+}
+
+// planScreenshot decides an entry's one screenshot after a rejection (R6).
+// The match goes to Gamics once both entries sent theirs.
+func planScreenshot(s verificationState, entryID string) (responsePlan, *planRejection) {
 	if rejection := s.reportPreconditions(entryID); rejection != nil {
 		return responsePlan{}, rejection
 	}
 	if s.report(entryID, "final") != nil {
-		return responsePlan{}, &planRejection{Status: http.StatusConflict, Code: "response_already_submitted",
-			Message: "Your side has already submitted a final score for this match."}
+		return responsePlan{}, &planRejection{Status: http.StatusConflict, Code: "screenshot_already_submitted",
+			Message: "Your side has already sent its screenshot for this match."}
 	}
-	if s.Match.State != "disputed" || s.Verification.Phase != "awaiting_responses" {
-		return responsePlan{}, &planRejection{Status: http.StatusConflict, Code: "response_not_allowed",
-			Message: "This match is not accepting final scores."}
+	if s.Match.State != "disputed" || s.Verification.Phase != "awaiting_screenshots" {
+		return responsePlan{}, &planRejection{Status: http.StatusConflict, Code: "screenshot_not_allowed",
+			Message: "This match is not accepting screenshots."}
 	}
 	if !s.Match.DatabaseNow.Before(*s.Verification.ResponseDeadlineAt) {
-		return responsePlan{}, &planRejection{Status: http.StatusConflict, Code: "response_window_closed",
-			Message: "The final score window for this match has closed."}
+		return responsePlan{}, &planRejection{Status: http.StatusConflict, Code: "screenshot_window_closed",
+			Message: "The screenshot window for this match has closed."}
 	}
-	home, away := currentClaims(s.withReport(s.prospectiveReport(entryID, "final", c)))
-	switch {
-	case home.Claim.equal(away.Claim):
-		return responsePlan{Action: planFinalize, Resolution: s.agreement(*home, *away)}, nil
-	case home.Kind == "final" && away.Kind == "final":
+	if s.report(s.Match.opponentOf(entryID), "final") != nil {
 		return responsePlan{Action: planReview}, nil
-	default:
-		return responsePlan{Action: planWait}, nil
 	}
+	return responsePlan{Action: planWait}, nil
 }
 
 // planVerificationDeadline decides what the worker does for one locked match.
@@ -284,30 +292,19 @@ func planVerificationDeadline(s verificationState) (deadlinePlan, error) {
 	case "awaiting_confirmation":
 		return s.reportDeadlinePlan(), nil
 	case "disputed":
-		if s.Verification.Phase == "awaiting_responses" && !now.Before(*s.Verification.ResponseDeadlineAt) {
+		if s.Verification.Phase == "awaiting_screenshots" && !now.Before(*s.Verification.ResponseDeadlineAt) {
 			return s.responseDeadlinePlan()
 		}
 	}
 	return none, nil
 }
 
-// currentClaims returns each entry's current claim: its final report when it
-// has one, otherwise its initial report.
-func currentClaims(s verificationState) (home, away *verificationReport) {
-	if s.Match.HomeEntryID != nil {
-		home = s.currentClaim(*s.Match.HomeEntryID)
+// submittedReport is the submitted result: the match's one initial report.
+func (s verificationState) submittedReport() *verificationReport {
+	if s.Verification == nil {
+		return nil
 	}
-	if s.Match.AwayEntryID != nil {
-		away = s.currentClaim(*s.Match.AwayEntryID)
-	}
-	return home, away
-}
-
-func (s verificationState) currentClaim(entryID string) *verificationReport {
-	if final := s.report(entryID, "final"); final != nil {
-		return final
-	}
-	return s.report(entryID, "initial")
+	return s.report(s.Verification.FirstReportEntryID, "initial")
 }
 
 func (s verificationState) report(entryID, kind string) *verificationReport {
@@ -320,20 +317,7 @@ func (s verificationState) report(entryID, kind string) *verificationReport {
 	return nil
 }
 
-// prospectiveReport is the caller's report as it will be stored, so it can be
-// compared before it is written.
-func (s verificationState) prospectiveReport(entryID, kind string, claim scoreClaim) verificationReport {
-	return verificationReport{EntryID: entryID, ReportedBy: s.Match.ActorUserID, Kind: kind, Claim: claim,
-		ReportedAt: s.Match.DatabaseNow}
-}
-
-func (s verificationState) withReport(report verificationReport) verificationState {
-	next := s
-	next.Reports = append(slices.Clone(s.Reports), report)
-	return next
-}
-
-// reportPreconditions are shared by both report planners: the caller's entry
+// reportPreconditions are shared by the result planners: the caller's entry
 // must play the match, the competition must be open and the locked state must
 // be consistent.
 func (s verificationState) reportPreconditions(entryID string) *planRejection {
@@ -351,13 +335,15 @@ func (s verificationState) reportPreconditions(entryID string) *planRejection {
 	return nil
 }
 
-// agreement confirms the entries' current claims (T4, T7). The home claim's
-// reporter authors the canonical row and the away claim's reporter confirms it.
-func (s verificationState) agreement(home, away verificationReport) matchResolution {
-	claim := scoreClaim{HomeScore: home.Claim.HomeScore, AwayScore: home.Claim.AwayScore,
-		Games: agreedGames(home.Claim, away.Claim)}
-	if home.Claim.Tiebreak != nil {
-		tiebreak := *home.Claim.Tiebreak
+// submittedResult confirms the submitted result, by the other entry (T4) or,
+// when it didn't answer in time, by default (T6). The submitter authors the
+// canonical row; the confirmer is recorded when there is one.
+func (s verificationState) submittedResult(confirmerID *string) matchResolution {
+	submitted := s.submittedReport()
+	claim := scoreClaim{HomeScore: submitted.Claim.HomeScore, AwayScore: submitted.Claim.AwayScore,
+		Games: slices.Clone(submitted.Claim.Games)}
+	if submitted.Claim.Tiebreak != nil {
+		tiebreak := *submitted.Claim.Tiebreak
 		claim.Tiebreak = &tiebreak
 	}
 	var winner *string
@@ -367,12 +353,16 @@ func (s verificationState) agreement(home, away verificationReport) matchResolut
 	case awayWon:
 		winner = cloneOptionalString(s.Match.AwayEntryID)
 	}
-	author, confirmer := home.ReportedBy, away.ReportedBy
-	return matchResolution{
+	author := submitted.ReportedBy
+	resolution := matchResolution{
 		FinalState: "completed", WinnerEntryID: winner, CompletionReason: "played",
-		Cause: progressionCausePlayerConfirmation, Claim: &claim, ClaimAuthorID: &author, ConfirmerID: &confirmer,
+		Cause: progressionCausePlayerConfirmation, Claim: &claim, ClaimAuthorID: &author, ConfirmerID: confirmerID,
 		Origin: "agreed_reports", RemoveEntryIDs: []string{}, Resolution: "agreed", ApplyRatings: true,
 	}
+	if confirmerID == nil {
+		resolution.Origin, resolution.Resolution = "unanswered", "confirmation_timeout"
+	}
+	return resolution
 }
 
 // removal removes the silent entries from the tournament. Forfeits and
@@ -390,25 +380,23 @@ func (s verificationState) removal(finalState string, winnerEntryID *string, rea
 	}
 }
 
-// reportDeadlinePlan covers the report window: the reminder (T3) and the
-// silent entry's removal when the window ends (T6, R5).
+// reportDeadlinePlan covers the confirmation window: the reminder (T3) and,
+// when the other entry never answered, the submitted result standing (T6).
 func (s verificationState) reportDeadlinePlan() deadlinePlan {
 	v, now := s.Verification, s.Match.DatabaseNow
-	reporter := v.FirstReportEntryID
-	silent := s.Match.opponentOf(reporter)
 	switch {
 	case !now.Before(v.ReportDeadlineAt):
-		return deadlinePlan{Action: planFinalize, Resolution: s.removal("forfeit", &reporter, "report_timeout", silent)}
+		return deadlinePlan{Action: planFinalize, Resolution: s.submittedResult(nil)}
 	case v.ReminderSentAt == nil && !now.Before(v.ReminderAt):
-		return deadlinePlan{Action: planReminder, RemindEntryID: silent}
+		return deadlinePlan{Action: planReminder, RemindEntryID: s.Match.opponentOf(v.FirstReportEntryID)}
 	default:
 		return deadlinePlan{Action: planNone}
 	}
 }
 
-// responseDeadlinePlan settles an expired response window (R6). A
-// non-responder whose screenshot is stuck in Gamics' pipeline is never
-// removed; the match goes to the review queue instead (T16).
+// responseDeadlinePlan settles an expired screenshot window (R6). An entry
+// whose screenshot is stuck in Gamics' pipeline is never removed; the match
+// goes to the review queue instead (T16).
 func (s verificationState) responseDeadlinePlan() (deadlinePlan, error) {
 	var responders, silent []string
 	for _, entryID := range s.Match.entryIDs() {
@@ -430,11 +418,11 @@ func (s verificationState) responseDeadlinePlan() (deadlinePlan, error) {
 	case 0:
 		return deadlinePlan{Action: planFinalize, Resolution: s.removal("cancelled", nil, "response_timeout", silent...)}, nil
 	default:
-		return deadlinePlan{}, fmt.Errorf("%w: both entries responded while still awaiting responses", errResultVerificationInvariant)
+		return deadlinePlan{}, fmt.Errorf("%w: both entries sent screenshots while still awaiting them", errResultVerificationInvariant)
 	}
 }
 
-// evidenceBlocked reports whether an upload made during the response window is
+// evidenceBlocked reports whether an upload made during the screenshot window is
 // still processing or failed for a Gamics-side reason. Unfinished, rejected,
 // expired and missing uploads are the player's responsibility and never block.
 func (s verificationState) evidenceBlocked(entryID string) bool {
@@ -477,9 +465,9 @@ func (s verificationState) consistencyError() error {
 			return fmt.Errorf("%w: a match in progress already has reports", errResultVerificationInvariant)
 		}
 	case "awaiting_confirmation":
-		if v == nil || v.Phase != "awaiting_second_report" || len(s.Reports) != 1 ||
+		if v == nil || v.Phase != "awaiting_confirmation" || len(s.Reports) != 1 ||
 			s.report(v.FirstReportEntryID, "initial") == nil {
-			return fmt.Errorf("%w: awaiting a second report without exactly the first report", errResultVerificationInvariant)
+			return fmt.Errorf("%w: awaiting confirmation without exactly the submitted result", errResultVerificationInvariant)
 		}
 	case "disputed":
 		if err := s.disputeError(); err != nil {
@@ -496,26 +484,28 @@ func (s verificationState) consistencyError() error {
 
 func (s verificationState) disputeError() error {
 	v := s.Verification
-	if v == nil || (v.Phase != "awaiting_responses" && v.Phase != "in_review") || v.MismatchAt == nil || v.ResponseDeadlineAt == nil {
-		return fmt.Errorf("%w: a disputed match has no open mismatch", errResultVerificationInvariant)
+	if v == nil || (v.Phase != "awaiting_screenshots" && v.Phase != "in_review") || v.MismatchAt == nil ||
+		v.ResponseDeadlineAt == nil || v.RejectedBy == nil {
+		return fmt.Errorf("%w: a disputed match has no rejected result", errResultVerificationInvariant)
+	}
+	if s.submittedReport() == nil || s.report(s.Match.opponentOf(v.FirstReportEntryID), "initial") != nil {
+		return fmt.Errorf("%w: a disputed match needs exactly the submitted result", errResultVerificationInvariant)
 	}
 	finals := 0
 	for _, entryID := range s.Match.entryIDs() {
-		if s.report(entryID, "initial") == nil {
-			return fmt.Errorf("%w: a disputed match lacks an initial report", errResultVerificationInvariant)
-		}
 		if s.report(entryID, "final") != nil {
 			finals++
 		}
 	}
-	if v.Phase == "awaiting_responses" && finals > 1 {
-		return fmt.Errorf("%w: two final reports while awaiting responses", errResultVerificationInvariant)
+	if v.Phase == "awaiting_screenshots" && finals > 1 {
+		return fmt.Errorf("%w: two screenshots while awaiting screenshots", errResultVerificationInvariant)
 	}
 	return nil
 }
 
 // reportsError requires every report to belong to one of the match's entries,
-// at most one per entry and kind, and every final to follow an initial.
+// with at most one per entry and kind. Only the submitter has an initial
+// report; a screenshot ("final") carries no score.
 func (s verificationState) reportsError() error {
 	seen := make(map[string]bool, len(s.Reports))
 	for _, report := range s.Reports {
@@ -530,11 +520,6 @@ func (s verificationState) reportsError() error {
 			return fmt.Errorf("%w: duplicate report", errResultVerificationInvariant)
 		}
 		seen[key] = true
-	}
-	for _, report := range s.Reports {
-		if report.Kind == "final" && !seen[report.EntryID+"/initial"] {
-			return fmt.Errorf("%w: a final report without an initial report", errResultVerificationInvariant)
-		}
 	}
 	return nil
 }

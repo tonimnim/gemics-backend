@@ -76,19 +76,29 @@ func resultReportsStart(t *testing.T, pool *pgxpool.Pool, matchID string) result
 	return sides
 }
 
-func resultReportsBody(home, away int, evidenceIDs ...string) string {
-	body := fmt.Sprintf(`{"homeScore":%d,"awayScore":%d,"declarationAccepted":true`, home, away)
-	if len(evidenceIDs) > 0 {
-		encoded, _ := json.Marshal(evidenceIDs)
-		body += `,"evidenceIds":` + string(encoded)
-	}
-	return body + "}"
+func resultReportsBody(home, away int) string {
+	return fmt.Sprintf(`{"homeScore":%d,"awayScore":%d,"declarationAccepted":true}`, home, away)
 }
 
-func resultReportsPost(t *testing.T, server *Server, userID, matchID, key, body string, final bool) *httptest.ResponseRecorder {
+// resultReportsAnswer is the other entry's answer: confirm or reject.
+func resultReportsAnswer(decision string) string {
+	return `{"decision":"` + decision + `"}`
+}
+
+// resultReportsShot is an entry's one screenshot after a rejection.
+func resultReportsShot(evidenceID string) string {
+	return `{"evidenceId":"` + evidenceID + `"}`
+}
+
+// resultReportsPost posts a result action: "" submits the result,
+// "confirmation" answers it and "screenshot" sends a screenshot.
+func resultReportsPost(t *testing.T, server *Server, userID, matchID, key, body, action string) *httptest.ResponseRecorder {
 	path, handler := "/v1/matches/"+matchID+"/score-reports", server.createScoreReport
-	if final {
-		path, handler = path+"/final", server.createFinalScoreReport
+	switch action {
+	case "confirmation":
+		path, handler = path+"/confirmation", server.createResultConfirmation
+	case "screenshot":
+		path, handler = path+"/screenshot", server.createResultScreenshot
 	}
 	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	request.SetPathValue("matchId", matchID)
@@ -99,11 +109,11 @@ func resultReportsPost(t *testing.T, server *Server, userID, matchID, key, body 
 	return recorder
 }
 
-func resultReportsMustPost(t *testing.T, server *Server, userID, matchID, key, body string, final bool) matchRoomResponse {
+func resultReportsMustPost(t *testing.T, server *Server, userID, matchID, key, body, action string) matchRoomResponse {
 	t.Helper()
-	recorder := resultReportsPost(t, server, userID, matchID, key, body, final)
+	recorder := resultReportsPost(t, server, userID, matchID, key, body, action)
 	if recorder.Code != http.StatusCreated {
-		t.Fatalf("report %s: %d %s", key, recorder.Code, recorder.Body.String())
+		t.Fatalf("result action %s: %d %s", key, recorder.Code, recorder.Body.String())
 	}
 	var envelope struct {
 		Data struct {
@@ -114,6 +124,29 @@ func resultReportsMustPost(t *testing.T, server *Server, userID, matchID, key, b
 		t.Fatal(err)
 	}
 	return envelope.Data.Match
+}
+
+// resultReportsReject has the home entry submit 2-1 and the away entry reject
+// it, which opens the screenshot window.
+func resultReportsReject(t *testing.T, server *Server, sides resultReportsSides) {
+	t.Helper()
+	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-result-1", resultReportsBody(2, 1), "")
+	resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-reject-1", resultReportsAnswer("reject"), "confirmation")
+}
+
+func resultReportsRoom(t *testing.T, server *Server, userID, matchID string) matchRoomResponse {
+	t.Helper()
+	recorder := resultReportsGet(t, server.getMatch, userID, "matchId", matchID)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("room: %d %s", recorder.Code, recorder.Body.String())
+	}
+	var envelope struct {
+		Data matchRoomResponse `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	return envelope.Data
 }
 
 func resultReportsGet(t *testing.T, handler http.HandlerFunc, userID, pathValue, value string) *httptest.ResponseRecorder {
@@ -167,8 +200,8 @@ func resultReportsInsertUser(t *testing.T, pool *pgxpool.Pool, label string) str
 	return userID
 }
 
-// resultReportsAssertNoScoreLeaks requires every push and audit row of the
-// verification flow to be free of scores.
+// resultReportsAssertNoScoreLeaks requires every push and every audit row
+// written before the result is final to be free of scores.
 func resultReportsAssertNoScoreLeaks(t *testing.T, pool *pgxpool.Pool, competitionID string) {
 	t.Helper()
 	if leaks := resultReportsCount(t, pool, `SELECT count(*) FROM outbox_events
@@ -177,7 +210,7 @@ func resultReportsAssertNoScoreLeaks(t *testing.T, pool *pgxpool.Pool, competiti
 		t.Fatalf("%d verification pushes carry a score", leaks)
 	}
 	if leaks := resultReportsCount(t, pool, `SELECT count(*) FROM audit_events
-		WHERE action IN ('result.reported','result.final_reported','result.mismatch','result.report_reminder_sent')
+		WHERE action IN ('result.reported','result.screenshot_submitted','result.rejected','result.report_reminder_sent')
 		  AND after_state::text ~ 'Score'`); leaks != 0 {
 		t.Fatalf("%d pre-resolution audit rows of %s carry a score", leaks, competitionID)
 	}
@@ -191,28 +224,43 @@ func resultReportsAssertRatingsUntouched(t *testing.T, pool *pgxpool.Pool, sides
 	}
 }
 
-func TestIntegrationScoreReportsAgreeAndConfirm(t *testing.T) {
+func TestIntegrationSubmittedResultIsConfirmed(t *testing.T) {
 	server, pool, seeded, sides := resultReportsSetup(t)
-	room := resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-initial-1", resultReportsBody(2, 1), false)
-	if room.State != "awaiting_confirmation" || room.Lifecycle != "awaiting_opponent_report" ||
-		room.ResultVerification.Phase != "awaiting_second_report" || room.ResultVerification.ReportDeadline == nil {
-		t.Fatalf("unexpected room after the first report: %+v", room)
+	room := resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-result-1", resultReportsBody(2, 1), "")
+	if room.State != "awaiting_confirmation" || room.Lifecycle != "awaiting_opponent_confirmation" ||
+		room.ResultVerification.Phase != "awaiting_confirmation" || room.ResultVerification.ConfirmationDeadline == nil ||
+		room.ResultVerification.SubmittedResult == nil || !room.ResultVerification.SubmittedResult.SubmittedByMe {
+		t.Fatalf("unexpected room after the submission: %+v", room)
 	}
 	if windows := resultReportsCount(t, pool, `SELECT count(*) FROM match_result_verifications WHERE match_id=$1
 		AND report_deadline_at=first_reported_at+interval '600 seconds' AND reminder_at=report_deadline_at-interval '180 seconds'`,
 		sides.MatchID); windows != 1 {
-		t.Fatal("the report window was not snapshotted from the database clock")
+		t.Fatal("the confirmation window was not snapshotted from the database clock")
 	}
 	if notified := resultReportsCount(t, pool, `SELECT count(*) FROM outbox_events
 		WHERE event_type='result.report_received' AND aggregate_id=$1 AND payload->>'entryId'=$2`,
 		sides.MatchID, sides.AwayEntry); notified != 1 {
-		t.Fatal("the other entry was not asked to report")
+		t.Fatal("the other entry was not asked to confirm")
+	}
+	opponent := resultReportsRoom(t, server, sides.AwayUser, sides.MatchID)
+	submitted := opponent.ResultVerification.SubmittedResult
+	if opponent.Lifecycle != "confirmation_required" ||
+		!slices.Equal(opponent.AllowedActions, []string{"confirm_result", "reject_result"}) ||
+		submitted == nil || submitted.SubmittedByMe || submitted.Side != "home" || submitted.HomeScore != 2 || submitted.AwayScore != 1 {
+		t.Fatalf("the opponent can't see what to confirm: %+v", opponent)
+	}
+	if own := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "home-confirm-1", resultReportsAnswer("confirm"),
+		"confirmation"); own.Code != http.StatusConflict || !strings.Contains(own.Body.String(), "own_result") {
+		t.Fatalf("the submitter confirmed their own result: %d %s", own.Code, own.Body.String())
+	}
+	if again := resultReportsPost(t, server, sides.AwayUser, sides.MatchID, "away-result-1", resultReportsBody(2, 1), ""); again.Code != http.StatusConflict || !strings.Contains(again.Body.String(), "result_awaiting_confirmation") {
+		t.Fatalf("the opponent submitted over a pending result: %d %s", again.Code, again.Body.String())
 	}
 
-	room = resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-initial-1", resultReportsBody(2, 1), false)
+	room = resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-confirm-1", resultReportsAnswer("confirm"), "confirmation")
 	if room.State != "completed" || room.Result == nil || room.Result.HomeScore != 2 || room.Result.Origin != "agreed_reports" ||
 		room.ResultVerification.Resolution == nil || *room.ResultVerification.Resolution != "agreed" {
-		t.Fatalf("agreement was not confirmed: %+v", room)
+		t.Fatalf("the confirmation did not settle the result: %+v", room)
 	}
 	if canonical := resultReportsCount(t, pool, `SELECT count(*) FROM result_submissions
 		WHERE match_id=$1 AND status='confirmed' AND origin='agreed_reports' AND submitted_by=$2 AND decided_by=$3
@@ -240,7 +288,7 @@ func TestIntegrationScoreReportsAgreeAndConfirm(t *testing.T) {
 		WHERE source_kind='winner_of' AND source_match_id=$1 AND resolved_entry_id=$2`, sides.MatchID, sides.HomeEntry); advanced != 1 {
 		t.Fatal("the winner did not advance")
 	}
-	for action, want := range map[string]int{"result.reported": 2, "result.confirmed": 1} {
+	for action, want := range map[string]int{"result.reported": 1, "result.confirmed": 1} {
 		if got := resultReportsCount(t, pool, `SELECT count(*) FROM audit_events WHERE action=$1 AND subject_id=$2`,
 			action, sides.MatchID); got != want {
 			t.Fatalf("%d %s audit rows, want %d", got, action, want)
@@ -249,28 +297,32 @@ func TestIntegrationScoreReportsAgreeAndConfirm(t *testing.T) {
 	resultReportsAssertNoScoreLeaks(t, pool, seeded.ID)
 }
 
-func TestIntegrationScoreReportMismatchStaysBlind(t *testing.T) {
+func TestIntegrationRejectionOpensTheScreenshotWindow(t *testing.T) {
 	server, pool, seeded, sides := resultReportsSetup(t)
-	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-initial-1", resultReportsBody(7, 3), false)
-	room := resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-initial-1", resultReportsBody(1, 0), false)
-	if room.State != "disputed" || room.Lifecycle != "mismatch_response_required" ||
-		!slices.Equal(room.AllowedActions, []string{"submit_final_score"}) || room.ResultVerification.ResponseDeadline == nil {
-		t.Fatalf("unexpected room after the mismatch: %+v", room)
+	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-result-1", resultReportsBody(7, 3), "")
+	room := resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-reject-1", resultReportsAnswer("reject"), "confirmation")
+	if room.State != "disputed" || room.Lifecycle != "screenshot_required" ||
+		!slices.Equal(room.AllowedActions, []string{"submit_screenshot"}) || room.ResultVerification.ScreenshotDeadline == nil ||
+		room.ResultVerification.Phase != "awaiting_screenshots" {
+		t.Fatalf("unexpected room after the rejection: %+v", room)
 	}
-	for _, body := range []string{
-		resultReportsPost(t, server, sides.AwayUser, sides.MatchID, "away-initial-1", resultReportsBody(1, 0), false).Body.String(),
-		resultReportsGet(t, server.getMatch, sides.AwayUser, "matchId", sides.MatchID).Body.String(),
-	} {
-		if strings.Contains(body, `"homeScore":7`) || strings.Contains(body, `"awayScore":3`) {
-			t.Fatalf("the other entry's claim leaked: %s", body)
-		}
+	if rejected := resultReportsCount(t, pool, `SELECT count(*) FROM match_result_verifications
+		WHERE match_id=$1 AND rejected_by=$2 AND mismatch_at IS NOT NULL`, sides.MatchID, sides.AwayUser); rejected != 1 {
+		t.Fatal("the rejection is not recorded against the player who rejected")
+	}
+	replay := resultReportsPost(t, server, sides.AwayUser, sides.MatchID, "away-reject-1", resultReportsAnswer("reject"), "confirmation")
+	if replay.Code != http.StatusCreated || replay.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("the rejection did not replay: %d %s", replay.Code, replay.Body.String())
+	}
+	if home := resultReportsRoom(t, server, sides.HomeUser, sides.MatchID); home.Lifecycle != "screenshot_required" {
+		t.Fatalf("the submitter was not asked for a screenshot: %+v", home)
 	}
 
 	evidenceID := resultReportsInsertEvidence(t, pool, sides.HomeUser, "completed", time.Now())
-	room = resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-final-1", resultReportsBody(7, 3, evidenceID), true)
-	if room.Lifecycle != "awaiting_opponent_response" || room.ResultVerification.MyFinalReport == nil ||
-		!slices.Equal(room.ResultVerification.MyFinalReport.EvidenceIDs, []string{evidenceID}) {
-		t.Fatalf("unexpected room after the first response: %+v", room)
+	room = resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-shot-1", resultReportsShot(evidenceID), "screenshot")
+	if room.Lifecycle != "awaiting_opponent_screenshot" || room.ResultVerification.MyScreenshot == nil ||
+		room.ResultVerification.MyScreenshot.EvidenceID != evidenceID {
+		t.Fatalf("unexpected room after the first screenshot: %+v", room)
 	}
 	if code := resultReportsGet(t, server.getEvidenceAccess, sides.AwayUser, "id", evidenceID).Code; code != http.StatusNotFound {
 		t.Fatalf("the other entry reached the screenshot: %d", code)
@@ -279,26 +331,29 @@ func TestIntegrationScoreReportMismatchStaysBlind(t *testing.T) {
 		t.Fatalf("the uploader cannot reach the screenshot: %d", code)
 	}
 	opponentRoom := resultReportsGet(t, server.getMatch, sides.AwayUser, "matchId", sides.MatchID).Body.String()
-	if strings.Contains(opponentRoom, evidenceID) || !strings.Contains(opponentRoom, `"opponentResponded":true`) {
-		t.Fatalf("the other entry sees more than the response flag: %s", opponentRoom)
+	if strings.Contains(opponentRoom, evidenceID) || !strings.Contains(opponentRoom, `"opponentScreenshotSubmitted":true`) {
+		t.Fatalf("the other entry sees more than that a screenshot was sent: %s", opponentRoom)
 	}
-	if mismatches := resultReportsCount(t, pool, `SELECT count(*) FROM outbox_events WHERE event_type='result.mismatch'
-		AND aggregate_id=$1`, sides.MatchID); mismatches != 1 {
-		t.Fatal("the mismatch was not pushed once")
+	if rejections := resultReportsCount(t, pool, `SELECT count(*) FROM outbox_events WHERE event_type='result.mismatch'
+		AND aggregate_id=$1`, sides.MatchID); rejections != 1 {
+		t.Fatal("the rejection was not pushed once")
+	}
+	if screenshots := resultReportsCount(t, pool, `SELECT count(*) FROM match_result_reports
+		WHERE match_id=$1 AND kind='final' AND home_score IS NULL AND game_results IS NULL`, sides.MatchID); screenshots != 1 {
+		t.Fatal("a screenshot submission carries a score")
 	}
 	resultReportsAssertNoScoreLeaks(t, pool, seeded.ID)
 }
 
-func TestIntegrationSecondResponseDecidesOrQueuesTheMatch(t *testing.T) {
+func TestIntegrationSecondScreenshotQueuesTheReview(t *testing.T) {
 	server, pool, _, sides := resultReportsSetup(t)
-	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-initial-1", resultReportsBody(2, 1), false)
-	resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-initial-1", resultReportsBody(1, 2), false)
+	resultReportsReject(t, server, sides)
 	homeEvidence := resultReportsInsertEvidence(t, pool, sides.HomeUser, "completed", time.Now())
 	awayEvidence := resultReportsInsertEvidence(t, pool, sides.AwayUser, "completed", time.Now())
-	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-final-1", resultReportsBody(2, 1, homeEvidence), true)
-	room := resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-final-1", resultReportsBody(1, 2, awayEvidence), true)
+	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-shot-1", resultReportsShot(homeEvidence), "screenshot")
+	room := resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-shot-1", resultReportsShot(awayEvidence), "screenshot")
 	if room.State != "disputed" || room.Lifecycle != "under_review" || room.ResultVerification.Phase != "in_review" {
-		t.Fatalf("differing responses were not queued for review: %+v", room)
+		t.Fatalf("both screenshots did not send the match to review: %+v", room)
 	}
 	if queued := resultReportsCount(t, pool, `SELECT count(*) FROM match_result_reviews
 		WHERE match_id=$1 AND status='queued' AND reason='reports_differ'`, sides.MatchID); queued != 1 {
@@ -308,9 +363,10 @@ func TestIntegrationSecondResponseDecidesOrQueuesTheMatch(t *testing.T) {
 		AND aggregate_id=$1 AND NOT payload ? 'reason'`, sides.MatchID); pushed != 1 {
 		t.Fatal("the review push is missing or carries the reason")
 	}
-	reused := resultReportsPost(t, server, sides.AwayUser, sides.MatchID, "away-final-2", resultReportsBody(1, 2, awayEvidence), true)
-	if reused.Code != http.StatusConflict || !strings.Contains(reused.Body.String(), "response_already_submitted") {
-		t.Fatalf("a second response was accepted: %d %s", reused.Code, reused.Body.String())
+	another := resultReportsInsertEvidence(t, pool, sides.AwayUser, "completed", time.Now())
+	reused := resultReportsPost(t, server, sides.AwayUser, sides.MatchID, "away-shot-2", resultReportsShot(another), "screenshot")
+	if reused.Code != http.StatusConflict || !strings.Contains(reused.Body.String(), "screenshot_already_submitted") {
+		t.Fatalf("a second screenshot was accepted: %d %s", reused.Code, reused.Body.String())
 	}
 }
 
@@ -322,19 +378,21 @@ func TestIntegrationConcurrentScoreReports(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			codes <- resultReportsPost(t, server, userID, sides.MatchID, fmt.Sprintf("race-%d-key", index), resultReportsBody(3, 0), false).Code
+			codes <- resultReportsPost(t, server, userID, sides.MatchID, fmt.Sprintf("race-%d-key", index), resultReportsBody(3, 0), "").Code
 		}()
 	}
 	group.Wait()
 	close(codes)
+	got := make([]int, 0, 2)
 	for code := range codes {
-		if code != http.StatusCreated {
-			t.Fatalf("a concurrent first report failed: %d", code)
-		}
+		got = append(got, code)
 	}
-	if confirmed := resultReportsCount(t, pool, `SELECT count(*) FROM result_submissions WHERE match_id=$1 AND status='confirmed'`,
-		sides.MatchID); confirmed != 1 {
-		t.Fatalf("concurrent agreeing reports produced %d canonical rows", confirmed)
+	slices.Sort(got)
+	if !slices.Equal(got, []int{http.StatusCreated, http.StatusConflict}) {
+		t.Fatalf("two concurrent submissions returned %v, want one result", got)
+	}
+	if submitted := resultReportsCount(t, pool, `SELECT count(*) FROM match_result_reports WHERE match_id=$1`, sides.MatchID); submitted != 1 {
+		t.Fatalf("concurrent submissions stored %d results", submitted)
 	}
 
 	second := resultReportsStart(t, pool, readyIntegrationMatches(t, pool, seeded.ID)[0])
@@ -344,33 +402,33 @@ func TestIntegrationConcurrentScoreReports(t *testing.T) {
 		go func() {
 			defer group.Done()
 			statuses <- resultReportsPost(t, server, second.HomeUser, second.MatchID, fmt.Sprintf("double-%d-key", index),
-				resultReportsBody(1, 0), false).Code
+				resultReportsBody(1, 0), "").Code
 		}()
 	}
 	group.Wait()
 	close(statuses)
-	got := make([]int, 0, 2)
+	got = got[:0]
 	for code := range statuses {
 		got = append(got, code)
 	}
 	slices.Sort(got)
 	if !slices.Equal(got, []int{http.StatusCreated, http.StatusConflict}) {
-		t.Fatalf("one entry's concurrent reports returned %v", got)
+		t.Fatalf("one entry's concurrent submissions returned %v", got)
 	}
 	if reports := resultReportsCount(t, pool, `SELECT count(*) FROM match_result_reports WHERE match_id=$1`, second.MatchID); reports != 1 {
-		t.Fatalf("one entry stored %d initial reports", reports)
+		t.Fatalf("one entry stored %d results", reports)
 	}
 }
 
 func TestIntegrationScoreReportIdempotentReplay(t *testing.T) {
 	server, pool, _, sides := resultReportsSetup(t)
-	first := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(2, 0), false)
-	replay := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(2, 0), false)
+	first := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(2, 0), "")
+	replay := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(2, 0), "")
 	if first.Code != http.StatusCreated || replay.Code != http.StatusCreated ||
 		!sameJSON(t, first.Body.Bytes(), replay.Body.Bytes()) || replay.Header().Get("Idempotency-Replayed") != "true" {
 		t.Fatalf("replay differs: %d %s / %d %s", first.Code, first.Body.String(), replay.Code, replay.Body.String())
 	}
-	if conflict := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(0, 2), false); conflict.Code != http.StatusConflict ||
+	if conflict := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "replay-key-1", resultReportsBody(0, 2), ""); conflict.Code != http.StatusConflict ||
 		!strings.Contains(conflict.Body.String(), "idempotency_conflict") {
 		t.Fatalf("a changed body reused the key: %d %s", conflict.Code, conflict.Body.String())
 	}
@@ -381,7 +439,7 @@ func TestIntegrationScoreReportIdempotentReplay(t *testing.T) {
 
 func TestIntegrationResultVerificationWorkerRemindsOnce(t *testing.T) {
 	server, pool, _, sides := resultReportsSetup(t)
-	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-initial-1", resultReportsBody(2, 1), false)
+	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-initial-1", resultReportsBody(2, 1), "")
 	shiftVerificationClock(t, pool, sides.MatchID, 8*time.Minute)
 	var backoff matchResultVerificationBackoff
 	server.sweepMatchResultVerifications(t.Context(), &backoff)
@@ -391,17 +449,14 @@ func TestIntegrationResultVerificationWorkerRemindsOnce(t *testing.T) {
 		t.Fatalf("%d reminders were sent, want exactly one", reminders)
 	}
 	if sent := resultReportsCount(t, pool, `SELECT count(*) FROM match_result_verifications
-		WHERE match_id=$1 AND reminder_sent_at IS NOT NULL AND phase='awaiting_second_report'`, sides.MatchID); sent != 1 {
+		WHERE match_id=$1 AND reminder_sent_at IS NOT NULL AND phase='awaiting_confirmation'`, sides.MatchID); sent != 1 {
 		t.Fatal("the reminder changed more than reminder_sent_at")
 	}
 }
 
-func TestIntegrationSilentEntryIsRemovedAtTheReportDeadline(t *testing.T) {
+func TestIntegrationUnansweredResultStands(t *testing.T) {
 	server, pool, _, sides := resultReportsSetup(t)
-	if _, err := pool.Exec(t.Context(), `UPDATE competition_entries SET status='withdrawal_pending' WHERE id=$1`, sides.AwayEntry); err != nil {
-		t.Fatal(err)
-	}
-	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-initial-1", resultReportsBody(2, 1), false)
+	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-result-1", resultReportsBody(2, 1), "")
 	shiftVerificationClock(t, pool, sides.MatchID, 10*time.Minute+time.Second)
 
 	// Two replicas processing the same candidate apply it exactly once.
@@ -428,36 +483,26 @@ func TestIntegrationSilentEntryIsRemovedAtTheReportDeadline(t *testing.T) {
 		sides.MatchID).Scan(&state, &reason, &winner); err != nil {
 		t.Fatal(err)
 	}
-	if state != "forfeit" || reason != "report_timeout" || winner != sides.HomeEntry {
-		t.Fatalf("report timeout = %s/%s/%s", state, reason, winner)
-	}
-	if removed := resultReportsCount(t, pool, `SELECT count(*) FROM competition_entry_removals removal
-		JOIN competition_entries entry ON entry.id=removal.entry_id
-		WHERE removal.entry_id=$1 AND removal.reason_code='report_timeout' AND removal.previous_status='withdrawal_pending'
-		  AND removal.actor_kind='worker' AND entry.status='disqualified'`, sides.AwayEntry); removed != 1 {
-		t.Fatal("the silent entry was not removed exactly once")
-	}
-	// A later refund rejection restores only withdrawal_pending entries.
-	if _, err := pool.Exec(t.Context(), `UPDATE competition_entries SET status='registered',updated_at=now()
-		WHERE id=$1 AND status='withdrawal_pending'`, sides.AwayEntry); err != nil {
-		t.Fatal(err)
-	}
-	if live := resultReportsCount(t, pool, `SELECT count(*) FROM competition_entries WHERE id=$1 AND status<>'disqualified'`,
-		sides.AwayEntry); live != 0 {
-		t.Fatal("a refund rejection revived a removed entry")
+	if state != "completed" || reason != "played" || winner != sides.HomeEntry {
+		t.Fatalf("an unanswered result = %s/%s/%s, want it to stand", state, reason, winner)
 	}
 	for query, want := range map[string]int{
-		`SELECT count(*) FROM match_progression_applications WHERE source_match_id=$1 AND cause='timeout_forfeit'`:   1,
-		`SELECT count(*) FROM audit_events WHERE action='match.forfeited' AND subject_id=$1`:                         1,
-		`SELECT count(*) FROM outbox_events WHERE event_type='match.forfeited' AND aggregate_id=$1`:                  1,
-		`SELECT count(*) FROM match_result_verifications WHERE match_id=$1 AND resolution='report_timeout'`:          1,
-		`SELECT count(*) FROM outbox_events WHERE event_type='competition.entry_removed' AND payload->>'matchId'=$1`: 1,
+		`SELECT count(*) FROM result_submissions WHERE match_id=$1 AND status='confirmed' AND origin='unanswered'
+		  AND decided_by IS NULL AND home_score=2 AND away_score=1`: 1,
+		`SELECT count(*) FROM match_result_verifications WHERE match_id=$1 AND resolution='confirmation_timeout'`:      1,
+		`SELECT count(*) FROM match_progression_applications WHERE source_match_id=$1 AND cause='player_confirmation'`: 1,
+		`SELECT count(*) FROM audit_events WHERE action='result.confirmed' AND subject_id=$1`:                          1,
+		`SELECT count(*) FROM outbox_events WHERE event_type='match.result_confirmed' AND aggregate_id=$1`:             1,
+		`SELECT count(*) FROM competition_entry_removals WHERE match_id=$1`:                                            0,
 	} {
 		if got := resultReportsCount(t, pool, query, sides.MatchID); got != want {
 			t.Fatalf("%s = %d, want %d", query, got, want)
 		}
 	}
-	resultReportsAssertRatingsUntouched(t, pool, sides)
+	if rated := resultReportsCount(t, pool, `SELECT count(*) FROM player_game_ratings WHERE user_id IN ($1,$2)`,
+		sides.HomeUser, sides.AwayUser); rated != 2 {
+		t.Fatalf("a standing result rated %d players, want both", rated)
+	}
 }
 
 func TestIntegrationResponseDeadlineRemovesNonResponders(t *testing.T) {
@@ -467,16 +512,19 @@ func TestIntegrationResponseDeadlineRemovesNonResponders(t *testing.T) {
 		wantState   string
 		wantRemoved int
 	}{
-		{"one responder wins by forfeit", true, "forfeit", 1},
-		{"no responder removes both", false, "cancelled", 2},
+		{"one screenshot wins by forfeit", true, "forfeit", 1},
+		{"no screenshot removes both", false, "cancelled", 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server, pool, _, sides := resultReportsSetup(t)
-			resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-initial-1", resultReportsBody(2, 1), false)
-			resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-initial-1", resultReportsBody(1, 2), false)
+			if _, err := pool.Exec(t.Context(), `UPDATE competition_entries SET status='withdrawal_pending' WHERE id=$1`,
+				sides.AwayEntry); err != nil {
+				t.Fatal(err)
+			}
+			resultReportsReject(t, server, sides)
 			if test.homeReplies {
 				evidenceID := resultReportsInsertEvidence(t, pool, sides.HomeUser, "completed", time.Now())
-				resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-final-1", resultReportsBody(2, 1, evidenceID), true)
+				resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-shot-1", resultReportsShot(evidenceID), "screenshot")
 			}
 			shiftVerificationClock(t, pool, sides.MatchID, 11*time.Minute)
 			resultReportsProcess(t, server, sides)
@@ -488,9 +536,24 @@ func TestIntegrationResponseDeadlineRemovesNonResponders(t *testing.T) {
 				WHERE match_id=$1 AND reason_code='response_timeout'`, sides.MatchID); removed != test.wantRemoved {
 				t.Fatalf("%d entries removed, want %d", removed, test.wantRemoved)
 			}
+			if removed := resultReportsCount(t, pool, `SELECT count(*) FROM competition_entry_removals removal
+				JOIN competition_entries entry ON entry.id=removal.entry_id
+				WHERE removal.entry_id=$1 AND removal.previous_status='withdrawal_pending'
+				  AND removal.actor_kind='worker' AND entry.status='disqualified'`, sides.AwayEntry); removed != 1 {
+				t.Fatal("the silent entry was not removed exactly once")
+			}
+			// A later refund rejection restores only withdrawal_pending entries.
+			if _, err := pool.Exec(t.Context(), `UPDATE competition_entries SET status='registered',updated_at=now()
+				WHERE id=$1 AND status='withdrawal_pending'`, sides.AwayEntry); err != nil {
+				t.Fatal(err)
+			}
+			if live := resultReportsCount(t, pool, `SELECT count(*) FROM competition_entries WHERE id=$1 AND status<>'disqualified'`,
+				sides.AwayEntry); live != 0 {
+				t.Fatal("a refund rejection revived a removed entry")
+			}
 			if test.homeReplies && resultReportsCount(t, pool, `SELECT count(*) FROM competition_entries
 				WHERE id=$1 AND status='accepted'`, sides.HomeEntry) != 1 {
-				t.Fatal("the responder was removed")
+				t.Fatal("the entry that sent its screenshot was removed")
 			}
 			resultReportsAssertRatingsUntouched(t, pool, sides)
 		})
@@ -518,8 +581,7 @@ func TestIntegrationUnreportedMatchRemovesBothEntries(t *testing.T) {
 
 func TestIntegrationStuckScreenshotEscalatesInsteadOfRemoving(t *testing.T) {
 	server, pool, _, sides := resultReportsSetup(t)
-	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-initial-1", resultReportsBody(2, 1), false)
-	resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-initial-1", resultReportsBody(1, 2), false)
+	resultReportsReject(t, server, sides)
 	shiftVerificationClock(t, pool, sides.MatchID, 11*time.Minute)
 	var mismatchAt time.Time
 	if err := pool.QueryRow(t.Context(), `SELECT mismatch_at FROM match_result_verifications WHERE match_id=$1`,
@@ -584,7 +646,7 @@ func TestIntegrationNonMemberReportDoesNotWaitForTheGate(t *testing.T) {
 	outsider := resultReportsInsertUser(t, pool, "outsider")
 	outsiderDone := make(chan int, 1)
 	go func() {
-		outsiderDone <- resultReportsPost(t, server, outsider, sides.MatchID, "outsider-key-1", resultReportsBody(1, 0), false).Code
+		outsiderDone <- resultReportsPost(t, server, outsider, sides.MatchID, "outsider-key-1", resultReportsBody(1, 0), "").Code
 	}()
 	select {
 	case code := <-outsiderDone:
@@ -597,7 +659,7 @@ func TestIntegrationNonMemberReportDoesNotWaitForTheGate(t *testing.T) {
 
 	memberDone := make(chan int, 1)
 	go func() {
-		memberDone <- resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "member-key-1", resultReportsBody(1, 0), false).Code
+		memberDone <- resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "member-key-1", resultReportsBody(1, 0), "").Code
 	}()
 	select {
 	case code := <-memberDone:
@@ -617,7 +679,7 @@ func TestIntegrationReportsRejectClosedCompetitions(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), `UPDATE competitions SET status='cancelled' WHERE id=$1`, sides.CompetitionID); err != nil {
 		t.Fatal(err)
 	}
-	recorder := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "closed-key-1", resultReportsBody(1, 0), false)
+	recorder := resultReportsPost(t, server, sides.HomeUser, sides.MatchID, "closed-key-1", resultReportsBody(1, 0), "")
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "competition_closed") {
 		t.Fatalf("a cancelled competition accepted a report: %d %s", recorder.Code, recorder.Body.String())
 	}
@@ -630,10 +692,9 @@ func TestIntegrationConflictedReviewerCannotReadMatchEvidence(t *testing.T) {
 		sides.HomeUser, reviewer); err != nil {
 		t.Fatal(err)
 	}
-	resultReportsMustPost(t, server, sides.HomeUser, sides.MatchID, "home-initial-1", resultReportsBody(2, 1), false)
-	resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-initial-1", resultReportsBody(1, 2), false)
+	resultReportsReject(t, server, sides)
 	evidenceID := resultReportsInsertEvidence(t, pool, sides.AwayUser, "completed", time.Now())
-	resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-final-1", resultReportsBody(1, 2, evidenceID), true)
+	resultReportsMustPost(t, server, sides.AwayUser, sides.MatchID, "away-shot-1", resultReportsShot(evidenceID), "screenshot")
 	if code := resultReportsGet(t, server.getEvidenceAccess, sides.HomeUser, "id", evidenceID).Code; code != http.StatusNotFound {
 		t.Fatalf("a reviewer who plays the match reached the opponent's screenshot: %d", code)
 	}

@@ -84,38 +84,40 @@ func TestMatchPresentationDerivesAllowedActions(t *testing.T) {
 	}
 }
 
-func TestMatchPresentationFollowsTheBlindReportPhases(t *testing.T) {
+func TestMatchPresentationFollowsTheResultSteps(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	checkedIn, open := now.Add(-time.Minute), now.Add(time.Minute)
 	at := func(value time.Time) *time.Time { return &value }
 	phase := func(value string) *string { return &value }
-	mine := &scoreReportView{Kind: "initial", HomeScore: 2, AwayScore: 1}
-	mineFinal := &scoreReportView{Kind: "final", HomeScore: 2, AwayScore: 1}
+	mine := &submittedResultView{Side: "home", SubmittedByMe: true, HomeScore: 2, AwayScore: 1}
+	theirs := &submittedResultView{Side: "away", HomeScore: 2, AwayScore: 1}
+	myShot := &screenshotView{ID: "shot", EvidenceID: "evidence"}
 	tests := []struct {
 		name      string
 		record    matchRecord
 		lifecycle string
 		actions   []string
 	}{
-		{"both checked in and nobody reported", matchRecord{State: "in_progress", HomeCheckedInAt: &checkedIn,
+		{"both checked in and nothing submitted", matchRecord{State: "in_progress", HomeCheckedInAt: &checkedIn,
 			AwayCheckedInAt: &checkedIn, ResultDueAt: at(open)}, "report_required", []string{"report_score"}},
 		{"one side checked in", matchRecord{State: "in_progress", HomeCheckedInAt: &checkedIn, ResultDueAt: at(open)},
 			"checked_in", nil},
 		{"result deadline reached", matchRecord{State: "in_progress", HomeCheckedInAt: &checkedIn,
 			AwayCheckedInAt: &checkedIn, ResultDueAt: at(now)}, "awaiting_resolution", nil},
-		{"my entry reported first", matchRecord{State: "awaiting_confirmation", VerificationPhase: phase("awaiting_second_report"),
-			ReportDeadlineAt: at(open), MyInitialReport: mine}, "awaiting_opponent_report", nil},
-		{"the other entry reported first", matchRecord{State: "awaiting_confirmation",
-			VerificationPhase: phase("awaiting_second_report"), ReportDeadlineAt: at(open)}, "report_required", []string{"report_score"}},
-		{"report window reached", matchRecord{State: "awaiting_confirmation",
-			VerificationPhase: phase("awaiting_second_report"), ReportDeadlineAt: at(now)}, "awaiting_resolution", nil},
-		{"my entry responded", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_responses"),
-			ResponseDeadlineAt: at(open), MyInitialReport: mine, MyFinalReport: mineFinal}, "awaiting_opponent_response", nil},
-		{"mismatch awaits my response", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_responses"),
-			ResponseDeadlineAt: at(open), MyInitialReport: mine}, "mismatch_response_required", []string{"submit_final_score"}},
-		{"response window reached", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_responses"),
-			ResponseDeadlineAt: at(now), MyInitialReport: mine}, "awaiting_resolution", nil},
-		{"Gamics review", matchRecord{State: "disputed", VerificationPhase: phase("in_review"), MyInitialReport: mine},
+		{"I submitted the result", matchRecord{State: "awaiting_confirmation", VerificationPhase: phase("awaiting_confirmation"),
+			ReportDeadlineAt: at(open), SubmittedResult: mine}, "awaiting_opponent_confirmation", nil},
+		{"the opponent submitted it", matchRecord{State: "awaiting_confirmation", VerificationPhase: phase("awaiting_confirmation"),
+			ReportDeadlineAt: at(open), SubmittedResult: theirs}, "confirmation_required", []string{"confirm_result", "reject_result"}},
+		{"confirmation window reached", matchRecord{State: "awaiting_confirmation",
+			VerificationPhase: phase("awaiting_confirmation"), ReportDeadlineAt: at(now), SubmittedResult: theirs},
+			"awaiting_resolution", nil},
+		{"I sent my screenshot", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_screenshots"),
+			ResponseDeadlineAt: at(open), SubmittedResult: mine, MyScreenshot: myShot}, "awaiting_opponent_screenshot", nil},
+		{"rejected result awaits my screenshot", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_screenshots"),
+			ResponseDeadlineAt: at(open), SubmittedResult: mine}, "screenshot_required", []string{"submit_screenshot"}},
+		{"screenshot window reached", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_screenshots"),
+			ResponseDeadlineAt: at(now), SubmittedResult: theirs}, "awaiting_resolution", nil},
+		{"Gamics review", matchRecord{State: "disputed", VerificationPhase: phase("in_review"), SubmittedResult: mine},
 			"under_review", nil},
 		{"forfeit", matchRecord{State: "forfeit"}, "forfeited", nil},
 		{"completed", matchRecord{State: "completed"}, "completed", nil},
@@ -132,26 +134,23 @@ func TestMatchPresentationFollowsTheBlindReportPhases(t *testing.T) {
 	}
 }
 
-func TestMatchRoomNeverRevealsTheOtherEntryClaim(t *testing.T) {
-	// The other entry reported 7-3. Side B's record carries only its own 1-0 and
-	// the other entry's booleans, and the room must not grow a field for more.
+func TestMatchRoomShowsTheSubmittedResultButNotTheOpponentScreenshot(t *testing.T) {
+	// The home entry submitted 7-3 and the away viewer rejected it; both sent
+	// screenshots. The away viewer sees the submitted result and its own
+	// screenshot, and only whether the home entry sent one.
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	deadline := now.Add(8 * time.Minute)
-	phase := "awaiting_responses"
+	phase := "awaiting_screenshots"
 	record := matchRecord{
 		ID: testMatchID, State: "disputed", CurrentSide: "away", VerificationPhase: &phase, ResponseDeadlineAt: &deadline,
-		MyInitialReport: &scoreReportView{Kind: "initial", HomeScore: 1, AwayScore: 0,
-			Games: []gameScoreInput{{HomeScore: 1, AwayScore: 0}}, ReportedAt: now.Add(-time.Minute)},
-		OpponentReported: true, OpponentResponded: true,
+		SubmittedResult: &submittedResultView{ID: "result", Side: "home", HomeScore: 7, AwayScore: 3,
+			Games: []gameScoreInput{{HomeScore: 7, AwayScore: 3}}, SubmittedAt: now.Add(-time.Minute)},
+		MyScreenshot:       &screenshotView{ID: "mine", EvidenceID: "my-evidence", SubmittedAt: now},
+		OpponentScreenshot: true,
 	}
 	raw, err := json.Marshal(record.response("away-player", now))
 	if err != nil {
 		t.Fatal(err)
-	}
-	for _, forbidden := range []string{`"homeScore":7`, `"awayScore":3`, "pendingResult", "opponentReport\""} {
-		if strings.Contains(string(raw), forbidden) {
-			t.Fatalf("room leaks %s: %s", forbidden, raw)
-		}
 	}
 	var room struct {
 		ResultVerification map[string]json.RawMessage `json:"resultVerification"`
@@ -161,14 +160,19 @@ func TestMatchRoomNeverRevealsTheOtherEntryClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := slices.Sorted(maps.Keys(room.ResultVerification))
-	want := []string{"entryRemoved", "myFinalReport", "myReport", "opponentReported", "opponentResponded",
-		"phase", "reportDeadline", "resolution", "responseDeadline"}
+	want := []string{"confirmationDeadline", "entryRemoved", "myScreenshot", "opponentScreenshotSubmitted", "phase",
+		"resolution", "screenshotDeadline", "submittedResult"}
 	if !slices.Equal(keys, want) {
 		t.Fatalf("resultVerification keys = %v, want %v", keys, want)
 	}
-	if string(room.ResultVerification["opponentReported"]) != "true" || string(room.ResultVerification["opponentResponded"]) != "true" ||
-		string(room.ResultVerification["reportDeadline"]) != "null" || string(room.Result) != "null" {
-		t.Fatalf("unexpected blind view: %s", raw)
+	if !strings.Contains(string(room.ResultVerification["submittedResult"]), `"homeScore":7`) ||
+		string(room.ResultVerification["opponentScreenshotSubmitted"]) != "true" ||
+		string(room.ResultVerification["confirmationDeadline"]) != "null" ||
+		string(room.ResultVerification["screenshotDeadline"]) == "null" || string(room.Result) != "null" {
+		t.Fatalf("unexpected view: %s", raw)
+	}
+	if strings.Contains(string(raw), "opponentScreenshot\"") || strings.Count(string(raw), "evidenceId") != 1 {
+		t.Fatalf("the room leaks the opponent's screenshot: %s", raw)
 	}
 }
 
@@ -289,9 +293,9 @@ func TestMatchRoomScopesEntryRemovedToTheRemovingMatch(t *testing.T) {
 	}{
 		{"an earlier win of an entry removed later", "completed", &home, "home", &disqualified, nil, false, "won"},
 		{"the match that removed the viewer", "forfeit", &away, "home", &disqualified,
-			[]matchRemovalView{removal("home", home, "report_timeout")}, true, "lost"},
+			[]matchRemovalView{removal("home", home, "response_timeout")}, true, "lost"},
 		{"the winner sees the opponent's removal", "forfeit", &away, "away", nil,
-			[]matchRemovalView{removal("home", home, "report_timeout")}, false, "won"},
+			[]matchRemovalView{removal("home", home, "response_timeout")}, false, "won"},
 		{"both entries removed", "cancelled", nil, "away", &disqualified,
 			[]matchRemovalView{removal("home", home, "no_result_reported"), removal("away", away, "no_result_reported")},
 			true, "no_result"},
@@ -331,7 +335,7 @@ func TestMatchRoomRemovalsJSONCarriesNoScore(t *testing.T) {
 	if !strings.Contains(string(raw), `"removals":[]`) {
 		t.Fatalf("a match without removals must carry an empty list: %s", raw)
 	}
-	if err = record.decodeRemovals([]byte(`[{"side":"home","entryId":"home-entry","reasonCode":"report_timeout",
+	if err = record.decodeRemovals([]byte(`[{"side":"home","entryId":"home-entry","reasonCode":"response_timeout",
 		"removedAt":"2026-09-28T14:31:00.123456+03:00"}]`)); err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +599,7 @@ func TestOpenAPIMatchRoomDeclaresItsRemovals(t *testing.T) {
 	removal := openAPIBlock(t, contract, "MatchRemoval", 4)
 	// The reason codes are exactly the competition_entry_removals CHECK list.
 	if got := openAPIEnum(t, openAPIBlock(t, removal, "reasonCode", 8)); !slices.Equal(got,
-		[]string{"report_timeout", "response_timeout", "no_result_reported", "platform_review"}) {
+		[]string{"response_timeout", "no_result_reported", "platform_review"}) {
 		t.Errorf("MatchRemoval reasonCode enum = %v", got)
 	}
 	if strings.Contains(strings.ToLower(removal), "score:") {
@@ -612,28 +616,34 @@ func optionalValue(value *string) string {
 }
 
 func TestMatchRecordDecodesTheRoomQueryJSON(t *testing.T) {
-	var record matchRecord
-	reports := []byte(`{"initial":{"id":"4d3e5536-bf3c-4dba-a643-575e43f56970","kind":"initial","homeScore":1,"awayScore":1,
+	home, away := "10000000-0000-4000-8000-000000000001", "10000000-0000-4000-8000-000000000002"
+	record := matchRecord{HomeEntryID: &home, AwayEntryID: &away, CurrentEntryID: away}
+	submitted := []byte(`{"id":"4d3e5536-bf3c-4dba-a643-575e43f56970","entryId":"` + home + `","homeScore":1,"awayScore":1,
 		"tiebreak":{"type":"penalties","homeScore":4,"awayScore":3},"games":[{"homeScore":1,"awayScore":1}],
-		"reportedAt":"2026-09-28T14:31:00.123456+03:00","evidenceIds":[]},
-		"final":{"id":"5d3e5536-bf3c-4dba-a643-575e43f56970","kind":"final","homeScore":2,"awayScore":1,"tiebreak":null,
-		"games":[{"homeScore":2,"awayScore":1}],"reportedAt":"2026-09-28T11:40:00+00:00",
-		"evidenceIds":["6d3e5536-bf3c-4dba-a643-575e43f56970"]}}`)
+		"submittedAt":"2026-09-28T14:31:00.123456+03:00"}`)
+	screenshot := []byte(`{"id":"5d3e5536-bf3c-4dba-a643-575e43f56970","evidenceId":"6d3e5536-bf3c-4dba-a643-575e43f56970",
+		"submittedAt":"2026-09-28T11:40:00+00:00"}`)
 	confirmed := []byte(`{"homeScore":2,"awayScore":1,"tiebreak":null,"origin":"agreed_reports",
 		"confirmedAt":"2026-09-28T14:45:00+03:00"}`)
-	if err := record.decodeResultViews(reports, confirmed); err != nil {
+	if err := record.decodeResultViews(submitted, screenshot, confirmed); err != nil {
 		t.Fatal(err)
 	}
-	initial, final := record.MyInitialReport, record.MyFinalReport
-	if initial == nil || final == nil || initial.Tiebreak == nil || initial.Tiebreak.HomeScore != 4 ||
-		!initial.ReportedAt.Equal(time.Date(2026, 9, 28, 11, 31, 0, 123456000, time.UTC)) || initial.ReportedAt.Location() != time.UTC ||
-		len(final.EvidenceIDs) != 1 || final.Tiebreak != nil {
-		t.Fatalf("unexpected reports: %+v %+v", initial, final)
+	result, shot := record.SubmittedResult, record.MyScreenshot
+	if result == nil || result.Side != "home" || result.SubmittedByMe || result.Tiebreak == nil || result.Tiebreak.HomeScore != 4 ||
+		!result.SubmittedAt.Equal(time.Date(2026, 9, 28, 11, 31, 0, 123456000, time.UTC)) || result.SubmittedAt.Location() != time.UTC {
+		t.Fatalf("unexpected submitted result: %+v", result)
+	}
+	if shot == nil || shot.EvidenceID != "6d3e5536-bf3c-4dba-a643-575e43f56970" || shot.SubmittedAt.Location() != time.UTC {
+		t.Fatalf("unexpected screenshot: %+v", shot)
 	}
 	if record.ConfirmedResult == nil || record.ConfirmedResult.ConfirmedAt.Hour() != 11 {
 		t.Fatalf("unexpected confirmed result: %+v", record.ConfirmedResult)
 	}
-	if err := (&matchRecord{}).decodeResultViews(nil, nil); err != nil {
+	mine := matchRecord{HomeEntryID: &home, AwayEntryID: &away, CurrentEntryID: home}
+	if err := mine.decodeResultViews(submitted, nil, nil); err != nil || !mine.SubmittedResult.SubmittedByMe {
+		t.Fatalf("the submitter's own result must say so: %+v %v", mine.SubmittedResult, err)
+	}
+	if err := (&matchRecord{}).decodeResultViews(nil, nil, nil); err != nil {
 		t.Fatalf("absent views must decode as empty: %v", err)
 	}
 }
@@ -685,9 +695,9 @@ func TestMatchVerificationPolicyUsesTheSnapshotOnceReported(t *testing.T) {
 	if policy.ReportWindowSeconds != 1200 || policy.ReminderBeforeDeadlineSeconds != 300 || policy.ResponseWindowSeconds != 900 {
 		t.Fatalf("rules were not applied before the first report: %+v", policy)
 	}
-	if policy.FinalReportEvidence.MinItems != 1 || policy.FinalReportEvidence.MaxItems != 3 ||
-		!slices.Equal(policy.FinalReportEvidence.MediaTypes, []string{"image/jpeg", "image/png"}) {
-		t.Fatalf("unexpected final report evidence policy: %+v", policy.FinalReportEvidence)
+	if policy.ScreenshotEvidence.MinItems != 1 || policy.ScreenshotEvidence.MaxItems != 1 ||
+		!slices.Equal(policy.ScreenshotEvidence.MediaTypes, []string{"image/jpeg", "image/png"}) {
+		t.Fatalf("unexpected screenshot evidence policy: %+v", policy.ScreenshotEvidence)
 	}
 
 	reportWindow, reminderLead, responseWindow := 600, 180, 600

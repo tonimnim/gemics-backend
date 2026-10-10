@@ -11,28 +11,35 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// A final report carries one to three processed screenshots (R6). HEIC and
-// video uploads are never accepted as match evidence.
+// After a rejection each entry sends exactly one processed screenshot (R6).
+// HEIC and video uploads are never accepted as match evidence.
 const (
-	finalReportEvidenceMinItems = 1
-	finalReportEvidenceMaxItems = 3
+	resultScreenshotMinItems = 1
+	resultScreenshotMaxItems = 1
 )
 
-// finalScoreReportInput is an entry's one response to a mismatch: its final
-// score and the screenshots that prove it.
-type finalScoreReportInput struct {
-	scoreReportInput
-	EvidenceIDs []string `json:"evidenceIds"`
+// resultConfirmationInput is the other entry's answer to a submitted result.
+type resultConfirmationInput struct {
+	Decision string `json:"decision"`
+}
+
+// resultScreenshotInput is an entry's one screenshot after a rejection.
+type resultScreenshotInput struct {
+	EvidenceID string `json:"evidenceId"`
 }
 
 // Idempotency scopes are bound to the actor and the match, and differ per
-// report kind, so one key can never replay another player's view.
+// action, so one key can never replay another player's view.
 func scoreReportScope(userID, matchID string) string {
 	return "score-report:" + userID + ":" + matchID
 }
 
-func finalScoreReportScope(userID, matchID string) string {
-	return "score-final:" + userID + ":" + matchID
+func resultConfirmationScope(userID, matchID string) string {
+	return "score-confirmation:" + userID + ":" + matchID
+}
+
+func resultScreenshotScope(userID, matchID string) string {
+	return "score-screenshot:" + userID + ":" + matchID
 }
 
 // problem rejects what no stage could accept, before any lock is taken.
@@ -43,18 +50,8 @@ func (input scoreReportInput) problem() string {
 	return scoreRangeProblem(input.HomeScore, input.AwayScore)
 }
 
-// validEvidence requires one to three distinct screenshot ids. Ids are
-// canonicalized first so a repeated id cannot hide behind letter case.
-func (input *finalScoreReportInput) validEvidence() bool {
-	for index, evidenceID := range input.EvidenceIDs {
-		input.EvidenceIDs[index] = strings.ToLower(strings.TrimSpace(evidenceID))
-	}
-	return len(input.EvidenceIDs) >= finalReportEvidenceMinItems && len(input.EvidenceIDs) <= finalReportEvidenceMaxItems &&
-		validUniqueUUIDList(input.EvidenceIDs)
-}
-
-// createScoreReport records an entry's blind initial score (R2-R4). Neither the
-// response nor any error reveals what the other entry reported.
+// createScoreReport records the submitted result (R2-R4). Either entry submits
+// it; the other entry is then asked to confirm or reject it.
 func (s *Server) createScoreReport(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
 		return
@@ -76,14 +73,15 @@ func (s *Server) createScoreReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_score_report", message)
 		return
 	}
-	s.recordScoreReport(w, r, "initial", matchID, idempotencyKey, input,
+	s.recordScoreReport(w, r, "report", matchID, idempotencyKey, input,
 		func(ctx context.Context, tx pgx.Tx, state verificationState, actor resolutionActor) (*planRejection, error) {
-			return applyInitialScoreReport(ctx, tx, state, input, actor)
+			return applyScoreReport(ctx, tx, state, input, actor)
 		})
 }
 
-// createFinalScoreReport records an entry's one response to a mismatch (R6).
-func (s *Server) createFinalScoreReport(w http.ResponseWriter, r *http.Request) {
+// createResultConfirmation records the other entry's answer: confirm or reject
+// the submitted result (T4, T5).
+func (s *Server) createResultConfirmation(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
 		return
 	}
@@ -96,35 +94,65 @@ func (s *Server) createFinalScoreReport(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "match_not_found", "Match not found.")
 		return
 	}
-	var input finalScoreReportInput
+	var input resultConfirmationInput
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if message := input.problem(); message != "" {
-		writeError(w, http.StatusBadRequest, "invalid_score_report", message)
+	if input.Decision != "confirm" && input.Decision != "reject" {
+		writeError(w, http.StatusBadRequest, "invalid_decision", "Choose confirm or reject.")
 		return
 	}
-	if !input.validEvidence() {
-		writeError(w, http.StatusBadRequest, "invalid_evidence", "Attach one to three different screenshots of the final result.")
-		return
-	}
-	s.recordScoreReport(w, r, "final", matchID, idempotencyKey, input,
+	s.recordScoreReport(w, r, "confirmation", matchID, idempotencyKey, input,
 		func(ctx context.Context, tx pgx.Tx, state verificationState, actor resolutionActor) (*planRejection, error) {
-			return applyFinalScoreReport(ctx, tx, state, input, actor)
+			return applyResultConfirmation(ctx, tx, state, input.Decision == "confirm", actor)
 		})
 }
 
-// recordScoreReport runs one report in the mandatory lock order: idempotency
-// key, unlocked membership probe, competition gate, match, verification row and
-// reports; apply takes any later locks. The stored and returned body is always
-// the caller's own blind view of the match.
+// createResultScreenshot records an entry's one screenshot after a rejection
+// (R6).
+func (s *Server) createResultScreenshot(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDatabase(w) {
+		return
+	}
+	idempotencyKey, ok := readIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	matchID := strings.ToLower(strings.TrimSpace(r.PathValue("matchId")))
+	if !uuidPattern.MatchString(matchID) {
+		writeError(w, http.StatusNotFound, "match_not_found", "Match not found.")
+		return
+	}
+	var input resultScreenshotInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.EvidenceID = strings.ToLower(strings.TrimSpace(input.EvidenceID))
+	if !uuidPattern.MatchString(input.EvidenceID) {
+		writeError(w, http.StatusBadRequest, "invalid_evidence", "Attach one screenshot of the Full Time screen.")
+		return
+	}
+	s.recordScoreReport(w, r, "screenshot", matchID, idempotencyKey, input,
+		func(ctx context.Context, tx pgx.Tx, state verificationState, actor resolutionActor) (*planRejection, error) {
+			return applyResultScreenshot(ctx, tx, state, input.EvidenceID, actor)
+		})
+}
+
+// recordScoreReport runs one result write (kind report, confirmation or
+// screenshot) in the mandatory lock order: idempotency key, unlocked membership
+// probe, competition gate, match, verification row and reports; apply takes
+// any later locks. The stored and returned body is the caller's view of the
+// match.
 func (s *Server) recordScoreReport(w http.ResponseWriter, r *http.Request, kind, matchID, idempotencyKey string,
 	input any, apply func(context.Context, pgx.Tx, verificationState, resolutionActor) (*planRejection, error)) {
 	ctx := r.Context()
 	userID := identityFromContext(ctx).UserID
 	scope := scoreReportScope(userID, matchID)
-	if kind == "final" {
-		scope = finalScoreReportScope(userID, matchID)
+	switch kind {
+	case "confirmation":
+		scope = resultConfirmationScope(userID, matchID)
+	case "screenshot":
+		scope = resultScreenshotScope(userID, matchID)
 	}
 	unavailable := func() {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to report the score.")
@@ -177,7 +205,7 @@ func (s *Server) recordScoreReport(w http.ResponseWriter, r *http.Request, kind,
 		writeError(w, rejection.Status, rejection.Code, rejection.Message)
 		return
 	}
-	body, err := scoreReportResponse(ctx, tx, kind, userID, matchID, state.Match.DatabaseNow)
+	body, err := scoreReportResponse(ctx, tx, userID, matchID, state.Match.DatabaseNow)
 	if err != nil {
 		unavailable()
 		return
@@ -233,49 +261,55 @@ func (s *Server) writeScoreReportFailure(w http.ResponseWriter, matchID string, 
 	}
 }
 
-// scoreReportResponse is the caller's room after the write, plus the report it
-// just stored, read back through the same room query.
-func scoreReportResponse(ctx context.Context, tx pgx.Tx, kind, userID, matchID string, now time.Time) ([]byte, error) {
+// scoreReportResponse is the caller's room after the write, read back through
+// the same room query.
+func scoreReportResponse(ctx context.Context, tx pgx.Tx, userID, matchID string, now time.Time) ([]byte, error) {
 	record, err := loadMatchRecord(ctx, tx, userID, matchID, false)
 	if err != nil {
 		return nil, err
 	}
-	room := record.response(userID, now)
-	report := room.ResultVerification.MyReport
-	if kind == "final" {
-		report = room.ResultVerification.MyFinalReport
-	}
-	return json.Marshal(map[string]any{"data": map[string]any{"match": room, "report": report}})
+	return json.Marshal(map[string]any{"data": map[string]any{"match": record.response(userID, now)}})
 }
 
-// applyInitialScoreReport stores an entry's blind initial report and applies
-// its plan: open the report window (T2), confirm an agreement (T4) or open the
-// response window (T5).
-func applyInitialScoreReport(ctx context.Context, tx pgx.Tx, state verificationState, input scoreReportInput,
+// applyScoreReport stores the submitted result and opens the confirmation
+// window (T2).
+func applyScoreReport(ctx context.Context, tx pgx.Tx, state verificationState, input scoreReportInput,
 	actor resolutionActor) (*planRejection, error) {
 	m := state.Match
 	claim, message := normalizeScoreClaim(input, m.BestOf, m.StageFormat)
 	if message != "" {
 		return &planRejection{Status: http.StatusBadRequest, Code: "invalid_score", Message: message}, nil
 	}
-	plan, rejection := planScoreReport(state, m.ActorEntryID, claim)
+	plan, rejection := planScoreReport(state, m.ActorEntryID)
 	if rejection != nil {
 		return rejection, nil
 	}
-	if plan.Action == planOpen {
-		if err := openResultVerification(ctx, tx, m); err != nil {
-			return nil, err
-		}
+	if plan.Action != planOpen {
+		return nil, unknownPlanAction(plan.Action)
 	}
-	if _, err := insertScoreReport(ctx, tx, m, actor, "initial", claim); isUniqueViolation(err) {
-		return &planRejection{Status: http.StatusConflict, Code: "report_already_submitted",
-			Message: "Your side has already reported a score for this match."}, nil
+	if err := openResultVerification(ctx, tx, m); err != nil {
+		return nil, err
+	}
+	if _, err := insertScoreReport(ctx, tx, m, actor, "initial", &claim); isUniqueViolation(err) {
+		return &planRejection{Status: http.StatusConflict, Code: "result_already_submitted",
+			Message: "Your side has already submitted the result for this match."}, nil
 	} else if err != nil {
 		return nil, err
 	}
+	return nil, startScoreReportWindow(ctx, tx, m)
+}
+
+// applyResultConfirmation applies the other entry's answer: confirming
+// finalizes the submitted result (T4) and rejecting opens the screenshot
+// window (T5).
+func applyResultConfirmation(ctx context.Context, tx pgx.Tx, state verificationState, confirm bool,
+	actor resolutionActor) (*planRejection, error) {
+	m := state.Match
+	plan, rejection := planConfirmation(state, m.ActorEntryID, confirm)
+	if rejection != nil {
+		return rejection, nil
+	}
 	switch plan.Action {
-	case planOpen:
-		return nil, startScoreReportWindow(ctx, tx, m)
 	case planFinalize:
 		_, err := finalizeMatchResolution(ctx, tx, m, state.Verification, plan.Resolution, actor, true)
 		return nil, err
@@ -286,45 +320,40 @@ func applyInitialScoreReport(ctx context.Context, tx pgx.Tx, state verificationS
 	}
 }
 
-// applyFinalScoreReport stores an entry's response with its screenshots and
-// re-compares the current claims: agreement confirms (T7), a lone response
-// waits (T8) and two differing responses go to Gamics (T9).
-func applyFinalScoreReport(ctx context.Context, tx pgx.Tx, state verificationState, input finalScoreReportInput,
+// applyResultScreenshot stores an entry's one screenshot after a rejection: a
+// lone screenshot waits for the other entry (T8) and the second sends the
+// match to Gamics (T9).
+func applyResultScreenshot(ctx context.Context, tx pgx.Tx, state verificationState, evidenceID string,
 	actor resolutionActor) (*planRejection, error) {
 	m := state.Match
-	claim, message := normalizeScoreClaim(input.scoreReportInput, m.BestOf, m.StageFormat)
-	if message != "" {
-		return &planRejection{Status: http.StatusBadRequest, Code: "invalid_score", Message: message}, nil
-	}
-	// Planning reads no rows, so it runs first: a response that is no longer
+	// Planning reads no rows, so it runs first: a screenshot that is no longer
 	// allowed is refused as such rather than as unusable evidence. The
 	// evidence lock still follows the report locks.
-	plan, rejection := planFinalReport(state, m.ActorEntryID, claim)
+	plan, rejection := planScreenshot(state, m.ActorEntryID)
 	if rejection != nil {
 		return rejection, nil
 	}
-	err := lockCompletedEvidence(ctx, tx, input.EvidenceIDs, m.ActorUserID, screenshotMediaTypes)
+	evidenceIDs := []string{evidenceID}
+	err := lockCompletedEvidence(ctx, tx, evidenceIDs, m.ActorUserID, screenshotMediaTypes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &planRejection{Status: http.StatusConflict, Code: "evidence_not_ready",
-			Message: "Every screenshot must be a processed JPEG or PNG that you uploaded and have not used before."}, nil
+			Message: "The screenshot must be a processed JPEG or PNG that you uploaded and have not used before."}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	reportID, err := insertScoreReport(ctx, tx, m, actor, "final", claim)
+	reportID, err := insertScoreReport(ctx, tx, m, actor, "final", nil)
 	if isUniqueViolation(err) {
-		return &planRejection{Status: http.StatusConflict, Code: "response_already_submitted",
-			Message: "Your side has already submitted a final score for this match."}, nil
+		return &planRejection{Status: http.StatusConflict, Code: "screenshot_already_submitted",
+			Message: "Your side has already sent its screenshot for this match."}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err = attachFinalReportEvidence(ctx, tx, reportID, input.EvidenceIDs); err != nil {
+	if err = attachFinalReportEvidence(ctx, tx, reportID, evidenceIDs); err != nil {
 		return nil, err
 	}
 	switch plan.Action {
-	case planFinalize:
-		_, err = finalizeMatchResolution(ctx, tx, m, state.Verification, plan.Resolution, actor, true)
 	case planReview:
 		err = queueResultReview(ctx, tx, m, state.Verification, "reports_differ", actor)
 	case planWait:
@@ -335,23 +364,23 @@ func applyFinalScoreReport(ctx context.Context, tx pgx.Tx, state verificationSta
 	return nil, err
 }
 
-// openResultVerification snapshots the resolved windows at the first report
-// (T2). Every deadline is computed from the database clock.
+// openResultVerification snapshots the resolved windows when the result is
+// submitted (T2). Every deadline is computed from the database clock.
 func openResultVerification(ctx context.Context, tx pgx.Tx, m lockedResultMatch) error {
 	settings := resolveMatchSettings(m.GameID, m.StageFormat, m.RulesSnapshot, m.StageConfig).Verification
 	reportDeadline := m.DatabaseNow.Add(settings.ReportWindow)
 	_, err := tx.Exec(ctx, `INSERT INTO match_result_verifications
 		(match_id,competition_id,phase,first_report_entry_id,first_reported_at,report_window_seconds,
 		 reminder_lead_seconds,response_window_seconds,report_deadline_at,reminder_at)
-		VALUES ($1,$2,'awaiting_second_report',$3,$4,$5,$6,$7,$8,$9)`,
+		VALUES ($1,$2,'awaiting_confirmation',$3,$4,$5,$6,$7,$8,$9)`,
 		m.ID, m.CompetitionID, m.ActorEntryID, m.DatabaseNow, int(settings.ReportWindow/time.Second),
 		int(settings.ReminderLead/time.Second), int(settings.ResponseWindow/time.Second),
 		reportDeadline, reportDeadline.Add(-settings.ReminderLead))
 	return err
 }
 
-// startScoreReportWindow moves the match to awaiting the second report and
-// tells the other entry to report, without saying what was reported.
+// startScoreReportWindow moves the match to awaiting confirmation and asks the
+// other entry to confirm or reject the submitted result.
 func startScoreReportWindow(ctx context.Context, tx pgx.Tx, m lockedResultMatch) error {
 	matchVersion, err := updateResultVersion(ctx, tx, `UPDATE matches SET state='awaiting_confirmation',
 		version=version+1,updated_at=now()
@@ -366,14 +395,14 @@ func startScoreReportWindow(ctx context.Context, tx pgx.Tx, m lockedResultMatch)
 	})
 }
 
-// openScoreMismatch opens the response window when the initial reports differ
-// (T5). Both entries learn only that the scores differ.
+// openScoreMismatch opens the screenshot window when the other entry rejects
+// the submitted result (T5), recording who rejected it.
 func openScoreMismatch(ctx context.Context, tx pgx.Tx, m lockedResultMatch, v *lockedVerification,
 	responseDeadlineAt time.Time, actor resolutionActor) error {
-	if _, err := updateResultVersion(ctx, tx, `UPDATE match_result_verifications SET phase='awaiting_responses',
-		mismatch_at=$2,response_deadline_at=$3,version=version+1,updated_at=now()
-		WHERE match_id=$1 AND phase='awaiting_second_report' AND version=$4 RETURNING version`,
-		m.ID, m.DatabaseNow, responseDeadlineAt, v.Version); err != nil {
+	if _, err := updateResultVersion(ctx, tx, `UPDATE match_result_verifications SET phase='awaiting_screenshots',
+		mismatch_at=$2,response_deadline_at=$3,rejected_by=$5,version=version+1,updated_at=now()
+		WHERE match_id=$1 AND phase='awaiting_confirmation' AND version=$4 RETURNING version`,
+		m.ID, m.DatabaseNow, responseDeadlineAt, v.Version, m.ActorUserID); err != nil {
 		return err
 	}
 	matchVersion, err := updateResultVersion(ctx, tx, `UPDATE matches SET state='disputed',version=version+1,updated_at=now()
@@ -382,7 +411,7 @@ func openScoreMismatch(ctx context.Context, tx pgx.Tx, m lockedResultMatch, v *l
 	if err != nil {
 		return err
 	}
-	if err = appendAuditActorContext(ctx, tx, actor.RequestID, m.OrganizationID, actor.UserID, "result.mismatch", "match", m.ID,
+	if err = appendAuditActorContext(ctx, tx, actor.RequestID, m.OrganizationID, actor.UserID, "result.rejected", "match", m.ID,
 		map[string]any{"state": m.State, "matchVersion": m.Version},
 		map[string]any{"state": "disputed", "matchVersion": matchVersion, "responseDeadlineAt": responseDeadlineAt}); err != nil {
 		return err
@@ -392,35 +421,41 @@ func openScoreMismatch(ctx context.Context, tx pgx.Tx, m lockedResultMatch, v *l
 	})
 }
 
-// insertScoreReport stores the caller's claim and audits it. The audit row
-// never carries the score, which lives only in match_result_reports until the
-// match is resolved.
+// insertScoreReport stores the submitted result ("initial", with its claim)
+// or a screenshot submission ("final", claim nil) and audits it. The audit row
+// never carries the score.
 func insertScoreReport(ctx context.Context, tx pgx.Tx, m lockedResultMatch, actor resolutionActor, kind string,
-	claim scoreClaim) (string, error) {
-	games, err := json.Marshal(claim.Games)
-	if err != nil {
-		return "", err
+	claim *scoreClaim) (string, error) {
+	var homeScore, awayScore, homeTiebreak, awayTiebreak *int
+	var tiebreakType *string
+	var games any
+	if claim != nil {
+		encoded, err := json.Marshal(claim.Games)
+		if err != nil {
+			return "", err
+		}
+		games, homeScore, awayScore = json.RawMessage(encoded), &claim.HomeScore, &claim.AwayScore
+		tiebreakType, homeTiebreak, awayTiebreak = claim.tiebreakColumns()
 	}
-	tiebreakType, homeTiebreak, awayTiebreak := claim.tiebreakColumns()
 	var reportID string
-	if err = tx.QueryRow(ctx, `INSERT INTO match_result_reports
+	if err := tx.QueryRow(ctx, `INSERT INTO match_result_reports
 		(match_id,competition_id,entry_id,reported_by,kind,home_score,away_score,tiebreak_type,
 		 home_tiebreak_score,away_tiebreak_score,game_results,match_version,reported_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id::text`,
-		m.ID, m.CompetitionID, m.ActorEntryID, m.ActorUserID, kind, claim.HomeScore, claim.AwayScore,
-		tiebreakType, homeTiebreak, awayTiebreak, json.RawMessage(games), m.Version, m.DatabaseNow).Scan(&reportID); err != nil {
+		m.ID, m.CompetitionID, m.ActorEntryID, m.ActorUserID, kind, homeScore, awayScore,
+		tiebreakType, homeTiebreak, awayTiebreak, games, m.Version, m.DatabaseNow).Scan(&reportID); err != nil {
 		return "", err
 	}
 	action := "result.reported"
 	if kind == "final" {
-		action = "result.final_reported"
+		action = "result.screenshot_submitted"
 	}
 	return reportID, appendAuditActorContext(ctx, tx, actor.RequestID, m.OrganizationID, actor.UserID, action, "match", m.ID,
 		nil, map[string]any{"reportId": reportID, "matchId": m.ID, "entryId": m.ActorEntryID, "kind": kind, "matchVersion": m.Version})
 }
 
-// attachFinalReportEvidence binds the locked screenshots to the report in
-// request order. An upload can prove only one report.
+// attachFinalReportEvidence binds the locked screenshot to the screenshot
+// submission. An upload can back only one submission.
 func attachFinalReportEvidence(ctx context.Context, tx pgx.Tx, reportID string, evidenceIDs []string) error {
 	for position, evidenceID := range evidenceIDs {
 		if _, err := tx.Exec(ctx, `INSERT INTO match_result_report_evidence(report_id,evidence_id,position)

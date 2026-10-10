@@ -98,7 +98,7 @@ func catalogueTestEvent(t *testing.T, eventType string) notificationOutboxEvent 
 	return notificationTestEvent(t, eventType, aggregateID, map[string]any{
 		"userId": testNotificationUserID, "entryId": testNotificationEntryID, "matchId": testNotificationMatchID,
 		"competitionId": testNotificationCompetitionID, "strikeId": testNotificationStrikeID,
-		"gameAccountId": testCatalogueGameAccountID, "reasonCode": "report_timeout",
+		"gameAccountId": testCatalogueGameAccountID, "reasonCode": "response_timeout",
 		"homeScore": 7, "awayScore": 3, "reportedScore": "7-3",
 		"tiebreak": map[string]any{"type": "penalties", "homeScore": 5, "awayScore": 4},
 	})

@@ -433,10 +433,11 @@ func TestIntegrationHarnessShiftsVerificationClock(t *testing.T) {
 	checkInBoth(t, pool, matchID)
 	if _, err := pool.Exec(t.Context(), `INSERT INTO match_result_verifications
 		(match_id,competition_id,phase,first_report_entry_id,first_reported_at,report_window_seconds,
-		 reminder_lead_seconds,response_window_seconds,report_deadline_at,reminder_at,mismatch_at,response_deadline_at)
-		VALUES ($1,$2,'awaiting_responses',$3,now(),600,180,600,now()+interval '600 seconds',
-		 now()+interval '420 seconds',now()+interval '1 second',now()+interval '601 seconds')`,
-		matchID, seeded.ID, seeded.Entries[0].ID); err != nil {
+		 reminder_lead_seconds,response_window_seconds,report_deadline_at,reminder_at,mismatch_at,response_deadline_at,
+		 rejected_by)
+		VALUES ($1,$2,'awaiting_screenshots',$3,now(),600,180,600,now()+interval '600 seconds',
+		 now()+interval '420 seconds',now()+interval '1 second',now()+interval '601 seconds',$4)`,
+		matchID, seeded.ID, seeded.Entries[0].ID, seeded.Entries[1].UserID); err != nil {
 		t.Fatal(err)
 	}
 	shiftVerificationClock(t, pool, matchID, 20*time.Minute)

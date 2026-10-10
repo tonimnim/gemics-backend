@@ -175,8 +175,8 @@ func resolveMatchVerificationPolicy(settings matchVerificationSettings) matchVer
 		ReminderBeforeDeadlineSeconds: int64(settings.ReminderLead / time.Second),
 		ResponseWindowSeconds:         int64(settings.ResponseWindow / time.Second),
 	}
-	response.FinalReportEvidence.MinItems = finalReportEvidenceMinItems
-	response.FinalReportEvidence.MaxItems = finalReportEvidenceMaxItems
-	response.FinalReportEvidence.MediaTypes = slices.Clone(screenshotMediaTypes)
+	response.ScreenshotEvidence.MinItems = resultScreenshotMinItems
+	response.ScreenshotEvidence.MaxItems = resultScreenshotMaxItems
+	response.ScreenshotEvidence.MediaTypes = slices.Clone(screenshotMediaTypes)
 	return response
 }

@@ -21,7 +21,8 @@ func TestScoreReportRoutesRequireAuthentication(t *testing.T) {
 	server.registerMatchResultRoutes(mux)
 	for _, path := range []string{
 		"/v1/matches/" + testMatchID + "/score-reports",
-		"/v1/matches/" + testMatchID + "/score-reports/final",
+		"/v1/matches/" + testMatchID + "/score-reports/confirmation",
+		"/v1/matches/" + testMatchID + "/score-reports/screenshot",
 	} {
 		for name, handler := range map[string]http.Handler{"registrar": mux, "server": server.http.Handler} {
 			recorder := httptest.NewRecorder()
@@ -33,15 +34,15 @@ func TestScoreReportRoutesRequireAuthentication(t *testing.T) {
 	}
 }
 
-func TestScoreReportScopesAreActorBoundAndPerKind(t *testing.T) {
+func TestScoreReportScopesAreActorBoundAndPerAction(t *testing.T) {
 	first, second := "20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000002"
-	scopes := map[string]bool{
-		scoreReportScope(first, testMatchID):       true,
-		scoreReportScope(second, testMatchID):      true,
-		finalScoreReportScope(first, testMatchID):  true,
-		finalScoreReportScope(second, testMatchID): true,
+	scopes := map[string]bool{}
+	for _, user := range []string{first, second} {
+		scopes[scoreReportScope(user, testMatchID)] = true
+		scopes[resultConfirmationScope(user, testMatchID)] = true
+		scopes[resultScreenshotScope(user, testMatchID)] = true
 	}
-	if len(scopes) != 4 {
+	if len(scopes) != 6 {
 		t.Fatalf("scopes collide: %v", scopes)
 	}
 	if scope := scoreReportScope(first, testMatchID); !strings.Contains(scope, first) || !strings.Contains(scope, testMatchID) {
@@ -64,30 +65,6 @@ func TestScoreReportInputValidation(t *testing.T) {
 			t.Fatalf("%s: problem = %q", test.name, message)
 		}
 	}
-
-	evidence := func(ids ...string) finalScoreReportInput {
-		return finalScoreReportInput{EvidenceIDs: ids}
-	}
-	one, two, three, four := "60000000-0000-4000-8000-000000000001", "60000000-0000-4000-8000-000000000002",
-		"60000000-0000-4000-8000-000000000003", "60000000-0000-4000-8000-000000000004"
-	for _, test := range []struct {
-		name  string
-		input finalScoreReportInput
-		valid bool
-	}{
-		{"one screenshot", evidence(one), true},
-		{"three screenshots", evidence(one, two, three), true},
-		{"none", evidence(), false},
-		{"four screenshots", evidence(one, two, three, four), false},
-		{"duplicate", evidence(one, one), false},
-		{"duplicate in another case", evidence(one, strings.ToUpper(" "+one+" ")), false},
-		{"not a uuid", evidence("screenshot.png"), false},
-	} {
-		input := test.input
-		if got := input.validEvidence(); got != test.valid {
-			t.Fatalf("%s: validEvidence = %v", test.name, got)
-		}
-	}
 }
 
 func TestScoreReportHandlersRejectBadRequestsBeforeTheDatabase(t *testing.T) {
@@ -95,32 +72,34 @@ func TestScoreReportHandlersRejectBadRequestsBeforeTheDatabase(t *testing.T) {
 	server := &Server{db: &database.Cluster{}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	userID := "20000000-0000-4000-8000-000000000001"
 	evidenceID := "60000000-0000-4000-8000-000000000001"
+	report, confirmation, screenshot := server.createScoreReport, server.createResultConfirmation, server.createResultScreenshot
 	for _, test := range []struct {
-		name, matchID, key, body string
-		final                    bool
-		wantStatus               int
-		wantCode                 string
+		name, matchID, key, suffix, body string
+		handler                          http.HandlerFunc
+		wantStatus                       int
+		wantCode                         string
 	}{
-		{"missing idempotency key", testMatchID, "", `{"homeScore":1,"awayScore":0,"declarationAccepted":true}`, false,
+		{"missing idempotency key", testMatchID, "", "", `{"homeScore":1,"awayScore":0,"declarationAccepted":true}`, report,
 			http.StatusBadRequest, "idempotency_key_required"},
-		{"bad match id", "not-a-match", "report-key-1", `{"homeScore":1,"awayScore":0,"declarationAccepted":true}`, false,
+		{"bad match id", "not-a-match", "report-key-1", "", `{"homeScore":1,"awayScore":0,"declarationAccepted":true}`, report,
 			http.StatusNotFound, "match_not_found"},
-		{"unknown field", testMatchID, "report-key-1", `{"homeScore":1,"awayScore":0,"declarationAccepted":true,"evidenceIds":[]}`,
-			false, http.StatusBadRequest, "invalid_request"},
-		{"declaration not accepted", testMatchID, "report-key-1", `{"homeScore":1,"awayScore":0}`, false,
+		{"unknown field", testMatchID, "report-key-1", "", `{"homeScore":1,"awayScore":0,"declarationAccepted":true,"evidenceIds":[]}`,
+			report, http.StatusBadRequest, "invalid_request"},
+		{"declaration not accepted", testMatchID, "report-key-1", "", `{"homeScore":1,"awayScore":0}`, report,
 			http.StatusBadRequest, "invalid_score_report"},
-		{"final without screenshots", testMatchID, "report-key-1", `{"homeScore":1,"awayScore":0,"declarationAccepted":true,"evidenceIds":[]}`,
-			true, http.StatusBadRequest, "invalid_evidence"},
-		{"final with a repeated screenshot", testMatchID, "report-key-1",
-			`{"homeScore":1,"awayScore":0,"declarationAccepted":true,"evidenceIds":["` + evidenceID + `","` + evidenceID + `"]}`,
-			true, http.StatusBadRequest, "invalid_evidence"},
+		{"answer other than confirm or reject", testMatchID, "report-key-1", "/confirmation", `{"decision":"maybe"}`,
+			confirmation, http.StatusBadRequest, "invalid_decision"},
+		{"answer missing", testMatchID, "report-key-1", "/confirmation", `{}`, confirmation,
+			http.StatusBadRequest, "invalid_decision"},
+		{"screenshot without an id", testMatchID, "report-key-1", "/screenshot", `{"evidenceId":""}`, screenshot,
+			http.StatusBadRequest, "invalid_evidence"},
+		{"screenshot that is not a uuid", testMatchID, "report-key-1", "/screenshot", `{"evidenceId":"shot.png"}`, screenshot,
+			http.StatusBadRequest, "invalid_evidence"},
+		{"more than one screenshot", testMatchID, "report-key-1", "/screenshot",
+			`{"evidenceIds":["` + evidenceID + `","` + evidenceID + `"]}`, screenshot, http.StatusBadRequest, "invalid_request"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			path := "/v1/matches/" + test.matchID + "/score-reports"
-			handler := server.createScoreReport
-			if test.final {
-				path, handler = path+"/final", server.createFinalScoreReport
-			}
+			path := "/v1/matches/" + test.matchID + "/score-reports" + test.suffix
 			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(test.body))
 			request.SetPathValue("matchId", test.matchID)
 			if test.key != "" {
@@ -128,7 +107,7 @@ func TestScoreReportHandlersRejectBadRequestsBeforeTheDatabase(t *testing.T) {
 			}
 			request = request.WithContext(context.WithValue(request.Context(), identityContextKey{}, identity{UserID: userID}))
 			recorder := httptest.NewRecorder()
-			handler(recorder, request)
+			test.handler(recorder, request)
 			if recorder.Code != test.wantStatus || !strings.Contains(recorder.Body.String(), `"`+test.wantCode+`"`) {
 				t.Fatalf("got %d %s, want %d %s", recorder.Code, recorder.Body.String(), test.wantStatus, test.wantCode)
 			}

@@ -280,7 +280,7 @@ CREATE TABLE matches (
     CONSTRAINT matches_activation_rule_check CHECK ((activation_rule = ANY (ARRAY['unconditional'::text, 'if_source_away_wins'::text]))),
     CONSTRAINT matches_check CHECK (((home_entry_id IS NULL) OR (home_entry_id <> away_entry_id))),
     CONSTRAINT matches_check_in_window_pair_chk CHECK ((((check_in_opens_at IS NULL) AND (check_in_closes_at IS NULL)) OR ((check_in_opens_at IS NOT NULL) AND (check_in_closes_at IS NOT NULL) AND (check_in_opens_at < check_in_closes_at)))),
-    CONSTRAINT matches_completion_reason_v2_chk CHECK ((completion_reason = ANY (ARRAY['played'::text, 'walkover'::text, 'double_no_show'::text, 'referee'::text, 'timeout_forfeit'::text, 'reset_not_required'::text, 'correction_voided'::text, 'report_timeout'::text, 'response_timeout'::text, 'no_result_reported'::text, 'platform_review'::text, 'competition_cancelled'::text]))),
+    CONSTRAINT matches_completion_reason_v2_chk CHECK ((completion_reason = ANY (ARRAY['played'::text, 'walkover'::text, 'double_no_show'::text, 'referee'::text, 'timeout_forfeit'::text, 'reset_not_required'::text, 'correction_voided'::text, 'response_timeout'::text, 'no_result_reported'::text, 'platform_review'::text, 'competition_cancelled'::text]))),
     CONSTRAINT matches_graph_rank_positive_chk CHECK ((graph_rank > 0)),
     CONSTRAINT matches_number_positive_chk CHECK ((match_number > 0)),
     CONSTRAINT matches_round_positive_chk CHECK ((round_number > 0)),
@@ -323,7 +323,7 @@ CREATE TABLE competition_entry_removals (
     CONSTRAINT competition_entry_removals_actor_chk CHECK (((actor_kind = 'staff'::text) = (actor_user_id IS NOT NULL))),
     CONSTRAINT competition_entry_removals_actor_kind_check CHECK ((actor_kind = ANY (ARRAY['worker'::text, 'staff'::text, 'system'::text]))),
     CONSTRAINT competition_entry_removals_previous_status_check CHECK ((previous_status = ANY (ARRAY['registered'::text, 'checked_in'::text, 'accepted'::text, 'withdrawal_pending'::text]))),
-    CONSTRAINT competition_entry_removals_reason_code_check CHECK ((reason_code = ANY (ARRAY['report_timeout'::text, 'response_timeout'::text, 'no_result_reported'::text, 'platform_review'::text])))
+    CONSTRAINT competition_entry_removals_reason_code_check CHECK ((reason_code = ANY (ARRAY['response_timeout'::text, 'no_result_reported'::text, 'platform_review'::text])))
 );
 ALTER TABLE ONLY competition_entry_removals
     ADD CONSTRAINT competition_entry_removals_pkey PRIMARY KEY (entry_id);

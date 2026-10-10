@@ -95,8 +95,8 @@ func TestIntegrationRemovedFlagIsScopedToTheRemovingMatch(t *testing.T) {
 	var removedEntry, removedUser, roundOneID string
 	for index, matchID := range roundOne {
 		sides := resultReportsStart(t, pool, matchID)
-		resultReportsMustPost(t, server, sides.HomeUser, matchID, "round-one-home", resultReportsBody(2, 1), false)
-		room := resultReportsMustPost(t, server, sides.AwayUser, matchID, "round-one-away", resultReportsBody(2, 1), false)
+		resultReportsMustPost(t, server, sides.HomeUser, matchID, "round-one-home", resultReportsBody(2, 1), "")
+		room := resultReportsMustPost(t, server, sides.AwayUser, matchID, "round-one-away", resultReportsAnswer("confirm"), "confirmation")
 		if room.State != "completed" {
 			t.Fatalf("round 1 match %s did not complete: %+v", matchID, room)
 		}
@@ -114,8 +114,12 @@ func TestIntegrationRemovedFlagIsScopedToTheRemovingMatch(t *testing.T) {
 	if sides.HomeEntry == removedEntry {
 		winnerUser, removedSide = sides.AwayUser, "home"
 	}
-	resultReportsMustPost(t, server, winnerUser, roundTwoID, "round-two-report", resultReportsBody(1, 1), false)
-	shiftVerificationClock(t, pool, roundTwoID, 10*time.Minute+time.Second)
+	// The removed player rejects the result and never sends a screenshot.
+	resultReportsMustPost(t, server, winnerUser, roundTwoID, "round-two-report", resultReportsBody(1, 1), "")
+	resultReportsMustPost(t, server, removedUser, roundTwoID, "round-two-reject", resultReportsAnswer("reject"), "confirmation")
+	winnerShot := resultReportsInsertEvidence(t, pool, winnerUser, "completed", time.Now())
+	resultReportsMustPost(t, server, winnerUser, roundTwoID, "round-two-shot", resultReportsShot(winnerShot), "screenshot")
+	shiftVerificationClock(t, pool, roundTwoID, 11*time.Minute)
 	resultReportsProcess(t, server, sides)
 
 	roundThreeID, state := matchRoomEntryMatch(t, pool, seeded.ID, removedEntry, 3)
@@ -134,7 +138,7 @@ func TestIntegrationRemovedFlagIsScopedToTheRemovingMatch(t *testing.T) {
 		t.Fatalf("the removing match does not show the removal: %+v", removing)
 	}
 	if removal := removing.Removals[0]; removal.Side != removedSide || removal.EntryID != removedEntry ||
-		removal.ReasonCode != "report_timeout" || removal.RemovedAt.IsZero() {
+		removal.ReasonCode != "response_timeout" || removal.RemovedAt.IsZero() {
 		t.Fatalf("unexpected removal: %+v", removal)
 	}
 	winnerView := matchRoomMustGet(t, server, winnerUser, roundTwoID)

@@ -155,10 +155,10 @@ func lockResultVerification(ctx context.Context, tx pgx.Tx, matchID string) (*lo
 	var v lockedVerification
 	var responseWindow int
 	err := tx.QueryRow(ctx, `SELECT phase,first_report_entry_id::text,report_deadline_at,reminder_at,
-		reminder_sent_at,mismatch_at,response_deadline_at,response_window_seconds,version
+		reminder_sent_at,mismatch_at,response_deadline_at,rejected_by::text,response_window_seconds,version
 		FROM match_result_verifications WHERE match_id=$1 FOR UPDATE`, matchID).Scan(
 		&v.Phase, &v.FirstReportEntryID, &v.ReportDeadlineAt, &v.ReminderAt, &v.ReminderSentAt, &v.MismatchAt,
-		&v.ResponseDeadlineAt, &responseWindow, &v.Version)
+		&v.ResponseDeadlineAt, &v.RejectedBy, &responseWindow, &v.Version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -181,7 +181,8 @@ func decodeStoredJSON(raw []byte, target any, column string) error {
 	return nil
 }
 
-// lockResultReports locks the match's reports in (entry_id, kind) order.
+// lockResultReports locks the match's reports in (entry_id, kind) order. A
+// screenshot ("final") has no score, so its claim stays empty.
 func lockResultReports(ctx context.Context, tx pgx.Tx, matchID string) ([]verificationReport, error) {
 	rows, err := tx.Query(ctx, `SELECT id::text,entry_id::text,reported_by::text,kind,home_score,away_score,
 		tiebreak_type,home_tiebreak_score,away_tiebreak_score,game_results,reported_at
@@ -193,19 +194,25 @@ func lockResultReports(ctx context.Context, tx pgx.Tx, matchID string) ([]verifi
 	reports := make([]verificationReport, 0, 4)
 	for rows.Next() {
 		var report verificationReport
+		var homeScore, awayScore *int
 		var tiebreakType *string
 		var homeTiebreak, awayTiebreak *int
 		var games []byte
 		if err = rows.Scan(&report.ID, &report.EntryID, &report.ReportedBy, &report.Kind,
-			&report.Claim.HomeScore, &report.Claim.AwayScore, &tiebreakType, &homeTiebreak, &awayTiebreak,
+			&homeScore, &awayScore, &tiebreakType, &homeTiebreak, &awayTiebreak,
 			&games, &report.ReportedAt); err != nil {
 			return nil, err
+		}
+		if homeScore != nil && awayScore != nil {
+			report.Claim.HomeScore, report.Claim.AwayScore = *homeScore, *awayScore
 		}
 		if tiebreakType != nil && homeTiebreak != nil && awayTiebreak != nil {
 			report.Claim.Tiebreak = &tiebreakScoreInput{Type: *tiebreakType, HomeScore: *homeTiebreak, AwayScore: *awayTiebreak}
 		}
-		if err = decodeStoredJSON(games, &report.Claim.Games, "report games"); err != nil {
-			return nil, err
+		if games != nil {
+			if err = decodeStoredJSON(games, &report.Claim.Games, "report games"); err != nil {
+				return nil, err
+			}
 		}
 		report.ReportedAt = report.ReportedAt.UTC()
 		reports = append(reports, report)
@@ -614,7 +621,7 @@ func queueResultReview(ctx context.Context, tx pgx.Tx, m lockedResultMatch, v *l
 	actor resolutionActor) error {
 	if _, err := updateResultVersion(ctx, tx, `UPDATE match_result_verifications SET phase='in_review',
 		version=version+1,updated_at=now()
-		WHERE match_id=$1 AND phase='awaiting_responses' AND version=$2 RETURNING version`, m.ID, v.Version); err != nil {
+		WHERE match_id=$1 AND phase='awaiting_screenshots' AND version=$2 RETURNING version`, m.ID, v.Version); err != nil {
 		return err
 	}
 	var reviewID string
@@ -627,7 +634,7 @@ func queueResultReview(ctx context.Context, tx pgx.Tx, m lockedResultMatch, v *l
 		return err
 	}
 	if err = appendAuditActorContext(ctx, tx, actor.RequestID, m.OrganizationID, actor.UserID, "result.review_queued",
-		"match", m.ID, map[string]any{"phase": "awaiting_responses"},
+		"match", m.ID, map[string]any{"phase": "awaiting_screenshots"},
 		map[string]any{"reviewId": reviewID, "reason": reason, "matchVersion": matchVersion}); err != nil {
 		return err
 	}
