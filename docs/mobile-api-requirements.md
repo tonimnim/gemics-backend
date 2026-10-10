@@ -146,9 +146,9 @@ Route and render on `kind` and the ids in `data`; never parse the title or body.
 | `match.cancelled` | `match` | push | `matchPush` | Match cancelled | `/matches/{matchId}` | `kind`, `matchId` | Match room (`lifecycle: cancelled`, `outcome: no_result`) |
 | `match.participant_checked_in` | `match` | push | `matchPush` | Opponent checked in | `/matches/{matchId}` | `kind`, `matchId` | Match room |
 | `match.result_confirmed` | `result` | push | `resultPush` | Result confirmed | `/matches/{matchId}` | `kind`, `matchId` | Match room |
-| `result.report_received` | `result` | push | `resultPush` | Your opponent reported the score | `/matches/{matchId}` | `kind`, `matchId` | Match room, score report |
-| `result.report_reminder` | `result` | push | `resultPush` | Report your score now | `/matches/{matchId}` | `kind`, `matchId` | Match room, score report |
-| `result.mismatch` | `result` | push | `resultPush` | Scores don't match | `/matches/{matchId}` | `kind`, `matchId` | Match room, final score |
+| `result.report_received` | `result` | push | `resultPush` | Confirm the match result | `/matches/{matchId}` | `kind`, `matchId` | Match room, confirm or reject |
+| `result.report_reminder` | `result` | push | `resultPush` | Confirm the result now | `/matches/{matchId}` | `kind`, `matchId` | Match room, confirm or reject |
+| `result.mismatch` | `result` | push | `resultPush` | Result rejected | `/matches/{matchId}` | `kind`, `matchId` | Match room, screenshot |
 | `result.under_review` | `result` | push | `resultPush` | Result under review | `/matches/{matchId}` | `kind`, `matchId` | Match room |
 | `result.review_decided` | `result` | push | `resultPush` | Review complete | `/matches/{matchId}` | `kind`, `matchId` | Match room |
 | `competition.entry_removed` | `result` | push | `resultPush` | Removed from tournament | `/matches/{matchId}` | `kind`, `competitionId`, `matchId` | Match room of the match that removed the entry (`entryRemoved`, `removals`) |
@@ -348,10 +348,11 @@ the state or a local timer.
 
 | `lifecycle` | Meaning | Action |
 |---|---|---|
-| `report_required` | Your entry has not reported yet | `report_score` |
-| `awaiting_opponent_report` | You reported; the opponent's report window is running | none |
-| `mismatch_response_required` | The reports differ and your entry has not responded | `submit_final_score` |
-| `awaiting_opponent_response` | You responded; the response window is still running | none |
+| `report_required` | Nobody has submitted the result yet; either side may | `report_score` |
+| `awaiting_opponent_confirmation` | You submitted the result; the opponent's confirmation window is running | none |
+| `confirmation_required` | The opponent submitted the result; show `resultVerification.submittedResult` | `confirm_result`, `reject_result` |
+| `screenshot_required` | The result was rejected and your entry has not sent its screenshot | `submit_screenshot` |
+| `awaiting_opponent_screenshot` | You sent your screenshot; the screenshot window is still running | none |
 | `awaiting_resolution` | A deadline passed and the server is settling the match | none |
 | `under_review` | Gamics is reviewing the match | none |
 | `forfeited` | The match was decided without a score (forfeit or walkover) | none |
@@ -369,34 +370,35 @@ the result screen from `lifecycle` and its wording from `outcome` and
 
 | `completionReason` | `lifecycle` | What to tell the player |
 |---|---|---|
-| `played` | `completed` | Both reports agreed; show `result` |
+| `played` | `completed` | The opponent confirmed the result, or didn't answer in time so it stood (`result.origin` `unanswered`); show `result` |
 | `platform_review` | `completed` or `cancelled` | Gamics decided the match after a review |
-| `report_timeout` | `forfeited` | One entry did not report in time and was removed; the reporter won |
-| `response_timeout` | `forfeited` or `cancelled` | After a mismatch, the silent entries were removed; a lone responder won |
+| `response_timeout` | `forfeited` or `cancelled` | After a rejection, the entries that sent no screenshot were removed; the one that sent one won |
 | `timeout_forfeit` | `forfeited` | Only one side checked in; that side won |
 | `walkover` | `forfeited` | One entry had already left the competition; the entry still in it won |
-| `no_result_reported` | `cancelled` | Nobody reported before `resultDueAt`; both entries were removed |
+| `no_result_reported` | `cancelled` | Nobody submitted a result before `resultDueAt`; both entries were removed |
 | `double_no_show` | `cancelled` | Neither side checked in, or neither was still in the competition |
 | `competition_cancelled` | `cancelled` | The organizer cancelled the competition; nobody was removed |
 | `reset_not_required` / `correction_voided` | `cancelled` | The bracket no longer needed this match |
 
-The room is blind. `resultVerification` holds only your entry's own reports
-(`myReport`, `myFinalReport`), whether the opponent reported or responded, the
-deadline of the current phase, the resolution, and `entryRemoved`. It never
-contains the opponent's score. The confirmed score appears in `result` once the
-match is completed.
+`resultVerification` holds the submitted result (`submittedResult`, with the side
+that submitted it and `submittedByMe`), your own screenshot after a rejection
+(`myScreenshot`), whether the opponent sent its screenshot
+(`opponentScreenshotSubmitted`), the deadline of the current step
+(`confirmationDeadline` or `screenshotDeadline`), the resolution, and
+`entryRemoved`. Both players see the submitted result; neither ever sees the other's
+screenshot. The confirmed score appears in `result` once the match is completed.
 
 `entryRemoved` is true only on the match that removed your entry from the
 tournament; the matches your entry played before keep `false`, so an earlier win
 never shows a removal banner. The room's `removals` lists the entries this match
-removed, home side first: `side`, `entryId`, `reasonCode` (`report_timeout`,
-`response_timeout`, `no_result_reported` or `platform_review`) and `removedAt`. It is
+removed, home side first: `side`, `entryId`, `reasonCode` (`response_timeout`,
+`no_result_reported` or `platform_review`) and `removedAt`. It is
 empty for most matches, shows both sides' removals to both players once the match
 is decided, and never carries a score. Show the removal banner only when
 `entryRemoved` is true, and use `removals` to tell the winner why the opponent is
 out.
 
-Evidence flow (screenshots are needed only for a final score after a mismatch):
+Evidence flow (a screenshot is needed only after a rejection, one per player):
 
 1. `POST /v1/evidence/uploads` declares a JPEG or PNG screenshot's size, media type
    and SHA-256. Video is not accepted.
@@ -419,18 +421,20 @@ PUT can mean the first attempt succeeded: call completion and let verification
 decide. Keep signed URLs and credentials out of logs/analytics. Cap uploads at
 two per device. See [screenshot pipeline](screenshot-pipeline.md).
 
-Report the score with `POST /v1/matches/{matchId}/score-reports` and an
+Submit the result with `POST /v1/matches/{matchId}/score-reports` and an
 `Idempotency-Key`: home and away score, a penalty tiebreak where a knockout match is
-tied, optional game rows, and `declarationAccepted=true`. No screenshot is sent. When
-the reports differ, send the one final score with
-`POST /v1/matches/{matchId}/score-reports/final`: the same fields plus one to three
-`evidenceIds` of ready screenshots. Both responses contain the updated blind `match`
-room and the `report` just stored, so the app does not need an unsafe replica read.
+tied, optional game rows, and `declarationAccepted=true`. No screenshot is sent.
+Either player may submit; the opponent then answers with
+`POST /v1/matches/{matchId}/score-reports/confirmation` and `{"decision":"confirm"}`
+or `{"decision":"reject"}`. After a rejection each player sends one ready
+screenshot with `POST /v1/matches/{matchId}/score-reports/screenshot` and
+`{"evidenceId": "..."}`. Every response contains the updated `match` room, so the
+app does not need an unsafe replica read.
 
-Tell players plainly what silence costs: if they do not report within the report
-window after the opponent's report, or do not send a final score within the response
-window after a mismatch, their entry is removed from the tournament. If nobody reports
-before `resultDueAt`, both entries are removed. The full policy is in
+Tell players plainly what each step costs: if the opponent doesn't confirm or
+reject in time, the submitted result stands; after a rejection, a player who
+doesn't send a screenshot in time is removed from the tournament. If nobody submits
+a result before `resultDueAt`, both entries are removed. The full policy is in
 [result verification](result-verification.md). There is no dependency on a public
 Konami results API.
 

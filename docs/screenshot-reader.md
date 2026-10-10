@@ -31,7 +31,7 @@ not Tonits' home and away.
 ```
 player app ──upload──▶ R2/MinIO  (existing presigned upload + integrity worker)
      │
-     └─final score report with 1–3 screenshots──▶ Go API
+     └─one screenshot per player after a rejection──▶ Go API
                                                    │ queues a reading per screenshot
                                                    ▼
                                      screenshot_readings (Postgres)
@@ -125,7 +125,7 @@ container healthcheck and by Go before it starts sending work.
 
 | Endpoint | Who | Purpose |
 |---|---|---|
-| `GET /v1/admin/result-reviews/{id}` (extended) | reviewers | Each screenshot gains a `reading`: what it says, its confidence, and, when the team names can be matched to the players, the score as home/away and which claim it supports. |
+| `GET /v1/admin/result-reviews/{id}` (extended) | reviewers | Each screenshot gains a `reading`: what it says, its confidence, and, when the team names can be matched to the players, the score as home/away and whether it shows the submitted result. |
 | `POST /v1/admin/screenshot-readings/{evidenceId}/retry` | reviewers | Read a screenshot again while the review is open, for example after a model upgrade. Audited; refused once decided. |
 | `GET /v1/internal/vision/training-examples?cursor=` | the training job, `VISION_TRAINING_TOKEN` | Labelled real screenshots for training, in screen terms, from staff decisions only (see step 6 below). This is how real data reaches the trainer without anyone copying files by hand. |
 
@@ -213,7 +213,7 @@ dropped.
 
 ## Data the Go side keeps
 
-`screenshot_readings`, one row per screenshot bound to a final report:
+`screenshot_readings`, one row per screenshot sent after a rejection:
 
 - `evidence_id` (PK), `match_id`, `report_id`
 - `status`: `queued`, `read` or `failed`; `attempts`; `available_at`; `last_error`
@@ -260,8 +260,8 @@ Forgery detectors are an arms race: they miss good fakes and flag real
 screenshots that were simply recompressed by WhatsApp or the phone. So Tonits
 never trusts a single screenshot. It relies on things a forger can't control:
 
-1. **Two independent witnesses.** Screenshots only matter when the blind
-   reports disagree, and then both players upload their own. Both phones show
+1. **Two independent witnesses.** Screenshots only matter when a player
+   rejects the submitted result, and then both players upload their own. Both phones show
    the same screen of the same match, so genuine screenshots agree on
    **everything**: both team names, the score and all 26 stat values. A forger
    has to fake their image while the opponent uploads the real one. The two then
@@ -283,10 +283,11 @@ never trusts a single screenshot. It relies on things a forger can't control:
    side) are skipped, since unrelated short matches can share them. An
    identical `imageHash` is only a hint for staff: on this fixed layout two
    different matches can hash alike. Both lookups are exact and indexed.
-5. **Time.** Final reports are only accepted inside the response window, which
+5. **Time.** Screenshots are only accepted inside the screenshot window, which
    leaves little time to fabricate.
-6. **Deterrence.** A rejected claim earns a strike, and repeated strikes block
-   entry. That already exists.
+6. **Deterrence.** The player a review proves wrong (a false result or a false
+   rejection) earns a strike, and repeated strikes block entry. That already
+   exists.
 
 The reader returns these as flags (`checks`, plus Go's identity and reuse
 checks). Image forensics, such as error-level analysis or an AI-image
@@ -307,8 +308,9 @@ to unforgeable.
 
 ## When Go enters the result itself
 
-The existing `system` decider path does this. It can accept one player's claim,
-but it can never invent a score or give strikes. All of these must hold:
+The existing `system` decider path does this. It can accept the submitted
+result, but it can never invent a score or give strikes. All of these must
+hold:
 
 - every screenshot attached to the review has been read;
 - at least one screenshot **from each player** reads `match_result`, with
@@ -320,21 +322,23 @@ but it can never invent a score or give strikes. All of these must hold:
 - both team names map to the two players through learned names;
 - no screenshot's stat table was used for another match;
 - the match is best of one, there was no shoot-out, and the agreed score
-  equals exactly one player's claim.
+  equals the submitted result.
 
-In that case the player whose claim is contradicted is contradicted by their own
-screenshot. Otherwise staff decide as today, with each reading, its flags and
+In that case the player who rejected the result is contradicted by their own
+screenshot. When both screenshots agree on a different score, the reader shows
+it but staff enter it (`corrected_score`): an automated decision never sets a
+score. Otherwise staff decide as today, with each reading, its flags and
 the fields that differ shown beside the screenshots. Auto-decisions are off
 until `VISION_AUTO_DECIDE=true`.
 
 ## Scale and failure
 
-**Load.** Screenshots exist only for disputes (blind reports that disagree),
-1–3 per player. Even at 100,000 matches a day with 10% disputed, that is about
-30,000 images a day, 0.35 a second on average. Measured in the container at
+**Load.** Screenshots exist only for disputes (a rejected result), one per
+player. Even at 100,000 matches a day with 10% disputed, that is about 20,000
+images a day, 0.23 a second on average. Measured in the container at
 2 CPUs on a busy machine, a read takes 12–15 s (p95 17 s, worst 24 s) and
 peaks at 0.9 GB of memory, so one process reads about 6,000 images a day.
-30,000 a day needs about 5 processes kept busy, so run 8–10 (2 CPUs each)
+20,000 a day needs about 4 processes kept busy, so run 6–8 (2 CPUs each)
 for headroom. Peaks don't need matching capacity: the queue lives in Postgres
 and a reading only has to be ready before staff look, so a burst waits there
 for minutes instead of overloading the reader. Faster reads (the reader team's
