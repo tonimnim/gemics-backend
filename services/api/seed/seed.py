@@ -19,7 +19,6 @@ import os
 import random
 import subprocess
 import sys
-import time
 import urllib.error
 import urllib.request
 import uuid
@@ -127,13 +126,7 @@ def register(name, country, password):
                    {"username": username, "konamiId": kid, "password": password, "deviceName": "Seed"})
     person = {"name": name, "username": username, "konamiId": kid, "password": password, "country": country,
               "token": session["accessToken"], "id": session["player"]["id"]}
-    # The list is read from the replica, which can lag the registration by a
-    # moment.
-    for _ in range(50):
-        accounts = call("GET", "/v1/me/game-accounts", token=person["token"])["data"]
-        if accounts:
-            break
-        time.sleep(0.1)
+    accounts = call("GET", "/v1/me/game-accounts", token=person["token"])["data"]
     person["gameAccountId"] = accounts[0]["id"]
     call("PATCH", "/v1/me", {"displayName": name}, token=person["token"])
     return person

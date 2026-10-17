@@ -192,7 +192,7 @@ func (s *Server) listGameAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := identityFromContext(r.Context()).UserID
-	data, err := s.queryGameAccounts(r.Context(), s.db.Reader, userID)
+	data, err := s.queryGameAccounts(r.Context(), s.selfReader(r.Context(), userID), userID)
 	if err != nil {
 		s.logger.Warn("reader query failed; falling back to writer", "operation", "list_game_accounts", "error", err)
 		data, err = s.queryGameAccounts(r.Context(), s.db.Writer, userID)

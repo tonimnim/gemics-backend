@@ -112,6 +112,7 @@ func TestRegistrationWritesTheWholeAccountInOneTransaction(t *testing.T) {
 		"createRegisteredPlayer(r.Context(), tx,",
 		"s.createSession(r.Context(), tx, r, userID, input.DeviceName)",
 		"tx.Commit(r.Context())",
+		"s.markRecentWrite(r.Context(), userID)",
 		"s.writeSessionResponse(w, r, http.StatusCreated,",
 		"func createRegisteredPlayer(",
 		"INSERT INTO users(display_name,password_hash,password_changed_at,registration_ip,status)",
@@ -162,6 +163,31 @@ func TestAuthenticationRoutes(t *testing.T) {
 		server.http.Handler.ServeHTTP(recorder, httptest.NewRequest(route.method, route.path, strings.NewReader("{}")))
 		if recorder.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s = %d, want 401 without a token", route.method, route.path, recorder.Code)
+		}
+	}
+}
+
+// A player's own writes route their own reads to the writer for a while, so a
+// replica that hasn't caught up can't show them stale data.
+func TestOwnReadsFollowOwnWrites(t *testing.T) {
+	assertFileOrder(t, "auth_handlers.go", "func (s *Server) requireAuth(",
+		"if isWrite(r.Method) {",
+		"s.markRecentWrite(r.Context(), claims.UserID)",
+		"next.ServeHTTP(w, r.WithContext(")
+	assertFileOrder(t, "account_handlers.go", "func (s *Server) listGameAccounts(",
+		"s.queryGameAccounts(r.Context(), s.selfReader(r.Context(), userID), userID)")
+	assertFileOrder(t, "push_notification_handlers.go", "func (s *Server) listNotifications(",
+		"queryNotifications(r.Context(), s.selfReader(r.Context(), userID), userID,")
+	assertFileOrder(t, "match_handlers.go", "func (s *Server) listMyMatches(",
+		"pool := s.selfReader(r.Context(), userID)",
+		"s.queryMatchPage(r.Context(), pool, userID,",
+		"func (s *Server) getMatch(",
+		"pool := s.selfReader(r.Context(), userID)",
+		"loadMatchRecord(r.Context(), pool, userID, matchID, false)")
+	for method, write := range map[string]bool{"GET": false, "HEAD": false, "OPTIONS": false,
+		"POST": true, "PUT": true, "PATCH": true, "DELETE": true} {
+		if isWrite(method) != write {
+			t.Errorf("isWrite(%s) = %v, want %v", method, !write, write)
 		}
 	}
 }

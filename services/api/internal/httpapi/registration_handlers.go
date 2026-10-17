@@ -139,6 +139,8 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to create a session.")
 		return
 	}
+	// The app reads the new account straight away, before the replica has it.
+	s.markRecentWrite(r.Context(), userID)
 	s.writeSessionResponse(w, r, http.StatusCreated, userID, sessionID, refreshToken)
 }
 

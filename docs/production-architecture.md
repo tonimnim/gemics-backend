@@ -35,6 +35,12 @@ nor a production failover system.
   flows use the writer. Public catalog/projection reads may use a replica. Before a
   cache fill, Gamics measures replay lag and opens a short writer-fallback circuit if
   lag exceeds `DATABASE_MAX_REPLICA_LAG` or the reader fails.
+- A player's own private reads (game accounts, matches, the match room, the
+  notification inbox) use the replica, except straight after that player writes.
+  Every authenticated write, and registration, marks the player in Redis for
+  `DATABASE_MAX_REPLICA_LAG`; while the mark lasts their own reads go to the writer,
+  so they always see their own change. Without Redis the mark can't be checked and
+  those reads go to the writer.
 - Writer fallback is bounded by `DATABASE_FALLBACK_MAX_CONCURRENCY`; a replica outage
   must not turn every request into an unlimited second query against the primary.
 - Connection limits are a cluster budget, not a per-pod performance knob. Reserve

@@ -393,8 +393,9 @@ func (s *Server) listMyMatches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := identityFromContext(r.Context()).UserID
-	records, err := s.queryMatchPage(r.Context(), s.db.Reader, userID, state, limit+1, cursor)
-	if err != nil && s.db.Reader != s.db.Writer {
+	pool := s.selfReader(r.Context(), userID)
+	records, err := s.queryMatchPage(r.Context(), pool, userID, state, limit+1, cursor)
+	if err != nil && pool != s.db.Writer {
 		s.logger.Warn("reader query failed; falling back to writer", "operation", "list_my_matches", "error", err)
 		records, err = s.queryMatchPage(r.Context(), s.db.Writer, userID, state, limit+1, cursor)
 	}
@@ -431,8 +432,9 @@ func (s *Server) getMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := identityFromContext(r.Context()).UserID
-	record, err := loadMatchRecord(r.Context(), s.db.Reader, userID, matchID, false)
-	if err != nil && s.db.Reader != s.db.Writer {
+	pool := s.selfReader(r.Context(), userID)
+	record, err := loadMatchRecord(r.Context(), pool, userID, matchID, false)
+	if err != nil && pool != s.db.Writer {
 		record, err = loadMatchRecord(r.Context(), s.db.Writer, userID, matchID, false)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {

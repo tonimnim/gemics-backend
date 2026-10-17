@@ -166,6 +166,11 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 		current := identity{UserID: claims.UserID, SessionID: claims.SessionID, ExpiresAt: time.Unix(claims.ExpiresAt, 0)}
+		// Marked before the handler runs, so a read racing this write already
+		// goes to the writer.
+		if isWrite(r.Method) {
+			s.markRecentWrite(r.Context(), claims.UserID)
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityContextKey{}, current)))
 	})
 }

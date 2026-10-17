@@ -178,7 +178,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_pagination", err.Error())
 		return
 	}
-	data, err := queryNotifications(r.Context(), s.db.Reader, userID, options, options.Limit+1)
+	data, err := queryNotifications(r.Context(), s.selfReader(r.Context(), userID), userID, options, options.Limit+1)
 	if err != nil {
 		s.logger.Warn("reader query failed; falling back to writer", "operation", "list_notifications", "error", err)
 		data, err = queryNotifications(r.Context(), s.db.Writer, userID, options, options.Limit+1)
