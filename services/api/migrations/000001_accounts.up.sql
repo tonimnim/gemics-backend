@@ -24,7 +24,10 @@ CREATE TABLE users (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     terms_accepted_at timestamp with time zone,
     privacy_accepted_at timestamp with time zone,
+    recovery_code_hash bytea,
+    recovery_code_created_at timestamp with time zone,
     CONSTRAINT users_password_hash_check CHECK (((password_hash IS NULL) OR (password_hash ~~ '$argon2id$%'::text))),
+    CONSTRAINT users_recovery_code_chk CHECK (((recovery_code_hash IS NULL) = (recovery_code_created_at IS NULL)) AND ((recovery_code_hash IS NULL) OR (octet_length(recovery_code_hash) = 32))),
     CONSTRAINT users_phone_e164_chk CHECK (((phone_e164 IS NULL) OR (phone_e164 ~ '^\+[1-9][0-9]{7,14}$'::text))),
     CONSTRAINT users_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'suspended'::text, 'deleted'::text])))
 );

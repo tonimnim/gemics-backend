@@ -108,14 +108,16 @@ func TestNormalizeInternationalPhone(t *testing.T) {
 func TestRegistrationWritesTheWholeAccountInOneTransaction(t *testing.T) {
 	assertFileOrder(t, "registration_handlers.go", "func (s *Server) register(",
 		"gamicsauth.HashPassword(input.Password)",
+		"gamicsauth.NewRecoveryCode()",
 		"tx, err := s.db.Writer.Begin(r.Context())",
 		"createRegisteredPlayer(r.Context(), tx,",
 		"s.createSession(r.Context(), tx, r, userID, input.DeviceName)",
 		"tx.Commit(r.Context())",
 		"s.markRecentWrite(r.Context(), userID)",
-		"s.writeSessionResponse(w, r, http.StatusCreated,",
+		"s.writeSessionResponseWith(w, r, http.StatusCreated,",
+		`map[string]any{"recoveryCode": recoveryCode}`,
 		"func createRegisteredPlayer(",
-		"INSERT INTO users(display_name,password_hash,password_changed_at,registration_ip,status)",
+		"INSERT INTO users(display_name,password_hash,password_changed_at,recovery_code_hash,recovery_code_created_at,registration_ip,status)",
 		"INSERT INTO player_profiles(user_id,handle)",
 		"INSERT INTO game_accounts(user_id,game_id,in_game_name,publisher_player_id)",
 		"INSERT INTO legal_acceptances")
@@ -145,7 +147,8 @@ func TestAuthenticationRoutes(t *testing.T) {
 	server := New(config.Config{RequestTimeout: time.Second}, logger, "test")
 	// Public routes reach their handler, which reports the missing database.
 	for _, path := range []string{"/v1/auth/register", "/v1/auth/login",
-		"/v1/auth/password-reset/request", "/v1/auth/password-reset/confirm"} {
+		"/v1/auth/password-reset/request", "/v1/auth/password-reset/confirm",
+		"/v1/auth/password-reset/recovery-code"} {
 		recorder := httptest.NewRecorder()
 		server.http.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")))
 		if recorder.Code != http.StatusServiceUnavailable {
@@ -154,6 +157,7 @@ func TestAuthenticationRoutes(t *testing.T) {
 	}
 	for _, route := range []struct{ method, path string }{
 		{http.MethodPost, "/v1/me/password"},
+		{http.MethodPost, "/v1/me/recovery-code"},
 		{http.MethodPost, "/v1/me/email"},
 		{http.MethodPost, "/v1/me/email/verify"},
 		{http.MethodPut, "/v1/me/phone"},
@@ -165,6 +169,34 @@ func TestAuthenticationRoutes(t *testing.T) {
 			t.Errorf("%s %s = %d, want 401 without a token", route.method, route.path, recorder.Code)
 		}
 	}
+}
+
+// A recovery code is guessed like a password: every miss, whatever the cause,
+// answers the same and counts toward the sign-in lockout, and the new password
+// is checked before the code is spent and replaced.
+func TestRecoveryCodeResetCannotBeGuessedOrBurned(t *testing.T) {
+	assertFileOrder(t, "recovery_code_handlers.go", "func (s *Server) resetPasswordWithRecoveryCode(",
+		`writeError(w, http.StatusUnauthorized, "invalid_recovery_code", "The Konami ID or recovery code is incorrect.")`,
+		"s.loginAllowed(r.Context(), key, ip)",
+		"FOR NO KEY UPDATE OF player",
+		"subtle.ConstantTimeCompare(storedHash, codeHash) != 1",
+		"s.recordLoginFailure(r.Context(), key, ip)",
+		`writeError(w, http.StatusUnauthorized, "invalid_recovery_code", "The Konami ID or recovery code is incorrect.")`,
+		"validNewPassword(w, input.NewPassword, username, key)",
+		"gamicsauth.NewRecoveryCode()",
+		`s.setPassword(r.Context(), tx, userID, input.NewPassword, "")`,
+		"UPDATE users SET recovery_code_hash=$2,recovery_code_created_at=now() WHERE id=$1",
+		"DELETE FROM login_failures WHERE konami_key=$1",
+		"tx.Commit(r.Context())",
+		"s.propagateSessionRevocations(r.Context(), revoked)")
+	assertFileOrder(t, "recovery_code_handlers.go", "func (s *Server) createRecoveryCode(",
+		`failureKey := "user:" + current.UserID`,
+		"s.loginAllowed(r.Context(), failureKey, ip)",
+		"gamicsauth.VerifyPassword(valueOrEmpty(passwordHash), input.Password)",
+		"s.recordLoginFailure(r.Context(), failureKey, ip)",
+		"gamicsauth.NewRecoveryCode()")
+	// A deleted account keeps no way back in.
+	assertFileContains(t, "account_security_handlers.go", "recovery_code_hash=NULL,recovery_code_created_at=NULL")
 }
 
 // A player's own writes route their own reads to the writer for a while, so a

@@ -122,6 +122,12 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeSessionResponse(w http.ResponseWriter, r *http.Request, status int, userID, sessionID, refreshToken string) {
+	s.writeSessionResponseWith(w, r, status, userID, sessionID, refreshToken, nil)
+}
+
+// writeSessionResponseWith issues an access token for the session and writes
+// the session body, plus any extra fields such as a one-time recovery code.
+func (s *Server) writeSessionResponseWith(w http.ResponseWriter, r *http.Request, status int, userID, sessionID, refreshToken string, extra map[string]any) {
 	accessToken, expiresAt, err := s.tokens.Issue(userID, sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Unable to issue an access token.")
@@ -138,10 +144,14 @@ func (s *Server) writeSessionResponse(w http.ResponseWriter, r *http.Request, st
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the player account.")
 		return
 	}
-	writeJSON(w, status, map[string]any{
+	body := map[string]any{
 		"accessToken": accessToken, "refreshToken": refreshToken, "tokenType": "Bearer",
 		"expiresInSeconds": int(time.Until(expiresAt).Seconds()), "player": player,
-	})
+	}
+	for key, value := range extra {
+		body[key] = value
+	}
+	writeJSON(w, status, body)
 }
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {

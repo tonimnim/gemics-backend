@@ -46,6 +46,7 @@ type registrationHarness struct {
 type registrationSession struct {
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
+	RecoveryCode string `json:"recoveryCode"`
 	Player       struct {
 		ID            string  `json:"id"`
 		Username      string  `json:"username"`
@@ -251,4 +252,80 @@ func TestIntegrationContactDetailsAndPasswordRecovery(t *testing.T) {
 		`{"currentPassword":"second password","newPassword":"third password"}`, userID), http.StatusNoContent, "")
 	h.session(h.call(h.server.login, http.MethodPost, "/v1/auth/login",
 		`{"konamiId":"`+konamiID+`","password":"third password"}`, ""), http.StatusOK)
+}
+
+func TestIntegrationRecoveryCodeResetsAForgottenPassword(t *testing.T) {
+	h := newRegistrationHarness(t)
+	suffix := strings.ToLower(rand.Text())[:6]
+	konamiID := "RCVR-" + strings.ToUpper(suffix) + "-CODE"
+	registered := h.session(h.call(h.server.register, http.MethodPost, "/v1/auth/register",
+		`{"username":"Otieno_`+suffix+`","konamiId":"`+konamiID+`","password":"first secret pass"}`, ""), http.StatusCreated)
+	firstCode := registered.RecoveryCode
+	if len(firstCode) != 24 || strings.Count(firstCode, "-") != 4 {
+		t.Fatalf("sign-up recovery code = %q", firstCode)
+	}
+	me := h.call(h.server.getMe, http.MethodGet, "/v1/me", "", registered.Player.ID)
+	h.expect(me, http.StatusOK, "")
+	if !strings.Contains(me.Body.String(), `"recoveryCodeSet":true`) || strings.Contains(me.Body.String(), firstCode) {
+		t.Fatalf("GET /v1/me = %s, want recoveryCodeSet and never the code", me.Body)
+	}
+	reset := func(code, password string) *httptest.ResponseRecorder {
+		return h.call(h.server.resetPasswordWithRecoveryCode, http.MethodPost, "/v1/auth/password-reset/recovery-code",
+			`{"konamiId":"`+konamiID+`","recoveryCode":"`+code+`","newPassword":"`+password+`"}`, "")
+	}
+
+	// A wrong code, a malformed one and an unknown Konami ID all answer alike.
+	h.expect(reset("0000-0000-0000-0000-0000", "second secret pass"), http.StatusUnauthorized, "invalid_recovery_code")
+	h.expect(reset("not a code", "second secret pass"), http.StatusUnauthorized, "invalid_recovery_code")
+	h.expect(h.call(h.server.resetPasswordWithRecoveryCode, http.MethodPost, "/v1/auth/password-reset/recovery-code",
+		`{"konamiId":"NONE-`+suffix+`-NONE","recoveryCode":"`+firstCode+`","newPassword":"second secret pass"}`, ""),
+		http.StatusUnauthorized, "invalid_recovery_code")
+	// A rejected new password does not spend the code.
+	h.expect(reset(firstCode, "Otieno_"+suffix), http.StatusBadRequest, "weak_password")
+
+	// Typed in lower case without dashes, the code still works: the player is
+	// signed in, gets a fresh code, and the old session is signed out.
+	recovered := h.session(reset(strings.ToLower(strings.ReplaceAll(firstCode, "-", "")), "second secret pass"), http.StatusOK)
+	if recovered.RecoveryCode == "" || recovered.RecoveryCode == firstCode || recovered.AccessToken == "" {
+		t.Fatalf("recovered session = %+v", recovered)
+	}
+	var liveSessions int
+	if err := h.server.db.Writer.QueryRow(t.Context(), `SELECT count(*) FROM refresh_sessions
+		WHERE user_id=$1 AND revoked_at IS NULL`, registered.Player.ID).Scan(&liveSessions); err != nil {
+		t.Fatal(err)
+	}
+	if liveSessions != 1 {
+		t.Fatalf("live sessions after recovery = %d, want only the new one", liveSessions)
+	}
+	h.session(h.call(h.server.login, http.MethodPost, "/v1/auth/login",
+		`{"konamiId":"`+konamiID+`","password":"second secret pass"}`, ""), http.StatusOK)
+	// The spent code is gone.
+	h.expect(reset(firstCode, "third secret pass"), http.StatusUnauthorized, "invalid_recovery_code")
+
+	// Signed in, the player replaces the code, but only with their password.
+	create := func(password string) *httptest.ResponseRecorder {
+		return h.call(h.server.createRecoveryCode, http.MethodPost, "/v1/me/recovery-code",
+			`{"password":"`+password+`"}`, registered.Player.ID)
+	}
+	h.expect(create("wrong password"), http.StatusUnauthorized, "invalid_credentials")
+	replaced := create("second secret pass")
+	h.expect(replaced, http.StatusOK, "")
+	var created struct {
+		RecoveryCode string    `json:"recoveryCode"`
+		CreatedAt    time.Time `json:"createdAt"`
+	}
+	if err := json.Unmarshal(replaced.Body.Bytes(), &created); err != nil || created.RecoveryCode == "" || created.CreatedAt.IsZero() {
+		t.Fatalf("POST /v1/me/recovery-code = %s", replaced.Body)
+	}
+	h.expect(reset(recovered.RecoveryCode, "third secret pass"), http.StatusUnauthorized, "invalid_recovery_code")
+	h.session(reset(created.RecoveryCode, "third secret pass"), http.StatusOK)
+
+	// Misses count toward the Konami ID's sign-in lockout.
+	if _, err := h.server.db.Writer.Exec(t.Context(), `DELETE FROM login_failures`); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		h.expect(reset("0000-0000-0000-0000-0000", "fourth secret pass"), http.StatusUnauthorized, "invalid_recovery_code")
+	}
+	h.expect(reset("0000-0000-0000-0000-0000", "fourth secret pass"), http.StatusTooManyRequests, "rate_limited")
 }
