@@ -33,10 +33,15 @@ Registration asks for exactly three things, and nothing else:
 3. **Password** (8-128 characters, not the username or Konami ID).
 
 - `POST /v1/auth/register` with `{username, konamiId, password}` returns `201` and an
-  `AuthSession`. The registration screen must show the current terms and privacy
-  notice (`GET /v1/legal/documents/current`): registering records them as accepted.
-  `409 username_taken` and `409 konami_id_taken` (offer sign-in) are the conflicts.
-  A registered player can enter competitions straight away.
+  `AuthSession` plus a `recoveryCode`. The registration screen must show the current
+  terms and privacy notice (`GET /v1/legal/documents/current`): registering records
+  them as accepted. `409 username_taken` and `409 konami_id_taken` (offer sign-in) are
+  the conflicts. A registered player can enter competitions straight away.
+- **Recovery code.** Right after registering, show `recoveryCode` (five groups of four,
+  for example `7KQ0-1XRP-9TVD-4HNW-C3JA`) on its own screen and ask the player to save
+  it: copy it, screenshot it or write it down. The server keeps only its hash, so this
+  is the only time it can be shown. Without an email it is the player's only way back
+  in after a forgotten password.
 - `POST /v1/auth/login` with `{konamiId, password}` returns an `AuthSession`. An
   unknown Konami ID and a wrong password both return `401 invalid_credentials`;
   repeated failures return `429` with `Retry-After`.
@@ -56,8 +61,8 @@ signed-in account, when they matter.
 
 - **Email** (communication and password recovery): `POST /v1/me/email` sends a
   6-digit code; `POST /v1/me/email/verify` with `{code}` stores the address as
-  verified. Encourage players to add one: it is the only self-service way to recover
-  a forgotten password.
+  verified. Encourage players to add one: with the recovery code, it is one of the two
+  self-service ways to recover a forgotten password.
 - **Phone** (payments): `PUT /v1/me/phone` with `{phoneNumber}` in international
   format with the country code, for example `+254712345678` (Kenya) or
   `+919812345678` (India). Players from any country are accepted. One number belongs
@@ -70,13 +75,27 @@ signed-in account, when they matter.
   and much of the Caribbean share that code.
 - **Password**: `POST /v1/me/password` with `{currentPassword, newPassword}` keeps
   this device signed in and signs every other device out.
-- **Forgotten password**: `POST /v1/auth/password-reset/request` with `{konamiId}`
-  always answers `202`; if the account has a verified email, a code is sent to it.
-  `POST /v1/auth/password-reset/confirm` with `{konamiId, code, newPassword}` sets the
-  password and signs every device out. Without a verified email the player must
-  contact Gamics support.
+- **Forgotten password**, two ways:
+  - With the recovery code: `POST /v1/auth/password-reset/recovery-code` with
+    `{konamiId, recoveryCode, newPassword}` sets the password, signs every other device
+    out and returns an `AuthSession` with a new `recoveryCode`, which replaces the spent
+    one: show it and ask the player to save it again. Case, spaces and dashes in the
+    code are ignored. A wrong code, an unknown Konami ID and an account without a code
+    all return `401 invalid_recovery_code`; repeated misses return `429` with
+    `Retry-After`, sharing the sign-in lockout.
+  - With a verified email: `POST /v1/auth/password-reset/request` with `{konamiId}`
+    always answers `202`; if the account has a verified email, a code is sent to it.
+    `POST /v1/auth/password-reset/confirm` with `{konamiId, code, newPassword}` sets
+    the password and signs every device out.
+
+  Without either, the player must contact support.
+- **New recovery code**: `POST /v1/me/recovery-code` with `{password}` returns a fresh
+  `recoveryCode`; the previous one stops working. Offer it in settings ("lost your
+  recovery code?"), and prompt for it whenever `recoveryCodeSet` and `emailVerified`
+  are both false, since that player could not recover a forgotten password.
 - `GET /v1/me` returns the player: `username`, `konamiId`, `displayName`, `email`,
-  `emailVerified`, `phoneNumber`, `countryCode`, `birthDate` and `profile`.
+  `emailVerified`, `phoneNumber`, `countryCode`, `birthDate`, `recoveryCodeSet`,
+  `recoveryCodeCreatedAt` and `profile`. It never returns the recovery code itself.
 - `PATCH /v1/me` optionally changes `displayName` (2-80 characters), `countryCode` and
   `birthDate`. A country chosen here is kept when a phone number is saved later. A birth date is needed only for a competition with a minimum age, which
   reports `age_required`.
