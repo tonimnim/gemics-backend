@@ -370,3 +370,45 @@ func publicPlayerAvatarReference(playerID string, hasAvatar bool) *string {
 	}
 	return stringPointer("/v1/players/" + playerID + "/avatar")
 }
+
+type ratingHistoryPoint struct {
+	At     time.Time `json:"at"`
+	Rating int       `json:"rating"`
+}
+
+// queryRatingHistory returns the rating at the end of each day it changed in
+// the last days days, oldest first. When the player was rated before the
+// window, the rating they carried into it opens the line at the window's
+// start, so a quiet week still draws as a flat line rather than nothing.
+func queryRatingHistory(ctx context.Context, reader rowsQueryer, playerID, gameID string, days int) ([]ratingHistoryPoint, error) {
+	rows, err := reader.Query(ctx, `WITH bounds AS (SELECT now()-make_interval(days => $3) AS since),
+		carried AS (
+			SELECT bounds.since AS at,change.rating_after AS rating
+			FROM player_rating_changes change,bounds
+			WHERE change.user_id=$1 AND change.game_id=$2 AND change.changed_at<bounds.since
+			ORDER BY change.changed_at DESC,change.id DESC LIMIT 1),
+		daily AS (
+			SELECT DISTINCT ON ((change.changed_at AT TIME ZONE 'UTC')::date)
+				change.changed_at AS at,change.rating_after AS rating
+			FROM player_rating_changes change,bounds
+			WHERE change.user_id=$1 AND change.game_id=$2 AND change.changed_at>=bounds.since
+			ORDER BY (change.changed_at AT TIME ZONE 'UTC')::date,change.changed_at DESC,change.id DESC)
+		SELECT at,rating FROM carried
+		UNION ALL
+		SELECT at,rating FROM daily
+		ORDER BY 1`, playerID, gameID, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	points := []ratingHistoryPoint{}
+	for rows.Next() {
+		var point ratingHistoryPoint
+		if err := rows.Scan(&point.At, &point.Rating); err != nil {
+			return nil, err
+		}
+		point.At = point.At.UTC()
+		points = append(points, point)
+	}
+	return points, rows.Err()
+}

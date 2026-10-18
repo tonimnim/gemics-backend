@@ -211,6 +211,60 @@ func (s *Server) publicPlayerMatches(w http.ResponseWriter, r *http.Request) {
 	s.writePrivacyAwarePublicJSON(w, http.StatusOK, result)
 }
 
+// publicPlayerRatingHistory serves the points behind a player's rating line,
+// under the same visibility as their profile.
+func (s *Server) publicPlayerRatingHistory(w http.ResponseWriter, r *http.Request) {
+	markPrivacyAwarePublicResponse(w)
+	playerID := strings.TrimSpace(r.PathValue("id"))
+	if !publicUUIDPattern.MatchString(playerID) {
+		writeError(w, http.StatusBadRequest, "invalid_player_id", "Player ID must be a UUID.")
+		return
+	}
+	query := r.URL.Query()
+	gameID := strings.ToLower(strings.TrimSpace(query.Get("gameId")))
+	if gameID == "" {
+		gameID = registrationGameID
+	}
+	if !publicGameIDPattern.MatchString(gameID) {
+		s.writePublicQueryError(w, errors.New("invalid game id"))
+		return
+	}
+	days := 30
+	if raw := strings.TrimSpace(query.Get("days")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 7 || value > 365 {
+			s.writePublicQueryError(w, errors.New("days must be between 7 and 365"))
+			return
+		}
+		days = value
+	}
+	if !s.requireDatabase(w) {
+		return
+	}
+	viewerID, ok := s.optionalViewer(w, r)
+	if !ok {
+		return
+	}
+	var points []ratingHistoryPoint
+	err := s.withPublicRead(r.Context(), "player_rating_history", func(reader rowsQueryer) error {
+		if visibleErr := requireVisiblePlayer(r.Context(), reader, playerID, viewerID); visibleErr != nil {
+			return visibleErr
+		}
+		loaded, queryErr := queryRatingHistory(r.Context(), reader, playerID, gameID, days)
+		points = loaded
+		return queryErr
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "player_not_found", "Player not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Rating history is temporarily unavailable.")
+		return
+	}
+	s.writePrivacyAwarePublicJSON(w, http.StatusOK, map[string]any{"gameId": gameID, "days": days, "data": points})
+}
+
 func (s *Server) publicPlayerCompetitions(w http.ResponseWriter, r *http.Request) {
 	markPrivacyAwarePublicResponse(w)
 	playerID := strings.TrimSpace(r.PathValue("id"))

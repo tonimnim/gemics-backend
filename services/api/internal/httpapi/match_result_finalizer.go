@@ -430,7 +430,7 @@ func finalizeMatchResolution(ctx context.Context, tx pgx.Tx, m lockedResultMatch
 			return finalizedResult{}, fmt.Errorf("%w: rated entries need captains", errResultVerificationInvariant)
 		}
 		if result.RatingChanges, err = applyConfirmedResultRatings(ctx, tx, resultRatingInput{
-			GameID: m.GameID, HomePlayerID: *m.HomeCaptainID, AwayPlayerID: *m.AwayCaptainID,
+			MatchID: m.ID, GameID: m.GameID, HomePlayerID: *m.HomeCaptainID, AwayPlayerID: *m.AwayCaptainID,
 			HomeScore: r.Claim.HomeScore, AwayScore: r.Claim.AwayScore, Tiebreak: r.Claim.Tiebreak,
 		}, m.DatabaseNow); err != nil {
 			return finalizedResult{}, err

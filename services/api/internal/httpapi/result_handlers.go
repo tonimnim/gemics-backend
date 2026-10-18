@@ -113,6 +113,7 @@ func (s *Server) getEvidenceAccess(w http.ResponseWriter, r *http.Request) {
 // resultRatingInput is a confirmed score between the two entry captains, the
 // only outcome that moves Elo. Forfeits and removals never reach it.
 type resultRatingInput struct {
+	MatchID                    string
 	GameID                     string
 	HomePlayerID, AwayPlayerID string
 	HomeScore, AwayScore       int
@@ -196,6 +197,13 @@ func applyConfirmedResultRatings(ctx context.Context, tx pgx.Tx, result resultRa
 		if tag.RowsAffected() != 1 {
 			return nil, errors.New("rating update did not affect exactly one player")
 		}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO player_rating_changes
+		(user_id,game_id,match_id,rating_before,rating_after,changed_at)
+		VALUES ($1,$3,$4,$5,$6,$8),($2,$3,$4,$7,$9,$8)`,
+		result.HomePlayerID, result.AwayPlayerID, result.GameID, result.MatchID,
+		homeBefore, homeAfter, awayBefore, occurredAt, awayAfter); err != nil {
+		return nil, err
 	}
 	return []ratingChangeView{
 		{PlayerID: result.HomePlayerID, GameID: result.GameID, Before: homeBefore, After: homeAfter, Delta: homeAfter - homeBefore},

@@ -1,6 +1,7 @@
 BEGIN;
 
 DROP TABLE IF EXISTS player_team_names CASCADE;
+DROP TABLE IF EXISTS player_rating_changes CASCADE;
 DROP TABLE IF EXISTS screenshot_readings CASCADE;
 DROP TABLE IF EXISTS game_account_verification_evidence CASCADE;
 DROP TABLE IF EXISTS game_account_verification_requests CASCADE;

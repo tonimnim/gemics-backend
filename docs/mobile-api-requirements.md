@@ -230,6 +230,11 @@ Konami verification.
 - `GET /v1/players/{playerId}/avatar`
 - `GET /v1/players/{playerId}/matches`
 - `GET /v1/players/{playerId}/competitions`
+- `GET /v1/players/{playerId}/rating-history?gameId=efootball-mobile&days=30` returns
+  `{gameId, days, data: [{at, rating}]}`, oldest first: the rating at the end of each
+  day it changed (days 7–365). When the player was rated before the window, the rating
+  carried into it opens the list at the window's start, so a quiet month draws as a flat
+  line. A player with no rated match gets an empty list.
 
 All collections use bounded keyset cursors. A hidden, suspended, or deleted player is
 returned as `404`; the app must not try to distinguish those states.

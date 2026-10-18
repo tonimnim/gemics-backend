@@ -278,6 +278,26 @@ CREATE INDEX match_result_reviews_competition_idx ON match_result_reviews USING 
 CREATE INDEX match_result_reviews_decided_idx ON match_result_reviews USING btree (decided_at DESC, id DESC) WHERE (status = 'decided'::text);
 CREATE INDEX match_result_reviews_queue_idx ON match_result_reviews USING btree (queued_at, id) WHERE (status = 'queued'::text);
 
+-- player_rating_changes
+
+-- One row per player per rated match, written in the transaction that moves
+-- the rating: the history behind player_game_ratings, which holds only the
+-- current value.
+CREATE TABLE player_rating_changes (
+    id bigint GENERATED ALWAYS AS IDENTITY,
+    user_id uuid NOT NULL,
+    game_id text NOT NULL,
+    match_id uuid NOT NULL,
+    rating_before integer NOT NULL,
+    rating_after integer NOT NULL,
+    changed_at timestamp with time zone NOT NULL,
+    CONSTRAINT player_rating_changes_rating_check CHECK (((rating_before >= 0) AND (rating_before <= 10000) AND (rating_after >= 0) AND (rating_after <= 10000)))
+);
+ALTER TABLE ONLY player_rating_changes
+    ADD CONSTRAINT player_rating_changes_pkey PRIMARY KEY (id);
+CREATE UNIQUE INDEX player_rating_changes_match_player_unique ON player_rating_changes USING btree (match_id, user_id);
+CREATE INDEX player_rating_changes_history_idx ON player_rating_changes USING btree (user_id, game_id, changed_at, id);
+
 -- player_strikes
 
 CREATE TABLE player_strikes (
@@ -506,5 +526,9 @@ ALTER TABLE ONLY screenshot_readings
     ADD CONSTRAINT screenshot_readings_report_id_fkey FOREIGN KEY (report_id) REFERENCES match_result_reports(id) ON DELETE CASCADE;
 ALTER TABLE ONLY player_team_names
     ADD CONSTRAINT player_team_names_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY player_rating_changes
+    ADD CONSTRAINT player_rating_changes_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE ONLY player_rating_changes
+    ADD CONSTRAINT player_rating_changes_match_id_fkey FOREIGN KEY (match_id) REFERENCES matches(id);
 
 COMMIT;

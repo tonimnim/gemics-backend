@@ -1559,6 +1559,54 @@ paths:
           description: Cursor expired.
         '503':
           description: Public read dependencies are unavailable.
+  /v1/players/{id}/rating-history:
+    get:
+      operationId: getPlayerRatingHistory
+      tags:
+        - Players
+      summary: The points behind a player's rating line.
+      description: >-
+        The rating at the end of each day it changed in the last days days, oldest first, from the ledger written
+        whenever a confirmed match moves a rating. When the player was rated before the window, the rating carried
+        into it opens the list at the window's start. A player with no rated match gets an empty list. Visible like
+        GET /v1/players/{id}.
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: gameId
+          in: query
+          schema:
+            type: string
+            default: efootball-mobile
+        - name: days
+          in: query
+          schema:
+            type: integer
+            minimum: 7
+            maximum: 365
+            default: 30
+      responses:
+        '200':
+          description: The rating line.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RatingHistory'
+        '400':
+          description: Invalid gameId or days.
+        '401':
+          description: A bearer token was sent but is invalid or its session ended.
+        '404':
+          description: Player is absent, private (and not the caller), suspended or deleted.
+        '503':
+          description: Public read dependencies are unavailable.
   /v1/players/{id}/competitions:
     get:
       operationId: listPublicPlayerCompetitions
@@ -5939,6 +5987,32 @@ components:
           type: integer
         player:
           $ref: '#/components/schemas/Player'
+    RatingHistory:
+      type: object
+      additionalProperties: false
+      required:
+        - gameId
+        - days
+        - data
+      properties:
+        gameId:
+          type: string
+        days:
+          type: integer
+        data:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - at
+              - rating
+            properties:
+              at:
+                type: string
+                format: date-time
+              rating:
+                type: integer
     AuthSessionWithRecoveryCode:
       allOf:
         - $ref: '#/components/schemas/AuthSession'

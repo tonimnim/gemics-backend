@@ -201,6 +201,18 @@ func resultFlowPlayMatch(t *testing.T, h resultFlowHarness, match progressionRem
 		t.Fatalf("%s in %s: rated matches went %d->%d and %d->%d, want +%d", play, match, homePlayed, homeAfter,
 			awayPlayed, awayAfter, delta)
 	}
+	// A rated match leaves one ledger row per player, ending at the rating the
+	// player now holds; nothing else writes the ledger.
+	ledger := resultReportsCount(t, h.Pool, `SELECT count(*) FROM player_rating_changes change
+		JOIN player_game_ratings rating ON rating.user_id=change.user_id AND rating.game_id=change.game_id
+		WHERE change.match_id=$1 AND change.rating_after=rating.rating
+		AND change.rating_after-change.rating_before=-(SELECT other.rating_after-other.rating_before
+			FROM player_rating_changes other WHERE other.match_id=change.match_id AND other.user_id<>change.user_id)`,
+		sides.MatchID)
+	if ledger != 2*delta || resultReportsCount(t, h.Pool, `SELECT count(*) FROM player_rating_changes WHERE match_id=$1`,
+		sides.MatchID) != 2*delta {
+		t.Fatalf("%s in %s: %d consistent rating ledger rows, want %d", play, match, ledger, 2*delta)
+	}
 	return expected
 }
 
