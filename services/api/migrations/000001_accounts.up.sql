@@ -267,7 +267,7 @@ ALTER TABLE ONLY refresh_sessions
 -- Seed data
 
 INSERT INTO legal_documents (document_type, version, content_url, effective_at, is_current) VALUES
-    ('terms', '1.0', 'https://gamics.io/legal/terms', now(), true),
-    ('privacy', '1.0', 'https://gamics.io/legal/privacy', now(), true);
+    ('terms', '1.0', 'https://tonits.com/terms', now(), true),
+    ('privacy', '1.0', 'https://tonits.com/privacy', now(), true);
 
 COMMIT;

@@ -96,13 +96,13 @@ func TestNotificationDefinitionMapsResultVerificationEvents(t *testing.T) {
 		}},
 		{"result.under_review", testNotificationMatchID, matchPayload, notificationDefinition{
 			Category: "result", PreferenceKey: "result_push", Title: "Result under review",
-			Body:      "Gamics is reviewing this match. You'll be notified when a decision is made.",
+			Body:      "Tonits is reviewing this match. You'll be notified when a decision is made.",
 			ActionURL: matchURL, RecipientKind: notificationRecipientMatch, Data: matchData,
 			Disposition: notificationDispositionProjected,
 		}},
 		{"result.review_decided", testNotificationMatchID, matchPayload, notificationDefinition{
 			Category: "result", PreferenceKey: "result_push", Title: "Review complete",
-			Body:      "Gamics has reviewed your match. Open it to see the final result.",
+			Body:      "Tonits has reviewed your match. Open it to see the final result.",
 			ActionURL: matchURL, RecipientKind: notificationRecipientMatch, Data: matchData,
 			Disposition: notificationDispositionProjected,
 		}},
@@ -125,7 +125,7 @@ func TestNotificationDefinitionMapsResultVerificationEvents(t *testing.T) {
 		}},
 		{"player.strike_recorded", testNotificationUserID, strikePayload, notificationDefinition{
 			Category: "account", PreferenceKey: "result_push", Title: "Conduct strike recorded",
-			Body:          "Gamics confirmed a false result report on your account. Repeated strikes block new registrations.",
+			Body:          "Tonits confirmed a false result report on your account. Repeated strikes block new registrations.",
 			RecipientKind: notificationRecipientPayloadUser, RecipientID: testNotificationUserID,
 			Data: map[string]any{"strikeId": testNotificationStrikeID}, Disposition: notificationDispositionProjected,
 		}},
@@ -155,7 +155,7 @@ func TestEntryRemovedNotificationExplainsEachReason(t *testing.T) {
 	}{
 		{"response_timeout", "You didn't send your screenshot in time."},
 		{"no_result_reported", "No score was reported before the deadline."},
-		{"platform_review", "Gamics reviewed your match and removed your entry."},
+		{"platform_review", "Tonits reviewed your match and removed your entry."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.reasonCode, func(t *testing.T) {

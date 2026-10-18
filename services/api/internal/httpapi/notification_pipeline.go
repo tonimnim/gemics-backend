@@ -440,11 +440,11 @@ func mapNotificationEvent(event notificationOutboxEvent) notificationDefinition 
 		// Identical for both entries: each sends one screenshot.
 		return matchNotification(base, event.AggregateID, "result", "result_push", "Result rejected", "The submitted result was rejected. Send a screenshot of the Full Time screen before the deadline.")
 	case "result.under_review":
-		return matchNotification(base, event.AggregateID, "result", "result_push", "Result under review", "Gamics is reviewing this match. You'll be notified when a decision is made.")
+		return matchNotification(base, event.AggregateID, "result", "result_push", "Result under review", "Tonits is reviewing this match. You'll be notified when a decision is made.")
 	case "result.review_decided":
 		// Entries the decision removed are no longer match recipients; they are
 		// told through competition.entry_removed instead.
-		return matchNotification(base, event.AggregateID, "result", "result_push", "Review complete", "Gamics has reviewed your match. Open it to see the final result.")
+		return matchNotification(base, event.AggregateID, "result", "result_push", "Review complete", "Tonits has reviewed your match. Open it to see the final result.")
 	case "competition.entry_removed":
 		_, entryOK := payloadUUID(payload, "entryId")
 		matchID, matchOK := payloadUUID(payload, "matchId")
@@ -468,7 +468,7 @@ func mapNotificationEvent(event notificationOutboxEvent) notificationDefinition 
 		}
 		base.Category, base.PreferenceKey = "account", "result_push"
 		base.Title = "Conduct strike recorded"
-		base.Body = "Gamics confirmed a false result report on your account. Repeated strikes block new registrations."
+		base.Body = "Tonits confirmed a false result report on your account. Repeated strikes block new registrations."
 		if event.EventType == "player.strike_revoked" {
 			// A revocation needs no action, and there is no account_push
 			// preference to honour, so it stays in the inbox.
@@ -548,7 +548,7 @@ func entryRemovedNotificationBody(reasonCode json.RawMessage) (string, bool) {
 	case "no_result_reported":
 		return "No score was reported before the deadline.", true
 	case "platform_review":
-		return "Gamics reviewed your match and removed your entry.", true
+		return "Tonits reviewed your match and removed your entry.", true
 	default:
 		return "", false
 	}

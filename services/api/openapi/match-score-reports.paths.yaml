@@ -5,7 +5,7 @@
 #
 # Auth: every operation needs a signed-in player who is a starter or substitute
 # of one of the match's entries. Anyone else, including coaches, organizers and
-# Gamics staff, gets 404 match_not_found, exactly as for a missing match.
+# Tonits staff, gets 404 match_not_found, exactly as for a missing match.
 # Idempotency: every operation requires an Idempotency-Key. Keys are scoped to
 # the caller, the match and the action, so a replay returns the caller's own
 # stored response with Idempotency-Replayed: true.
@@ -130,11 +130,11 @@ paths:
       description: >-
         Allowed while resultVerification.phase is awaiting_screenshots and before screenshotDeadline.
         Each entry sends exactly one of its own processed (ready=true) JPEG or PNG uploads that is not
-        attached to anything else. Once both entries sent theirs, the match goes to the Gamics review
+        attached to anything else. Once both entries sent theirs, the match goes to the Tonits review
         queue, where the screenshot reader reads both. When the window ends, an entry that sent none is
         removed from the tournament and the other advances; if neither sent one, both are removed. An
-        entry whose screenshot is still stuck in Gamics' own processing is never removed; the match goes
-        to Gamics review instead.
+        entry whose screenshot is still stuck in Tonits' own processing is never removed; the match goes
+        to Tonits review instead.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: matchId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -319,7 +319,7 @@ components:
           enum: [agreed_reports, unanswered, platform_review, legacy]
           description: >-
             agreed_reports when the other entry confirmed the submitted result; unanswered when it didn't
-            answer in time, so the submitted result stood; platform_review when Gamics decided; legacy for
+            answer in time, so the submitted result stood; platform_review when Tonits decided; legacy for
             results confirmed before result verification v2.
         confirmedAt: { type: string, format: date-time }
     MatchLifecycle:
@@ -360,7 +360,7 @@ components:
       type: [string, "null"]
       description: >-
         Why a terminal match ended. response_timeout and no_result_reported remove the silent entries
-        from the tournament; platform_review is a Gamics review decision; competition_cancelled is set
+        from the tournament; platform_review is a Tonits review decision; competition_cancelled is set
         when the competition is cancelled. referee is a legacy history value that is never written any
         more.
       enum:

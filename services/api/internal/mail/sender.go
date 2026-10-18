@@ -98,10 +98,10 @@ func (s SMTPSender) SendOTP(ctx context.Context, recipient, code string) error {
 	}
 	message := []byte("From: " + from.String() + "\r\n" +
 		"To: " + to.String() + "\r\n" +
-		"Subject: Your Gamics verification code\r\n" +
+		"Subject: Your Tonits verification code\r\n" +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n\r\n" +
-		"Your Gamics code is " + code + ". It expires soon. If you did not request it, ignore this email.\r\n")
+		"Your Tonits code is " + code + ". It expires soon. If you did not request it, ignore this email.\r\n")
 	if _, err := writer.Write(message); err != nil {
 		_ = writer.Close()
 		return err

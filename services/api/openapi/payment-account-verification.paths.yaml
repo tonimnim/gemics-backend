@@ -168,10 +168,10 @@ paths:
     post:
       operationId: requestGameAccountVerification
       tags: [Game accounts]
-      summary: Request Gamics manual-evidence review of a connected game account.
+      summary: Request Tonits manual-evidence review of a connected game account.
       description: >-
         Requires an Idempotency-Key and one to three private completed evidence
-        uploads. Approval is a Gamics review and does not claim publisher verification.
+        uploads. Approval is a Tonits review and does not claim publisher verification.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -259,7 +259,7 @@ paths:
     post:
       operationId: decideGameAccountVerification
       tags: [Platform operations]
-      summary: Approve or reject a Gamics manual-evidence account review.
+      summary: Approve or reject a Tonits manual-evidence account review.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }

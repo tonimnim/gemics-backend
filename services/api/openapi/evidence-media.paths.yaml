@@ -3,7 +3,7 @@
 # only: HEIC/HEIF must be converted to JPEG first, and video is not accepted.
 # Completion is asynchronous: an upload returns processing until the
 # screenshot worker verifies it, and it can be attached to a final score report
-# only once ready=true. Evidence is visible to its uploader, and to Gamics
+# only once ready=true. Evidence is visible to its uploader, and to Tonits
 # platform reviewers and admins without a conflict of interest in the match;
 # never to opponents or organizers.
 paths:
@@ -107,7 +107,7 @@ paths:
       tags: [Evidence]
       summary: Obtain short-lived private access to a processed screenshot.
       description: >-
-        Evidence is visible to its uploader, and to active Gamics platform reviewers and admins once it
+        Evidence is visible to its uploader, and to active Tonits platform reviewers and admins once it
         is attached to something. A reviewer or admin who plays in, captains an entry in, or belongs to
         the organization of the match a score-report screenshot belongs to reaches it only as its
         uploader. Opponents and organizers never reach another player's evidence; they get the same 404
@@ -283,8 +283,8 @@ components:
         Set when the upload is rejected or failed. Rejected (the file is at fault): checksum_mismatch,
         size_mismatch, size_exceeded, media_type_mismatch, unsupported_image_type, invalid_image,
         unsupported_image_encoding, image_dimensions_exceeded. Failed: upload_missing (the object was
-        never uploaded), verification_unavailable and processing_aborted (Gamics could not verify it; a
-        mismatch response is then escalated to Gamics review instead of removing the player),
+        never uploaded), verification_unavailable and processing_aborted (Tonits could not verify it; a
+        mismatch response is then escalated to Tonits review instead of removing the player),
         video_unsupported (legacy video). legacy_error marks an older unclassified error.
       enum:
         - checksum_mismatch

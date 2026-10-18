@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: Gamics API
+  title: Tonits API
   version: 0.9.0
   description: >-
-    Gamics player, competition, match result verification, Gamics result review, rankings, M-Pesa payments,
+    Tonits player, competition, match result verification, Tonits result review, rankings, M-Pesa payments,
     notification, identity and role-based operations API.
 servers:
   - url: http://localhost:8080
@@ -514,7 +514,7 @@ paths:
         - Players
       summary: Add or change the account email; a code is sent to confirm it.
       description: >-
-        The address is stored only after POST /v1/me/email/verify. A verified email receives Gamics communication
+        The address is stored only after POST /v1/me/email/verify. A verified email receives Tonits communication
         and is the only way to reset a forgotten password.
       security:
         - bearerAuth: []
@@ -622,7 +622,7 @@ paths:
           description: invalid_phone (missing country code or not a phone number).
         '409':
           $ref: '#/components/responses/Error'
-          description: phone_taken (linked to another account; Gamics support can help the owner).
+          description: phone_taken (linked to another account; Tonits support can help the owner).
     delete:
       operationId: deletePhone
       tags:
@@ -1019,7 +1019,7 @@ paths:
         - Evidence
       summary: Obtain short-lived private access to a processed screenshot.
       description: >-
-        Evidence is visible to its uploader, and to active Gamics platform reviewers and admins once it
+        Evidence is visible to its uploader, and to active Tonits platform reviewers and admins once it
         is attached to something. A reviewer or admin who plays in, captains an entry in, or belongs to
         the organization of the match a score-report screenshot belongs to reaches it only as its uploader.
         Opponents and organizers never reach another player's evidence; they get the same 404 as for a
@@ -1303,10 +1303,10 @@ paths:
       description: >-
         Allowed while resultVerification.phase is awaiting_screenshots and before screenshotDeadline. Each
         entry sends exactly one of its own processed (ready=true) JPEG or PNG uploads that is not attached
-        to anything else. Once both entries sent theirs, the match goes to the Gamics review queue, where
+        to anything else. Once both entries sent theirs, the match goes to the Tonits review queue, where
         the screenshot reader reads both. When the window ends, an entry that sent none is removed from the
         tournament and the other advances; if neither sent one, both are removed. An entry whose screenshot
-        is still stuck in Gamics' own processing is never removed; the match goes to Gamics review instead.
+        is still stuck in Tonits' own processing is never removed; the match goes to Tonits review instead.
       security:
         - bearerAuth: []
       parameters:
@@ -2071,7 +2071,7 @@ paths:
       summary: Add a member by public player handle.
       description: >-
         Requires member.manage (owner). Members are resolved by handle rather than email so this route cannot be used to
-        test whether an email address has a Gamics account. An unknown handle returns 404.
+        test whether an email address has a Tonits account. An unknown handle returns 404.
       security:
         - bearerAuth: []
       parameters:
@@ -2414,7 +2414,7 @@ paths:
         requires a generated bracket (409 bracket_not_generated); completing requires every match to be
         finished, forfeited or cancelled. Cancelling a competition also cancels every match that is not
         finished yet (completionReason competition_cancelled), settles open result verifications and closes
-        queued Gamics reviews, in the same transaction. Nobody is removed from the tournament, no rating
+        queued Tonits reviews, in the same transaction. Nobody is removed from the tournament, no rating
         changes and no strike is recorded.
       security:
         - bearerAuth: []
@@ -3344,7 +3344,7 @@ paths:
         - Staff
       summary: The signed-in staff member, their role and permissions.
       description: >-
-        Staff sign in with an ordinary Gamics account (Konami ID and password). A player without a staff role gets
+        Staff sign in with an ordinary Tonits account (Konami ID and password). A player without a staff role gets
         403 platform_access_denied. gamicsOrganizationId is the organization staff with competition.manage run
         competitions under, through the organization competition endpoints.
       security:
@@ -4069,9 +4069,9 @@ paths:
       operationId: requestGameAccountVerification
       tags:
         - Game accounts
-      summary: Request Gamics manual-evidence review of a connected game account.
+      summary: Request Tonits manual-evidence review of a connected game account.
       description: >-
-        Requires an Idempotency-Key and one to three private completed evidence uploads. Approval is a Gamics review and
+        Requires an Idempotency-Key and one to three private completed evidence uploads. Approval is a Tonits review and
         does not claim publisher verification.
       security:
         - bearerAuth: []
@@ -4239,7 +4239,7 @@ paths:
       operationId: decideGameAccountVerification
       tags:
         - Platform operations
-      summary: Approve or reject a Gamics manual-evidence account review.
+      summary: Approve or reject a Tonits manual-evidence account review.
       security:
         - bearerAuth: []
       parameters:
@@ -4773,7 +4773,7 @@ paths:
       operationId: listResultReviews
       tags:
         - Platform result review
-      summary: List a signed, operator-bound page of the Gamics result review queue.
+      summary: List a signed, operator-bound page of the Tonits result review queue.
       description: >-
         queued reviews are served oldest first; decided and closed reviews newest first. Reviews of matches
         the operator plays in, captains in or organizes are silently omitted.
@@ -4885,7 +4885,7 @@ paths:
       summary: Decide a queued review and settle the match.
       description: >-
         accept_home or accept_away confirms that entry's current claim (its final report, or its initial
-        report when it has none); corrected_score confirms a score Gamics sets; all three apply progression
+        report when it has none); corrected_score confirms a score Tonits sets; all three apply progression
         and ratings. remove_both cancels the match and removes both entries from the tournament without
         touching ratings. strikeUserIds may name only the reporter of a current claim that this decision
         rejects; each strike counts towards the registration ban until an admin revokes it. The decision
@@ -5864,7 +5864,7 @@ components:
           type: string
           description: >-
             participant_confirmation means one player submits the result and the other confirms or rejects
-            it, with Gamics review of both players' screenshots after a rejection.
+            it, with Tonits review of both players' screenshots after a rejection.
           enum:
             - participant_confirmation
             - publisher_api
@@ -6064,7 +6064,7 @@ components:
               description: How the account was verified; null while it is not verified.
             publisherVerified:
               type: boolean
-              description: True only when verification came from an integrated publisher API; a Gamics evidence review remains false.
+              description: True only when verification came from an integrated publisher API; a Tonits evidence review remains false.
             verifiedAt:
               type:
                 - string
@@ -6737,7 +6737,7 @@ components:
             - platform_review
           description: >-
             response_timeout: the entry sent no screenshot after a rejection; no_result_reported: nobody
-            submitted a result before resultDueAt; platform_review: a Gamics review decision.
+            submitted a result before resultDueAt; platform_review: a Tonits review decision.
         removedAt:
           type: string
           format: date-time
@@ -6773,7 +6773,7 @@ components:
             - legacy
           description: >-
             agreed_reports when the other entry confirmed the submitted result; unanswered when it didn't
-            answer in time, so the submitted result stood; platform_review when Gamics decided; legacy for
+            answer in time, so the submitted result stood; platform_review when Tonits decided; legacy for
             results confirmed before result verification v2.
         confirmedAt:
           type: string
@@ -6784,7 +6784,7 @@ components:
         - 'null'
       description: >-
         Why a terminal match ended. response_timeout and no_result_reported remove the silent entries from
-        the tournament; platform_review is a Gamics review decision; competition_cancelled is set when the
+        the tournament; platform_review is a Tonits review decision; competition_cancelled is set when the
         competition is cancelled. referee is a legacy history value that is never written any more.
       enum:
         - played
@@ -6882,7 +6882,7 @@ components:
         Set when the upload is rejected or failed. Rejected (the file is at fault): checksum_mismatch,
         size_mismatch, size_exceeded, media_type_mismatch, unsupported_image_type, invalid_image, unsupported_image_encoding,
         image_dimensions_exceeded. Failed: upload_missing (the object was never uploaded), verification_unavailable
-        and processing_aborted (Gamics could not verify it; a mismatch response is then escalated to Gamics
+        and processing_aborted (Tonits could not verify it; a mismatch response is then escalated to Tonits
         review instead of removing the player), video_unsupported (legacy video). legacy_error marks an
         older unclassified error.
       enum:
@@ -7188,7 +7188,7 @@ components:
             - null
         publisherVerified:
           type: boolean
-          description: True only when verification came from an integrated publisher API; a Gamics evidence review remains false.
+          description: True only when verification came from an integrated publisher API; a Tonits evidence review remains false.
     PublicPlayerProfile:
       type: object
       required:
@@ -9527,7 +9527,7 @@ components:
       type: string
       description: >-
         reports_differ when both entries responded to a mismatch and still disagree; evidence_unavailable
-        when the response window ended while a non-responder's screenshot was still stuck in Gamics' own
+        when the response window ended while a non-responder's screenshot was still stuck in Tonits' own
         processing, so nobody was removed. Never sent to players.
       enum:
         - reports_differ
@@ -9660,7 +9660,7 @@ components:
     StaffScoreReportView:
       type: object
       additionalProperties: false
-      description: One entry's claim as Gamics staff see it. Players never receive this view.
+      description: One entry's claim as Tonits staff see it. Players never receive this view.
       required:
         - id
         - reportedBy
@@ -10132,7 +10132,7 @@ components:
       type: object
       additionalProperties: false
       description: >-
-        A conduct strike recorded by a Gamics review against the reporter of a rejected claim. Active
+        A conduct strike recorded by a Tonits review against the reporter of a rejected claim. Active
         strikes count towards the registration ban.
       required:
         - id

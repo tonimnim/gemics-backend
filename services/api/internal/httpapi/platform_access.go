@@ -75,7 +75,7 @@ func (s *Server) platformRoute(permission platformPermission, next http.HandlerF
 			return
 		}
 		if !allowed {
-			writeError(w, http.StatusForbidden, "platform_access_denied", "This operation requires Gamics staff access.")
+			writeError(w, http.StatusForbidden, "platform_access_denied", "This operation requires Tonits staff access.")
 			return
 		}
 		next.ServeHTTP(w, r)
