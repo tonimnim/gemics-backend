@@ -55,6 +55,7 @@ type registrationSession struct {
 		Email         *string `json:"email"`
 		EmailVerified bool    `json:"emailVerified"`
 		PhoneNumber   *string `json:"phoneNumber"`
+		CountryCode   string  `json:"countryCode"`
 	} `json:"player"`
 }
 
@@ -328,4 +329,44 @@ func TestIntegrationRecoveryCodeResetsAForgottenPassword(t *testing.T) {
 		h.expect(reset("0000-0000-0000-0000-0000", "fourth secret pass"), http.StatusUnauthorized, "invalid_recovery_code")
 	}
 	h.expect(reset("0000-0000-0000-0000-0000", "fourth secret pass"), http.StatusTooManyRequests, "rate_limited")
+}
+
+// A country picked on the sign-up form is the player's chosen country from
+// the start, so a phone number saved later does not replace it.
+func TestIntegrationRegisterWithChosenCountry(t *testing.T) {
+	h := newRegistrationHarness(t)
+	suffix := strings.ToLower(rand.Text())[:6]
+	register := func(username, konamiID, extra string) *httptest.ResponseRecorder {
+		return h.call(h.server.register, http.MethodPost, "/v1/auth/register",
+			`{"username":"`+username+`","konamiId":"`+konamiID+`","password":"long enough secret"`+extra+`}`, "")
+	}
+
+	chosen := h.session(register("India_"+suffix, "INDI-"+suffix+"-AAAA", `,"countryCode":" in "`), http.StatusCreated)
+	if chosen.Player.CountryCode != "IN" {
+		t.Fatalf("countryCode = %q, want IN", chosen.Player.CountryCode)
+	}
+	var chosenAt *time.Time
+	if err := h.server.db.Writer.QueryRow(t.Context(), `SELECT country_chosen_at FROM users WHERE id=$1`,
+		chosen.Player.ID).Scan(&chosenAt); err != nil {
+		t.Fatal(err)
+	}
+	if chosenAt == nil {
+		t.Fatal("a country given at sign-up must be recorded as chosen")
+	}
+
+	// Without a country the default stays, and is not marked as chosen.
+	plain := h.session(register("Plain_"+suffix, "PLAI-"+suffix+"-BBBB", ""), http.StatusCreated)
+	if plain.Player.CountryCode != "KE" {
+		t.Fatalf("default countryCode = %q, want KE", plain.Player.CountryCode)
+	}
+	if err := h.server.db.Writer.QueryRow(t.Context(), `SELECT country_chosen_at FROM users WHERE id=$1`,
+		plain.Player.ID).Scan(&chosenAt); err != nil {
+		t.Fatal(err)
+	}
+	if chosenAt != nil {
+		t.Fatal("the default country must not be recorded as chosen")
+	}
+
+	h.expect(register("Wrong_"+suffix, "WRON-"+suffix+"-CCCC", `,"countryCode":"Kenya"`),
+		http.StatusBadRequest, "invalid_country")
 }

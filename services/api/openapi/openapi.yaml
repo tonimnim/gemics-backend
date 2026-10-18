@@ -99,6 +99,13 @@ paths:
                 deviceName:
                   type: string
                   maxLength: 120
+                countryCode:
+                  type: string
+                  pattern: ^[A-Za-z]{2}$
+                  description: >-
+                    Optional ISO 3166-1 alpha-2 code from the sign-up form. It is recorded as the player's chosen
+                    country, as if set with PATCH /v1/me, so a phone number saved later does not replace it. Without
+                    it the country starts as KE.
       responses:
         '201':
           description: Registered and signed in, with the player's first recovery code.
@@ -108,7 +115,7 @@ paths:
                 $ref: '#/components/schemas/AuthSessionWithRecoveryCode'
         '400':
           $ref: '#/components/responses/Error'
-          description: invalid_username, invalid_konami_id, invalid_password, weak_password, invalid_device_name.
+          description: invalid_username, invalid_konami_id, invalid_password, weak_password, invalid_device_name, invalid_country.
         '409':
           $ref: '#/components/responses/Error'
           description: username_taken; konami_id_taken (the Konami ID already has an account, so sign in instead).

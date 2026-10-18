@@ -117,7 +117,7 @@ func TestRegistrationWritesTheWholeAccountInOneTransaction(t *testing.T) {
 		"s.writeSessionResponseWith(w, r, http.StatusCreated,",
 		`map[string]any{"recoveryCode": recoveryCode}`,
 		"func createRegisteredPlayer(",
-		"INSERT INTO users(display_name,password_hash,password_changed_at,recovery_code_hash,recovery_code_created_at,registration_ip,status)",
+		"INSERT INTO users(display_name,password_hash,password_changed_at,recovery_code_hash,recovery_code_created_at,registration_ip,status,country_code,country_chosen_at)",
 		"INSERT INTO player_profiles(user_id,handle)",
 		"INSERT INTO game_accounts(user_id,game_id,in_game_name,publisher_player_id)",
 		"INSERT INTO legal_acceptances")

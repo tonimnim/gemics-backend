@@ -36,6 +36,9 @@ type registerRequest struct {
 	KonamiID   string `json:"konamiId"`
 	Password   string `json:"password"`
 	DeviceName string `json:"deviceName"`
+	// CountryCode is optional. When given it is the player's chosen country,
+	// exactly as if set later with PATCH /v1/me.
+	CountryCode *string `json:"countryCode"`
 }
 
 type loginRequest struct {
@@ -107,6 +110,15 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_device_name", "Device name cannot exceed 120 characters.")
 		return
 	}
+	var countryCode *string
+	if input.CountryCode != nil {
+		value := strings.ToUpper(strings.TrimSpace(*input.CountryCode))
+		if !countryPattern.MatchString(value) {
+			writeError(w, http.StatusBadRequest, "invalid_country", "Country code must be a two-letter ISO code.")
+			return
+		}
+		countryCode = &value
+	}
 	ip := s.clientIP(r)
 	if !s.allowRegistration(r.Context(), ip) {
 		w.Header().Set("Retry-After", retryAfterSeconds(s.config.RegistrationWindow))
@@ -129,7 +141,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context()) //nolint:errcheck
-	userID, err := createRegisteredPlayer(r.Context(), tx, username, konamiID, passwordHash, recoveryHash, ip, r.UserAgent())
+	userID, err := createRegisteredPlayer(r.Context(), tx, username, konamiID, countryCode, passwordHash, recoveryHash, ip, r.UserAgent())
 	switch {
 	case uniqueViolationOn(err, "player_profiles_handle_unique"):
 		writeError(w, http.StatusConflict, "username_taken", "That username is already taken.")
@@ -154,13 +166,15 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 
 // createRegisteredPlayer writes the whole account in one transaction: the
 // username is the handle and display name, the Konami ID is the eFootball
-// game account, the recovery code's hash is stored, and the current terms and
-// privacy notice, presented on the registration screen, are recorded as
-// accepted.
-func createRegisteredPlayer(ctx context.Context, tx pgx.Tx, username, konamiID, passwordHash string, recoveryHash []byte, ip, userAgent string) (string, error) {
+// game account, a given country is recorded as chosen (so a phone number
+// saved later does not replace it), the recovery code's hash is stored, and
+// the current terms and privacy notice, presented on the registration screen,
+// are recorded as accepted.
+func createRegisteredPlayer(ctx context.Context, tx pgx.Tx, username, konamiID string, countryCode *string, passwordHash string, recoveryHash []byte, ip, userAgent string) (string, error) {
 	var userID string
-	if err := tx.QueryRow(ctx, `INSERT INTO users(display_name,password_hash,password_changed_at,recovery_code_hash,recovery_code_created_at,registration_ip,status)
-		VALUES ($1,$2,now(),$3,now(),$4,'active') RETURNING id`, username, passwordHash, recoveryHash, ip).Scan(&userID); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO users(display_name,password_hash,password_changed_at,recovery_code_hash,recovery_code_created_at,registration_ip,status,country_code,country_chosen_at)
+		VALUES ($1,$2,now(),$3,now(),$4,'active',COALESCE($5::text,'KE'),CASE WHEN $5::text IS NULL THEN NULL ELSE now() END)
+		RETURNING id`, username, passwordHash, recoveryHash, ip, countryCode).Scan(&userID); err != nil {
 		return "", err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO player_profiles(user_id,handle) VALUES ($1,$2)`, userID, username); err != nil {

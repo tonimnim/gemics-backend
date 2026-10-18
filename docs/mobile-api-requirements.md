@@ -32,7 +32,9 @@ Registration asks for exactly three things, and nothing else:
    ID. It becomes the player's eFootball game account.
 3. **Password** (8-128 characters, not the username or Konami ID).
 
-- `POST /v1/auth/register` with `{username, konamiId, password}` returns `201` and an
+- `POST /v1/auth/register` with `{username, konamiId, password}`, plus an optional
+  `countryCode` from the sign-up form's country picker (recorded as the player's chosen
+  country; `400 invalid_country` if malformed), returns `201` and an
   `AuthSession` plus a `recoveryCode`. The registration screen must show the current
   terms and privacy notice (`GET /v1/legal/documents/current`): registering records
   them as accepted. `409 username_taken` and `409 konami_id_taken` (offer sign-in) are
