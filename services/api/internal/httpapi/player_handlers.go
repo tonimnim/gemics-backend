@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -51,6 +52,11 @@ type rankingsOptions struct {
 	CountryCode string
 	Limit       int
 	Cursor      *publicCursor
+	// Around is set by around=me: return Span places either side of the
+	// signed-in caller (AroundUserID) instead of a page from the top.
+	Around       bool
+	Span         int
+	AroundUserID string
 }
 
 type playersOptions struct {
@@ -78,6 +84,17 @@ func (s *Server) rankings(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.requireDatabase(w) {
 		return
+	}
+	if options.Around {
+		viewerID, ok := s.optionalViewer(w, r)
+		if !ok {
+			return
+		}
+		if viewerID == "" {
+			writeError(w, http.StatusUnauthorized, "authentication_required", "Sign in to see your place on the ladder.")
+			return
+		}
+		options.AroundUserID = viewerID
 	}
 
 	var result rankingsResponse
@@ -132,10 +149,15 @@ func (s *Server) publicPlayer(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
 		return
 	}
+	// Players always see their own profile and history, public or not.
+	viewerID, ok := s.optionalViewer(w, r)
+	if !ok {
+		return
+	}
 
 	var result publicPlayerProfile
 	err := s.withPublicRead(r.Context(), "get_public_player", func(reader rowsQueryer) error {
-		loaded, queryErr := s.queryPublicPlayer(r.Context(), reader, playerID)
+		loaded, queryErr := s.queryPublicPlayer(r.Context(), reader, playerID, viewerID)
 		result = loaded
 		return queryErr
 	})
@@ -166,10 +188,15 @@ func (s *Server) publicPlayerMatches(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
 		return
 	}
+	// Players always see their own profile and history, public or not.
+	viewerID, ok := s.optionalViewer(w, r)
+	if !ok {
+		return
+	}
 
 	var result publicMatchesResponse
 	err = s.withPublicRead(r.Context(), "list_public_player_matches", func(reader rowsQueryer) error {
-		loaded, queryErr := s.queryPublicPlayerMatches(r.Context(), reader, playerID, options, now)
+		loaded, queryErr := s.queryPublicPlayerMatches(r.Context(), reader, playerID, viewerID, options, now)
 		result = loaded
 		return queryErr
 	})
@@ -200,10 +227,15 @@ func (s *Server) publicPlayerCompetitions(w http.ResponseWriter, r *http.Request
 	if !s.requireDatabase(w) {
 		return
 	}
+	// Players always see their own profile and history, public or not.
+	viewerID, ok := s.optionalViewer(w, r)
+	if !ok {
+		return
+	}
 
 	var result publicCompetitionsResponse
 	err = s.withPublicRead(r.Context(), "list_public_player_competitions", func(reader rowsQueryer) error {
-		loaded, queryErr := s.queryPublicPlayerCompetitions(r.Context(), reader, playerID, options, now)
+		loaded, queryErr := s.queryPublicPlayerCompetitions(r.Context(), reader, playerID, viewerID, options, now)
 		result = loaded
 		return queryErr
 	})
@@ -252,6 +284,24 @@ func (s *Server) parseRankingsOptions(r *http.Request, now time.Time) (rankingsO
 		return rankingsOptions{}, err
 	}
 	options.Limit = limit
+	if around := strings.TrimSpace(query.Get("around")); around != "" {
+		if around != "me" {
+			return rankingsOptions{}, errors.New("around must be me")
+		}
+		if strings.TrimSpace(query.Get("cursor")) != "" {
+			return rankingsOptions{}, errors.New("around cannot be combined with a cursor")
+		}
+		options.Around, options.Span = true, 2
+		if raw := strings.TrimSpace(query.Get("span")); raw != "" {
+			span, convErr := strconv.Atoi(raw)
+			if convErr != nil || span < 1 || span > 10 {
+				return rankingsOptions{}, errors.New("span must be between 1 and 10")
+			}
+			options.Span = span
+		}
+	} else if strings.TrimSpace(query.Get("span")) != "" {
+		return rankingsOptions{}, errors.New("span is only valid with around=me")
+	}
 	if rawCursor := strings.TrimSpace(query.Get("cursor")); rawCursor != "" {
 		cursor, decodeErr := decodePublicCursor(rawCursor, "rankings", s.config.AccessTokenSecret, now)
 		if decodeErr != nil {

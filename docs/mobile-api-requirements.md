@@ -221,6 +221,10 @@ Konami verification.
 
 - `GET /v1/games`
 - `GET /v1/rankings` with game, country/global scope, bounded limit, and opaque cursor.
+  With `around=me` (signed in) it returns the `span` places either side of the caller
+  (default 2, at most 10) instead of a page from the top: one call for a "your place on
+  the ladder" slice. No cursor; an empty `data` means the caller isn't ranked in that
+  snapshot. Only players with a public profile and a rated match are ranked.
 - `GET /v1/players` with search text, game, country, and opaque cursor.
 - `GET /v1/players/{playerId}`
 - `GET /v1/players/{playerId}/avatar`
@@ -229,6 +233,11 @@ Konami verification.
 
 All collections use bounded keyset cursors. A hidden, suspended, or deleted player is
 returned as `404`; the app must not try to distinguish those states.
+
+Profiles start private, so **send the bearer token when reading the signed-in player's
+own** profile, matches, competitions or rating history: the owner always gets their own,
+public or not. Anyone else reading a private profile gets `404`. A token that is sent but
+invalid answers `401`, so refresh it as for any other call.
 
 ### 6. Competition entry
 

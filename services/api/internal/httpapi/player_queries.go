@@ -122,6 +122,22 @@ func (s *Server) queryRankings(ctx context.Context, reader rowsQueryer, options 
 	if options.Cursor != nil {
 		lastRank = options.Cursor.Rank
 	}
+	limit := options.Limit + 1
+	if options.AroundUserID != "" {
+		// The caller's place in this snapshot; an unranked caller gets no rows.
+		var myRank int
+		err := reader.QueryRow(ctx, `SELECT rank FROM leaderboard_snapshot_rows WHERE snapshot_id=$1 AND user_id=$2`,
+			snapshotID, options.AroundUserID).Scan(&myRank)
+		if errors.Is(err, pgx.ErrNoRows) {
+			result.SnapshotAt = timePointer(snapshotAt)
+			return result, nil
+		}
+		if err != nil {
+			return result, err
+		}
+		lastRank = max(0, myRank-options.Span-1)
+		limit = myRank + options.Span - lastRank
+	}
 	rows, err := reader.Query(ctx, `SELECT row.rank,row.user_id,profile.handle,player.display_name,
 		(profile.avatar_object_key IS NOT NULL),player.country_code,row.rating,row.matches_played,row.rank_movement
         FROM leaderboard_snapshot_rows row
@@ -129,7 +145,7 @@ func (s *Server) queryRankings(ctx context.Context, reader rowsQueryer, options 
         JOIN player_profiles profile ON profile.user_id=player.id AND profile.discoverable=true
         WHERE row.snapshot_id=$1 AND row.rank>$2
         ORDER BY row.rank,row.user_id
-        LIMIT $3`, snapshotID, lastRank, options.Limit+1)
+        LIMIT $3`, snapshotID, lastRank, limit)
 	if err != nil {
 		return result, err
 	}
@@ -151,7 +167,7 @@ func (s *Server) queryRankings(ctx context.Context, reader rowsQueryer, options 
 	if err := rows.Err(); err != nil {
 		return result, err
 	}
-	hasMore := len(result.Data) > options.Limit
+	hasMore := options.AroundUserID == "" && len(result.Data) > options.Limit
 	if hasMore {
 		result.Data = result.Data[:options.Limit]
 		last := result.Data[len(result.Data)-1]
@@ -255,14 +271,16 @@ func (s *Server) queryPlayers(ctx context.Context, reader rowsQueryer, options p
 	return result, nil
 }
 
-func (s *Server) queryPublicPlayer(ctx context.Context, reader rowsQueryer, playerID string) (publicPlayerProfile, error) {
+// queryPublicPlayer returns a discoverable player's profile, or any active
+// player's own profile when viewerID is theirs.
+func (s *Server) queryPublicPlayer(ctx context.Context, reader rowsQueryer, playerID, viewerID string) (publicPlayerProfile, error) {
 	var result publicPlayerProfile
 	var hasAvatar bool
 	err := reader.QueryRow(ctx, `SELECT player.id,profile.handle,player.display_name,profile.bio,
 		(profile.avatar_object_key IS NOT NULL),player.country_code,player.created_at
       FROM users player
       JOIN player_profiles profile ON profile.user_id=player.id
-      WHERE player.id=$1 AND player.status='active' AND profile.discoverable=true`, playerID).
+      WHERE player.id=$1 AND player.status='active' AND (profile.discoverable=true OR player.id::text=$2)`, playerID, viewerID).
 		Scan(&result.PlayerID, &result.Handle, &result.DisplayName, &result.Bio, &hasAvatar, &result.CountryCode, &result.JoinedAt)
 	if err != nil {
 		return publicPlayerProfile{}, err

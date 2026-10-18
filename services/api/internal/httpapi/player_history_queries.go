@@ -69,9 +69,9 @@ type publicCompetitionsResponse struct {
 	SnapshotAt time.Time                      `json:"snapshotAt"`
 }
 
-func (s *Server) queryPublicPlayerMatches(ctx context.Context, reader rowsQueryer, playerID string, options historyOptions, now time.Time) (publicMatchesResponse, error) {
+func (s *Server) queryPublicPlayerMatches(ctx context.Context, reader rowsQueryer, playerID, viewerID string, options historyOptions, now time.Time) (publicMatchesResponse, error) {
 	result := publicMatchesResponse{Data: []publicMatchHistoryItem{}, Page: publicPage{}, SnapshotAt: options.SnapshotAt}
-	if err := requireDiscoverablePlayer(ctx, reader, playerID); err != nil {
+	if err := requireVisiblePlayer(ctx, reader, playerID, viewerID); err != nil {
 		return result, err
 	}
 	var lastTime any
@@ -194,9 +194,9 @@ func (s *Server) queryPublicPlayerMatches(ctx context.Context, reader rowsQuerye
 	return result, nil
 }
 
-func (s *Server) queryPublicPlayerCompetitions(ctx context.Context, reader rowsQueryer, playerID string, options historyOptions, now time.Time) (publicCompetitionsResponse, error) {
+func (s *Server) queryPublicPlayerCompetitions(ctx context.Context, reader rowsQueryer, playerID, viewerID string, options historyOptions, now time.Time) (publicCompetitionsResponse, error) {
 	result := publicCompetitionsResponse{Data: []publicCompetitionHistoryItem{}, Page: publicPage{}, SnapshotAt: options.SnapshotAt}
-	if err := requireDiscoverablePlayer(ctx, reader, playerID); err != nil {
+	if err := requireVisiblePlayer(ctx, reader, playerID, viewerID); err != nil {
 		return result, err
 	}
 	var lastTime any
@@ -283,13 +283,15 @@ func (s *Server) queryPublicPlayerCompetitions(ctx context.Context, reader rowsQ
 	return result, nil
 }
 
-func requireDiscoverablePlayer(ctx context.Context, reader rowsQueryer, playerID string) error {
+// requireVisiblePlayer passes for an active player who is discoverable, or
+// whose own ID viewerID is: players always see their own history.
+func requireVisiblePlayer(ctx context.Context, reader rowsQueryer, playerID, viewerID string) error {
 	var exists bool
 	err := reader.QueryRow(ctx, `SELECT EXISTS(
       SELECT 1 FROM users player
       JOIN player_profiles profile ON profile.user_id=player.id
-      WHERE player.id=$1 AND player.status='active' AND profile.discoverable=true
-    )`, playerID).Scan(&exists)
+      WHERE player.id=$1 AND player.status='active' AND (profile.discoverable=true OR player.id::text=$2)
+    )`, playerID, viewerID).Scan(&exists)
 	if err != nil {
 		return err
 	}

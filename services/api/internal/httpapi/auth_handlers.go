@@ -156,33 +156,61 @@ func (s *Server) writeSessionResponseWith(w http.ResponseWriter, r *http.Request
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := strings.TrimSpace(r.Header.Get("Authorization"))
-		if !strings.HasPrefix(header, "Bearer ") {
+		current, presented, ok := s.bearerIdentity(w, r)
+		if !ok {
+			return
+		}
+		if !presented {
 			writeError(w, http.StatusUnauthorized, "authentication_required", "Sign in to continue.")
 			return
 		}
-		claims, err := s.tokens.Parse(strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")))
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid_access_token", "The access token is invalid or expired.")
-			return
-		}
-		active, sessionErr := s.sessionActive(r.Context(), claims.UserID, claims.SessionID, time.Unix(claims.ExpiresAt, 0))
-		if sessionErr != nil {
-			writeError(w, http.StatusServiceUnavailable, "session_check_unavailable", "Unable to validate the session.")
-			return
-		}
-		if !active {
-			writeError(w, http.StatusUnauthorized, "invalid_session", "The session has been logged out.")
-			return
-		}
-		current := identity{UserID: claims.UserID, SessionID: claims.SessionID, ExpiresAt: time.Unix(claims.ExpiresAt, 0)}
 		// Marked before the handler runs, so a read racing this write already
 		// goes to the writer.
 		if isWrite(r.Method) {
-			s.markRecentWrite(r.Context(), claims.UserID)
+			s.markRecentWrite(r.Context(), current.UserID)
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityContextKey{}, current)))
 	})
+}
+
+// optionalViewer identifies the caller on a public route. It answers "" when
+// the request carries no token, the caller's ID for a valid one, and writes
+// the same 401 as requireAuth for a token that is present but unusable, so an
+// app with an expired token refreshes instead of being treated as anonymous.
+func (s *Server) optionalViewer(w http.ResponseWriter, r *http.Request) (string, bool) {
+	current, presented, ok := s.bearerIdentity(w, r)
+	if !ok {
+		return "", false
+	}
+	if !presented {
+		return "", true
+	}
+	return current.UserID, true
+}
+
+// bearerIdentity checks the request's bearer token and its session. presented
+// is false when there is no bearer token at all. When the token is unusable it
+// writes the error and returns ok false.
+func (s *Server) bearerIdentity(w http.ResponseWriter, r *http.Request) (current identity, presented, ok bool) {
+	header := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(header, "Bearer ") {
+		return identity{}, false, true
+	}
+	claims, err := s.tokens.Parse(strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")))
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_access_token", "The access token is invalid or expired.")
+		return identity{}, true, false
+	}
+	active, sessionErr := s.sessionActive(r.Context(), claims.UserID, claims.SessionID, time.Unix(claims.ExpiresAt, 0))
+	if sessionErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "session_check_unavailable", "Unable to validate the session.")
+		return identity{}, true, false
+	}
+	if !active {
+		writeError(w, http.StatusUnauthorized, "invalid_session", "The session has been logged out.")
+		return identity{}, true, false
+	}
+	return identity{UserID: claims.UserID, SessionID: claims.SessionID, ExpiresAt: time.Unix(claims.ExpiresAt, 0)}, true, true
 }
 
 func identityFromContext(ctx context.Context) identity {

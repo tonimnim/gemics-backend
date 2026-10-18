@@ -1367,6 +1367,13 @@ paths:
       operationId: listRankings
       tags:
         - Players
+      description: >-
+        A page of the latest leaderboard snapshot from the top, or with around=me the span places either side of
+        the signed-in caller. around=me needs a bearer token, takes no cursor, and returns an empty data list when
+        the caller is not ranked in that snapshot (only discoverable players with a rated match are ranked).
+      security:
+        - {}
+        - bearerAuth: []
       parameters:
         - name: gameId
           in: query
@@ -1399,6 +1406,21 @@ paths:
           schema:
             type: string
             maxLength: 2048
+        - name: around
+          in: query
+          description: me, to center the page on the signed-in caller.
+          schema:
+            type: string
+            enum:
+              - me
+        - name: span
+          in: query
+          description: With around=me, the places shown on each side of the caller.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 2
       responses:
         '200':
           description: One immutable leaderboard-snapshot page. An empty system can return snapshotAt null.
@@ -1407,7 +1429,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/RankingPage'
         '400':
-          description: Invalid filters or a cursor used with different filters.
+          description: Invalid filters, a cursor used with different filters, or around with a cursor.
+        '401':
+          description: around=me without a usable bearer token (authentication_required, invalid_access_token).
         '410':
           description: Cursor expired or its retained snapshot no longer exists.
         '503':
@@ -1464,6 +1488,12 @@ paths:
       operationId: getPublicPlayer
       tags:
         - Players
+      description: >-
+        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
+        public, so send the bearer token when reading your own.
+      security:
+        - {}
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -1479,7 +1509,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublicPlayerProfile'
         '404':
-          description: Player is absent, private, suspended or deleted.
+          description: Player is absent, private (and not the caller), suspended or deleted.
+        '401':
+          description: A bearer token was sent but is invalid or its session ended.
         '503':
           description: Public read dependencies are unavailable.
   /v1/players/{id}/matches:
@@ -1487,6 +1519,12 @@ paths:
       operationId: listPublicPlayerMatches
       tags:
         - Players
+      description: >-
+        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
+        public, so send the bearer token when reading your own.
+      security:
+        - {}
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -1514,7 +1552,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublicMatchPage'
         '404':
-          description: Player is absent, private, suspended or deleted.
+          description: Player is absent, private (and not the caller), suspended or deleted.
+        '401':
+          description: A bearer token was sent but is invalid or its session ended.
         '410':
           description: Cursor expired.
         '503':
@@ -1524,6 +1564,12 @@ paths:
       operationId: listPublicPlayerCompetitions
       tags:
         - Players
+      description: >-
+        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
+        public, so send the bearer token when reading your own.
+      security:
+        - {}
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -1551,7 +1597,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublicCompetitionPage'
         '404':
-          description: Player is absent, private, suspended or deleted.
+          description: Player is absent, private (and not the caller), suspended or deleted.
+        '401':
+          description: A bearer token was sent but is invalid or its session ended.
         '410':
           description: Cursor expired.
         '503':

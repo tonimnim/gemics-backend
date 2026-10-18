@@ -4,19 +4,27 @@ paths:
     get:
       operationId: listRankings
       tags: [Players]
+      description: >-
+        A page of the latest leaderboard snapshot from the top, or with around=me the span places either side of
+        the signed-in caller. around=me needs a bearer token, takes no cursor, and returns an empty data list when
+        the caller is not ranked in that snapshot.
+      security: [{}, { bearerAuth: [] }]
       parameters:
         - { name: gameId, in: query, schema: { type: string, default: efootball-mobile } }
         - { name: scope, in: query, schema: { type: string, enum: [country, global], default: country } }
         - { name: country, in: query, description: Required for country scope; defaults to KE., schema: { type: string, pattern: "^[A-Z]{2}$" } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
         - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
+        - { name: around, in: query, description: "me, to center the page on the signed-in caller.", schema: { type: string, enum: [me] } }
+        - { name: span, in: query, description: "With around=me, the places shown on each side of the caller.", schema: { type: integer, minimum: 1, maximum: 10, default: 2 } }
       responses:
         "200":
           description: One immutable leaderboard-snapshot page. An empty system can return snapshotAt null.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RankingPage" }
-        "400": { description: Invalid filters or a cursor used with different filters. }
+        "400": { description: "Invalid filters, a cursor used with different filters, or around with a cursor." }
+        "401": { description: around=me without a usable bearer token. }
         "410": { description: Cursor expired or its retained snapshot no longer exists. }
         "503": { description: Public read dependencies are unavailable. }
   /v1/players:
@@ -42,6 +50,10 @@ paths:
     get:
       operationId: getPublicPlayer
       tags: [Players]
+      description: >-
+        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
+        public, so send the bearer token when reading your own.
+      security: [{}, { bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -50,12 +62,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicPlayerProfile" }
-        "404": { description: "Player is absent, private, suspended or deleted." }
+        "404": { description: "Player is absent, private (and not the caller), suspended or deleted." }
+        "401": { description: A bearer token was sent but is invalid or its session ended. }
         "503": { description: Public read dependencies are unavailable. }
   /v1/players/{id}/matches:
     get:
       operationId: listPublicPlayerMatches
       tags: [Players]
+      description: >-
+        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
+        public, so send the bearer token when reading your own.
+      security: [{}, { bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
@@ -66,13 +83,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicMatchPage" }
-        "404": { description: "Player is absent, private, suspended or deleted." }
+        "404": { description: "Player is absent, private (and not the caller), suspended or deleted." }
+        "401": { description: A bearer token was sent but is invalid or its session ended. }
         "410": { description: Cursor expired. }
         "503": { description: Public read dependencies are unavailable. }
   /v1/players/{id}/competitions:
     get:
       operationId: listPublicPlayerCompetitions
       tags: [Players]
+      description: >-
+        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
+        public, so send the bearer token when reading your own.
+      security: [{}, { bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
@@ -83,7 +105,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicCompetitionPage" }
-        "404": { description: "Player is absent, private, suspended or deleted." }
+        "404": { description: "Player is absent, private (and not the caller), suspended or deleted." }
+        "401": { description: A bearer token was sent but is invalid or its session ended. }
         "410": { description: Cursor expired. }
         "503": { description: Public read dependencies are unavailable. }
 components:

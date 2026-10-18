@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	gamicsauth "github.com/gamics-io/gamics/services/api/internal/auth"
 	"github.com/gamics-io/gamics/services/api/internal/config"
 )
 
@@ -204,7 +205,7 @@ func TestRecoveryCodeResetCannotBeGuessedOrBurned(t *testing.T) {
 func TestOwnReadsFollowOwnWrites(t *testing.T) {
 	assertFileOrder(t, "auth_handlers.go", "func (s *Server) requireAuth(",
 		"if isWrite(r.Method) {",
-		"s.markRecentWrite(r.Context(), claims.UserID)",
+		"s.markRecentWrite(r.Context(), current.UserID)",
 		"next.ServeHTTP(w, r.WithContext(")
 	assertFileOrder(t, "account_handlers.go", "func (s *Server) listGameAccounts(",
 		"s.queryGameAccounts(r.Context(), s.selfReader(r.Context(), userID), userID)")
@@ -265,5 +266,45 @@ func TestCountryFromPhone(t *testing.T) {
 		if strings.HasPrefix(code, "1") || strings.HasPrefix(code, "7") {
 			t.Errorf("calling code %s overlaps +1 or +7", code)
 		}
+	}
+}
+
+func TestRankingsAroundMeOptions(t *testing.T) {
+	server := &Server{}
+	parse := func(target string) (rankingsOptions, error) {
+		return server.parseRankingsOptions(httptest.NewRequest(http.MethodGet, target, nil), time.Now())
+	}
+	options, err := parse("/v1/rankings?scope=global&around=me")
+	if err != nil || !options.Around || options.Span != 2 {
+		t.Fatalf("around=me = %+v, %v", options, err)
+	}
+	if options, err = parse("/v1/rankings?scope=global&around=me&span=5"); err != nil || options.Span != 5 {
+		t.Fatalf("span=5 = %+v, %v", options, err)
+	}
+	for _, target := range []string{
+		"/v1/rankings?scope=global&around=you",
+		"/v1/rankings?scope=global&around=me&span=0",
+		"/v1/rankings?scope=global&around=me&span=11",
+		"/v1/rankings?scope=global&span=2",
+		"/v1/rankings?scope=global&around=me&cursor=abc",
+	} {
+		if _, err := parse(target); err == nil {
+			t.Errorf("%s was accepted", target)
+		}
+	}
+}
+
+func TestOptionalViewerIsAnonymousWithoutATokenAndStrictWithOne(t *testing.T) {
+	server := &Server{tokens: gamicsauth.NewTokenManager("viewer-test-secret", time.Minute)}
+	recorder := httptest.NewRecorder()
+	if viewer, ok := server.optionalViewer(recorder, httptest.NewRequest(http.MethodGet, "/v1/players/x", nil)); !ok || viewer != "" {
+		t.Fatalf("no token: viewer %q ok %v", viewer, ok)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/players/x", nil)
+	request.Header.Set("Authorization", "Bearer not-a-token")
+	recorder = httptest.NewRecorder()
+	if _, ok := server.optionalViewer(recorder, request); ok || recorder.Code != http.StatusUnauthorized ||
+		!strings.Contains(recorder.Body.String(), "invalid_access_token") {
+		t.Fatalf("bad token: ok %v, %d %s", ok, recorder.Code, recorder.Body)
 	}
 }
