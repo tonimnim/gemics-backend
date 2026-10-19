@@ -777,7 +777,7 @@ func (record matchRecord) response(userID string, now time.Time) matchRoomRespon
 	lifecycle, actions := record.presentation(now, opensAt, closesAt)
 	winnerSide, outcome := record.outcome()
 	revealGameAccounts := record.viewerPlays()
-	settings := resolveMatchSettings(record.GameID, record.StageFormat, record.RulesSnapshot, record.StageConfig)
+	settings := resolveMatchSettings(record.GameID, record.StageFormat, int(record.BestOf), record.RulesSnapshot, record.StageConfig)
 	roundName := fmt.Sprintf("Round %d", record.RoundNumber)
 	if record.StageFormat == "round_robin" {
 		roundName = fmt.Sprintf("Matchday %d", record.RoundNumber)
@@ -1075,10 +1075,15 @@ type matchRuleOverrides struct {
 	MatchVerification       *matchVerificationOverrides `json:"matchVerification"`
 }
 
-func resolveMatchSettings(gameID, stageFormat string, competitionRules, stageConfig []byte) matchSettings {
+func resolveMatchSettings(gameID, stageFormat string, bestOf int, competitionRules, stageConfig []byte) matchSettings {
 	settings := matchSettings{
-		DrawAllowed: stageFormat == "round_robin", Instructions: defaultFriendMatchInstructions(gameID),
+		DrawAllowed:  stageFormat == "round_robin",
+		Instructions: defaultFriendMatchInstructions(gameID, stageFormat, bestOf),
 		Verification: defaultMatchVerificationSettings(),
+	}
+	if bestOf > 1 {
+		// A series has a screenshot for every game to send.
+		settings.Verification.ResponseWindow = defaultSeriesResponseWindow
 	}
 	apply := func(raw []byte) {
 		if len(raw) == 0 {
@@ -1114,7 +1119,20 @@ func validFriendMatchInstructions(instructions []friendMatchInstruction) bool {
 	return true
 }
 
-func defaultFriendMatchInstructions(gameID string) []friendMatchInstruction {
+func defaultFriendMatchInstructions(gameID, stageFormat string, bestOf int) []friendMatchInstruction {
+	if gameID == "efootball-mobile" && bestOf > 1 {
+		instructions := []friendMatchInstruction{
+			{Title: "Wait for both players", Detail: "Start only after both sides show as checked in on Ozone."},
+			{Title: "Create a Friend Match", Detail: "Add your opponent by the eFootball User ID or in-game name on their match card, use the tournament settings and confirm both in-game names before kickoff."},
+			{Title: fmt.Sprintf("Play a best of %d", bestOf), Detail: fmt.Sprintf("Each game won is one point. The first to win %d games wins the match, so stop there.", gamesToWin(bestOf))},
+		}
+		if stageFormat != "round_robin" {
+			instructions = append(instructions, friendMatchInstruction{Title: "Turn penalties on",
+				Detail: "Every game needs a winner. A game level at full time goes to penalties in that game."})
+		}
+		return append(instructions, friendMatchInstruction{Title: "Screenshot every game",
+			Detail: "Take a screenshot of the Full Time screen after each game. You can't go back to it later, and a disputed result needs one for every game."})
+	}
 	if gameID == "efootball-mobile" {
 		return []friendMatchInstruction{
 			{Title: "Wait for both players", Detail: "Start only after both sides show as checked in on Ozone."},
