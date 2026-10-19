@@ -104,6 +104,7 @@ type progressionSource struct {
 	CompletedAt      time.Time
 	HomeScore        *int
 	AwayScore        *int
+	BestOf           int
 	Cause            string
 	ActorUserID      *string
 }
@@ -407,12 +408,12 @@ func lockProgressionSource(ctx context.Context, tx pgx.Tx, matchID string) (prog
 	err := tx.QueryRow(ctx, `SELECT match.id::text,match.competition_id::text,match.stage_id::text,
 		stage.format,stage.config,COALESCE(match.group_key,'main'),match.round_number,match.state,match.version,
 		match.home_entry_id::text,match.away_entry_id::text,match.winner_entry_id::text,
-		match.completion_reason,match.completed_at
+		match.completion_reason,match.completed_at,match.best_of
 		FROM matches match JOIN competition_stages stage ON stage.id=match.stage_id
 		WHERE match.id=$1 FOR UPDATE OF match`, matchID).Scan(
 		&source.ID, &source.CompetitionID, &source.StageID, &source.StageFormat, &configRaw,
 		&source.GroupKey, &source.RoundNumber, &source.State, &source.Version, &source.HomeEntryID, &source.AwayEntryID,
-		&source.WinnerEntryID, &source.CompletionReason, &completedAt)
+		&source.WinnerEntryID, &source.CompletionReason, &completedAt, &source.BestOf)
 	if err != nil {
 		return progressionSource{}, err
 	}

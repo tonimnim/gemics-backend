@@ -20,6 +20,8 @@ type progressionStandingDelta struct {
 	Walkovers    int
 	GoalsFor     int
 	GoalsAgainst int
+	GamesWon     int
+	GamesLost    int
 	Points       int
 }
 
@@ -29,6 +31,9 @@ func roundRobinStandingDeltas(source progressionSource) ([]progressionStandingDe
 	}
 	home := progressionStandingDelta{EntryID: *source.HomeEntryID}
 	away := progressionStandingDelta{EntryID: *source.AwayEntryID}
+	if source.BestOf > 1 {
+		return seriesStandingDeltas(source, home, away)
+	}
 	if source.HomeScore != nil && source.AwayScore != nil {
 		home.GoalsFor, home.GoalsAgainst = *source.HomeScore, *source.AwayScore
 		away.GoalsFor, away.GoalsAgainst = *source.AwayScore, *source.HomeScore
@@ -46,6 +51,44 @@ func roundRobinStandingDeltas(source progressionSource) ([]progressionStandingDe
 		if source.State == "forfeit" {
 			away.Walkovers = 1
 		}
+	default:
+		return nil, fmt.Errorf("%w: a non-draw round-robin result needs a participant winner", errMatchProgressionInvalid)
+	}
+	result := []progressionStandingDelta{home, away}
+	sort.Slice(result, func(i, j int) bool { return result[i].EntryID < result[j].EntryID })
+	return result, nil
+}
+
+// seriesStandingDeltas scores a round-robin series: one point per game won,
+// so the score is the points. A drawn game scores nothing, and a level series
+// is a draw. A walkover counts as winning the games a series needs. A series
+// is reported in games won, so it adds no goals.
+func seriesStandingDeltas(source progressionSource, home, away progressionStandingDelta) ([]progressionStandingDelta, error) {
+	switch {
+	case source.State == "completed":
+		if source.HomeScore == nil || source.AwayScore == nil {
+			return nil, fmt.Errorf("%w: a completed series needs its games won", errMatchProgressionInvalid)
+		}
+		home.GamesWon, home.GamesLost, home.Points = *source.HomeScore, *source.AwayScore, *source.HomeScore
+		away.GamesWon, away.GamesLost, away.Points = *source.AwayScore, *source.HomeScore, *source.AwayScore
+		switch {
+		case source.WinnerEntryID == nil:
+			home.Draws, away.Draws = 1, 1
+		case sameOptionalString(source.WinnerEntryID, source.HomeEntryID):
+			home.Wins, away.Losses = 1, 1
+		case sameOptionalString(source.WinnerEntryID, source.AwayEntryID):
+			away.Wins, home.Losses = 1, 1
+		default:
+			return nil, fmt.Errorf("%w: a series winner must play it", errMatchProgressionInvalid)
+		}
+	case sameOptionalString(source.WinnerEntryID, source.HomeEntryID):
+		need := gamesToWin(source.BestOf)
+		home.Wins, away.Losses, home.Walkovers = 1, 1, 1
+		home.GamesWon, away.GamesLost, home.Points = need, need, need
+	case sameOptionalString(source.WinnerEntryID, source.AwayEntryID):
+		need := gamesToWin(source.BestOf)
+		away.Wins, home.Losses, away.Walkovers = 1, 1, 1
+		away.GamesWon, home.GamesLost, away.Points = need, need, need
 	default:
 		return nil, fmt.Errorf("%w: a non-draw round-robin result needs a participant winner", errMatchProgressionInvalid)
 	}
@@ -73,10 +116,12 @@ func applyProgressionStandings(ctx context.Context, tx pgx.Tx, source progressio
 		command, updateErr := tx.Exec(ctx, `UPDATE competition_standings SET
 			played=played+1,wins=wins+$1,draws=draws+$2,losses=losses+$3,
 			walkovers=walkovers+$4,goals_for=goals_for+$5,goals_against=goals_against+$6,
-			points=points+$7,standings_version=standings_version+1,updated_at=now()
+			points=points+$7,games_won=games_won+$11,games_lost=games_lost+$12,
+			standings_version=standings_version+1,updated_at=now()
 			WHERE stage_id=$8 AND competition_id=$9 AND entry_id=$10`,
 			delta.Wins, delta.Draws, delta.Losses, delta.Walkovers, delta.GoalsFor,
-			delta.GoalsAgainst, delta.Points, source.StageID, source.CompetitionID, delta.EntryID)
+			delta.GoalsAgainst, delta.Points, source.StageID, source.CompetitionID, delta.EntryID,
+			delta.GamesWon, delta.GamesLost)
 		if updateErr != nil {
 			return updateErr
 		}
