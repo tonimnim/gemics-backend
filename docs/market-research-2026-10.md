@@ -1,7 +1,7 @@
 # Market research: paid-entry eFootball tournaments (October 2026)
 
 Research, not legal advice. Every market needs local gaming and payments counsel
-before Tonits charges an entry fee. Calling the fee an "administration fee" does
+before Ozone charges an entry fee. Calling the fee an "administration fee" does
 not protect you if a regulator decides it is really a stake.
 
 ## Summary
@@ -41,7 +41,7 @@ only through esports registration, with fees that just cover costs.
 - Law 14.790/2023 regulates fixed-odds betting, including bets *on* e-sports. It
   does not regulate players competing for a prize themselves.
 - Fantasy sport is exempt when the prize is guaranteed and independent of entrant
-  numbers. That's a good template for Tonits.
+  numbers. That's a good template for Ozone.
 - Skill-predominant games fall outside the "jogos de azar" contravention.
 - Prize income is taxed (30% withheld at source, or the progressive table).
 - Pix for collection and payout through dLocal or EBANX, with CPF-matched KYC.
@@ -81,7 +81,7 @@ eFootball-specific paid-entry app with local payments was found in these markets
 
 ## Ways to reduce risk everywhere
 1. Fund prizes from the organizer or sponsors, fixed in advance and independent of
-   entries. Never show a "pool". Tonits already models entry fees as
+   entries. Never show a "pool". Ozone already models entry fees as
    administration fees, never a prize pool.
 2. Offer a free-entry route to the same prizes.
 3. 18+ only, with KYC, and pay out only to the verified player's own account.
@@ -95,4 +95,4 @@ eFootball-specific paid-entry app with local payments was found in these markets
 eFootball supports co-op 2v2 and 3v3 through manual friend rooms and occasional
 events, one player per mobile device. As of September 2026 it has **no permanent
 team matchmaking** (https://www.chocobonplan.com/news-jeux-video/efootball-2027-le-gameplay-progresse-mais-le-2v2-se-fait-attendre).
-Organized team tournaments are an open gap Tonits can fill.
+Organized team tournaments are an open gap Ozone can fill.

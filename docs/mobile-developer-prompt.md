@@ -1,12 +1,12 @@
-# Prompt for the Tonits player app developer
+# Prompt for the Ozone player app developer
 
-You are building the production Tonits player application in Flutter for Android
-and iOS, in its own repository. Tonits is an esports competition platform launching
+You are building the production Ozone player application in Flutter for Android
+and iOS, in its own repository. Ozone is an esports competition platform launching
 in Kenya with eFootball Mobile. It is not a betting product: players compete by
 skill, there are no wagers, and player entry fees must not be represented as a
 pooled prize fund.
 
-Match the Tonits look used by the staff dashboard and the website: light by
+Match the Ozone look used by the staff dashboard and the website: light by
 default, a soft grey canvas (#f4f5fa), white cards with large rounded corners, an
 indigo accent (#5b5bd6) with lavender tints, Geist for text, halftone dot accents
 and the halftone player artwork. Keep copy minimal: one clear headline and the
@@ -39,7 +39,7 @@ Build these player journeys:
 6. After the match, either player submits the result (score and declaration, no
    screenshot); the opponent sees it and confirms or rejects it.
 7. After a rejection, each player sends one screenshot of the Full Time screen
-   before the deadline, then follows the match through Tonits review.
+   before the deadline, then follows the match through Ozone review.
 8. Follow bracket progress, round-robin tables and final placements, match history,
    notifications, ranking and public player card.
 9. Handle loading, empty, offline, retry, expired-session and API-error states.
@@ -100,7 +100,7 @@ sees it in `resultVerification.submittedResult` and answers with
 within the confirmation window (10 minutes by default). Confirming settles the
 result at once; if the opponent doesn't answer in time, the submitted result stands.
 A rejection opens the screenshot window: each player sends one ready screenshot with
-`POST /v1/matches/{matchId}/score-reports/screenshot`, and the match goes to Tonits
+`POST /v1/matches/{matchId}/score-reports/screenshot`, and the match goes to Ozone
 review. A player who sends no screenshot in time is removed from the tournament,
 and if nobody submits a result before the result deadline both entries are removed.
 Make every deadline visible and drive actions only from `lifecycle` and

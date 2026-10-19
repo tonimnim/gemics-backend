@@ -23,8 +23,8 @@ right score and the right team name. A `Full Time` caption sits under it, then a
 Possession (%), Shots / Total Shots, Shots on Target, Fouls, Offsides, Corner
 Kicks, Free Kicks, Passes, Successful Passes, Crosses, Interceptions, Tackles,
 Saves. Team names are the players' eFootball team names (club or national team
-names they chose), not Tonits usernames. Left and right follow the game room,
-not Tonits' home and away.
+names they chose), not Ozone usernames. Left and right follow the game room,
+not Ozone's home and away.
 
 ## Architecture
 
@@ -228,8 +228,8 @@ player's account.
 
 ## Mapping left/right to home/away
 
-eFootball team names aren't Tonits usernames, and a player can set every name
-Tonits holds about them (display name, username, in-game name). A loser who
+eFootball team names aren't Ozone usernames, and a player can set every name
+Ozone holds about them (display name, username, in-game name). A loser who
 renamed themselves after the winner's team could otherwise flip the mapping and
 win automatically. So:
 
@@ -257,7 +257,7 @@ win automatically. So:
 
 No software can reliably tell whether a screenshot was edited or AI-generated.
 Forgery detectors are an arms race: they miss good fakes and flag real
-screenshots that were simply recompressed by WhatsApp or the phone. So Tonits
+screenshots that were simply recompressed by WhatsApp or the phone. So Ozone
 never trusts a single screenshot. It relies on things a forger can't control:
 
 1. **Two independent witnesses.** Screenshots only matter when a player
@@ -303,7 +303,7 @@ capture:
   passes through the gallery.
 - **iOS:** the same through a ReplayKit broadcast extension.
 
-A recording captured live by the Tonits app is the only evidence that is close
+A recording captured live by the Ozone app is the only evidence that is close
 to unforgeable.
 
 ## When Go enters the result itself
