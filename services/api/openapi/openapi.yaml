@@ -67,9 +67,7 @@ paths:
         Registration asks for nothing else. The username becomes the player's handle and display name, the Konami ID
         becomes their eFootball game account, and the current terms and privacy notice, which the registration
         screen must present, are recorded as accepted. The new player can enter competitions straight away. Email
-        and phone are added later from the signed-in account. The response carries a recovery code, shown this
-        once: without an email it is the only way to reset a forgotten password, so the app must ask the player
-        to save it.
+        and phone are added later from the signed-in account.
       requestBody:
         required: true
         content:
@@ -108,11 +106,11 @@ paths:
                     it the country starts as KE.
       responses:
         '201':
-          description: Registered and signed in, with the player's first recovery code.
+          description: Registered and signed in.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthSessionWithRecoveryCode'
+                $ref: '#/components/schemas/AuthSession'
         '400':
           $ref: '#/components/responses/Error'
           description: invalid_username, invalid_konami_id, invalid_password, weak_password, invalid_device_name, invalid_country.
@@ -242,60 +240,6 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
           description: invalid_code (wrong, expired or used).
-        '503':
-          $ref: '#/components/responses/Error'
-  /v1/auth/password-reset/recovery-code:
-    post:
-      operationId: resetPasswordWithRecoveryCode
-      tags:
-        - Authentication
-      summary: Set a new password with the recovery code, for players without an email.
-      description: >-
-        The code is the one shown at registration or last created with POST /v1/me/recovery-code. Case, spaces and
-        dashes are ignored, and O, I and L read as 0, 1 and 1. On success every other device is signed out, this
-        device is signed in, and a fresh recovery code replaces the spent one: the app must show it and ask the
-        player to save it. An unknown Konami ID, an account without a code and a wrong code answer alike, and every
-        miss counts toward the sign-in lockout for the Konami ID and network.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required:
-                - konamiId
-                - recoveryCode
-                - newPassword
-              properties:
-                konamiId:
-                  type: string
-                recoveryCode:
-                  type: string
-                  description: Twenty characters, shown in five groups of four (for example 7KQ0-1XRP-9TVD-4HNW-C3JA).
-                newPassword:
-                  type: string
-                  minLength: 8
-                  maxLength: 128
-                deviceName:
-                  type: string
-                  maxLength: 120
-      responses:
-        '200':
-          description: Password changed and signed in, with a new recovery code.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AuthSessionWithRecoveryCode'
-        '400':
-          $ref: '#/components/responses/Error'
-          description: invalid_password, weak_password, invalid_device_name. The code is not spent.
-        '401':
-          $ref: '#/components/responses/Error'
-          description: invalid_recovery_code.
-        '429':
-          $ref: '#/components/responses/Error'
-          description: rate_limited, with Retry-After.
         '503':
           $ref: '#/components/responses/Error'
   /v1/auth/refresh:
@@ -458,55 +402,6 @@ paths:
         '429':
           $ref: '#/components/responses/Error'
           description: rate_limited, with Retry-After.
-  /v1/me/recovery-code:
-    post:
-      operationId: createRecoveryCode
-      tags:
-        - Players
-      summary: Replace the recovery code after confirming the password.
-      description: >-
-        The previous code stops working. Use it when the player has lost their code, or for an account that has
-        none (recoveryCodeSet is false). The code is returned only here; show it once and ask the player to save it.
-        Wrong passwords count like failed sign-ins.
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required:
-                - password
-              properties:
-                password:
-                  type: string
-      responses:
-        '200':
-          description: The new recovery code.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                  - recoveryCode
-                  - createdAt
-                properties:
-                  recoveryCode:
-                    type: string
-                  createdAt:
-                    type: string
-                    format: date-time
-        '401':
-          $ref: '#/components/responses/Error'
-          description: invalid_credentials (wrong password), authentication_required, invalid_session.
-        '429':
-          $ref: '#/components/responses/Error'
-          description: rate_limited, with Retry-After.
-        '503':
-          $ref: '#/components/responses/Error'
   /v1/me/email:
     post:
       operationId: requestEmailVerification
@@ -6013,18 +5908,6 @@ components:
                 format: date-time
               rating:
                 type: integer
-    AuthSessionWithRecoveryCode:
-      allOf:
-        - $ref: '#/components/schemas/AuthSession'
-        - type: object
-          required:
-            - recoveryCode
-          properties:
-            recoveryCode:
-              type: string
-              description: >-
-                Shown this once and never again: the server keeps only its hash. Twenty characters in five groups of
-                four.
     Player:
       type: object
       required:
@@ -6036,23 +5919,11 @@ components:
         - emailVerified
         - phoneNumber
         - countryCode
-        - recoveryCodeSet
         - status
       properties:
         id:
           type: string
           format: uuid
-        recoveryCodeSet:
-          type: boolean
-          description: >-
-            Whether the player has a recovery code. The code itself is never returned here. When this is false and
-            emailVerified is false the player has no way to reset a forgotten password: prompt them to create a
-            code with POST /v1/me/recovery-code or add an email.
-        recoveryCodeCreatedAt:
-          type:
-            - string
-            - 'null'
-          format: date-time
         username:
           type:
             - string

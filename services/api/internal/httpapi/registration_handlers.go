@@ -16,9 +16,7 @@ import (
 
 // Players register with exactly three things: a username, their eFootball
 // Konami ID and a password. They sign in with the Konami ID and password.
-// Email and phone are added later, from the signed-in account, so sign-up
-// also hands out a recovery code: without an email it is the only way back
-// in after a forgotten password.
+// Email and phone are added later, from the signed-in account.
 
 // registrationGameID is the game whose publisher ID is the Konami ID.
 const registrationGameID = "efootball-mobile"
@@ -130,18 +128,13 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "Unable to create the player account.")
 		return
 	}
-	recoveryCode, recoveryHash, err := gamicsauth.NewRecoveryCode()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "Unable to create the player account.")
-		return
-	}
 	tx, err := s.db.Writer.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to create the player account.")
 		return
 	}
 	defer tx.Rollback(r.Context()) //nolint:errcheck
-	userID, err := createRegisteredPlayer(r.Context(), tx, username, konamiID, countryCode, passwordHash, recoveryHash, ip, r.UserAgent())
+	userID, err := createRegisteredPlayer(r.Context(), tx, username, konamiID, countryCode, passwordHash, ip, r.UserAgent())
 	switch {
 	case uniqueViolationOn(err, "player_profiles_handle_unique"):
 		writeError(w, http.StatusConflict, "username_taken", "That username is already taken.")
@@ -160,21 +153,19 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	}
 	// The app reads the new account straight away, before the replica has it.
 	s.markRecentWrite(r.Context(), userID)
-	s.writeSessionResponseWith(w, r, http.StatusCreated, userID, sessionID, refreshToken,
-		map[string]any{"recoveryCode": recoveryCode})
+	s.writeSessionResponse(w, r, http.StatusCreated, userID, sessionID, refreshToken)
 }
 
 // createRegisteredPlayer writes the whole account in one transaction: the
 // username is the handle and display name, the Konami ID is the eFootball
 // game account, a given country is recorded as chosen (so a phone number
-// saved later does not replace it), the recovery code's hash is stored, and
-// the current terms and privacy notice, presented on the registration screen,
-// are recorded as accepted.
-func createRegisteredPlayer(ctx context.Context, tx pgx.Tx, username, konamiID string, countryCode *string, passwordHash string, recoveryHash []byte, ip, userAgent string) (string, error) {
+// saved later does not replace it), and the current terms and privacy notice,
+// presented on the registration screen, are recorded as accepted.
+func createRegisteredPlayer(ctx context.Context, tx pgx.Tx, username, konamiID string, countryCode *string, passwordHash, ip, userAgent string) (string, error) {
 	var userID string
-	if err := tx.QueryRow(ctx, `INSERT INTO users(display_name,password_hash,password_changed_at,recovery_code_hash,recovery_code_created_at,registration_ip,status,country_code,country_chosen_at)
-		VALUES ($1,$2,now(),$3,now(),$4,'active',COALESCE($5::text,'KE'),CASE WHEN $5::text IS NULL THEN NULL ELSE now() END)
-		RETURNING id`, username, passwordHash, recoveryHash, ip, countryCode).Scan(&userID); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO users(display_name,password_hash,password_changed_at,registration_ip,status,country_code,country_chosen_at)
+		VALUES ($1,$2,now(),$3,'active',COALESCE($4::text,'KE'),CASE WHEN $4::text IS NULL THEN NULL ELSE now() END)
+		RETURNING id`, username, passwordHash, ip, countryCode).Scan(&userID); err != nil {
 		return "", err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO player_profiles(user_id,handle) VALUES ($1,$2)`, userID, username); err != nil {
