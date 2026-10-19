@@ -346,19 +346,23 @@ func (s *Server) keepKonamiSignIn(w http.ResponseWriter, ctx context.Context, tx
 func (s *Server) loadMe(ctx context.Context, pool *pgxpool.Pool, userID string) (map[string]any, error) {
 	var id, displayName, countryCode, status string
 	var email, phone, birthDate, konamiID *string
-	var emailVerifiedAt, createdAt, updatedAt *time.Time
+	var emailVerifiedAt, createdAt, updatedAt, onboardedAt, phoneVerifiedAt *time.Time
+	var signInMethods []string
 	var handle, bio *string
 	var discoverable *bool
 	var analyticsAt, scoutingAt *time.Time
 	err := pool.QueryRow(ctx, `SELECT u.id,u.email,u.email_verified_at,u.phone_e164,u.display_name,u.country_code,
-        to_char(u.birth_date,'YYYY-MM-DD'),u.status,u.created_at,u.updated_at,
+        to_char(u.birth_date,'YYYY-MM-DD'),u.status,u.created_at,u.updated_at,u.onboarded_at,u.phone_verified_at,
+        ARRAY(SELECT method FROM (
+          SELECT identity.provider AS method FROM auth_identities identity WHERE identity.user_id=u.id
+          UNION SELECT 'password' WHERE u.password_hash IS NOT NULL) methods ORDER BY method),
         p.handle,p.bio,p.discoverable,p.analytics_consent_at,p.scouting_consent_at,
         (SELECT ga.publisher_player_id FROM game_accounts ga
          WHERE ga.user_id=u.id AND ga.game_id=$2 AND ga.publisher_player_id IS NOT NULL
          ORDER BY ga.created_at LIMIT 1)
         FROM users u LEFT JOIN player_profiles p ON p.user_id=u.id WHERE u.id=$1`, userID, registrationGameID).
 		Scan(&id, &email, &emailVerifiedAt, &phone, &displayName, &countryCode, &birthDate, &status,
-			&createdAt, &updatedAt, &handle, &bio, &discoverable, &analyticsAt, &scoutingAt, &konamiID)
+			&createdAt, &updatedAt, &onboardedAt, &phoneVerifiedAt, &signInMethods, &handle, &bio, &discoverable, &analyticsAt, &scoutingAt, &konamiID)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +374,9 @@ func (s *Server) loadMe(ctx context.Context, pool *pgxpool.Pool, userID string) 
 	return map[string]any{
 		"id": id, "username": handle, "konamiId": konamiID, "displayName": displayName,
 		"email": email, "emailVerified": email != nil && emailVerifiedAt != nil, "phoneNumber": phone,
-		"countryCode": countryCode, "birthDate": birthDate,
+		"phoneVerified": phone != nil && phoneVerifiedAt != nil, "onboardingCompleted": onboardedAt != nil,
+		"signInMethods": signInMethods,
+		"countryCode":   countryCode, "birthDate": birthDate,
 		"status": status, "createdAt": createdAt, "updatedAt": updatedAt, "profile": profile,
 	}, nil
 }

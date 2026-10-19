@@ -21,27 +21,53 @@ against the API base URL. The public avatar route responds with a short-lived
 
 ## Player journey
 
-### 1. Registration, sign-in and durable sessions
+### 1. Sign-in, onboarding and durable sessions
 
-Registration asks for exactly three things, and nothing else:
+Players sign in only with **Google** or **Apple**: no passwords, no usernames typed,
+nothing to recover (Google and Apple own account recovery). Show Apple on iOS (the App
+Store requires it whenever Google is offered); Android can show Google alone.
 
-1. **Username** (3-24 letters, numbers, underscores or dots). It becomes the handle
-   and the display name.
-2. **Konami ID**, as shown in eFootball. Case, spaces, dots, dashes and underscores
-   are ignored when comparing, so `ABCD-1234-EFGH` and `abcd1234efgh` are the same
-   ID. It becomes the player's eFootball game account.
-3. **Password** (8-128 characters, not the username or Konami ID).
+1. **First screen: Continue with Google / Continue with Apple.**
+   - Google: `POST /v1/auth/google` with `{idToken}` from Google Sign-In (Credential
+     Manager), plus `nonce` if you passed one to Google.
+   - Apple: generate a random raw nonce, pass its SHA-256 to Sign in with Apple, then
+     `POST /v1/auth/apple` with `{identityToken, nonce}` where `nonce` is the **raw** one.
+   - Either returns an `AuthSession`: `201` when it created the player, `200` when the
+     player already existed. A Google or Apple account whose verified email is already a
+     player's verified email signs in to that player, so the same person on Android and
+     iPhone keeps one account.
+   - New players get a generated handle (for example `Wanjiru_4821`, or `Swift_Falcon_4821`
+     when no first name is given) as handle and display name; the Google or Apple name is
+     never stored or shown. They can change it in Profile.
+   - Errors: `401 invalid_identity_token` (try again), `403 account_unavailable`,
+     `409 sign_in_conflict` (retry), `429 rate_limited`, `503 sign_in_unavailable` (that
+     provider isn't configured on this server) or `identity_provider_unavailable`.
+2. **Second screen, only while `player.onboardingCompleted` is false:** Konami ID, phone
+   number and country, nothing else, with a line accepting the terms and privacy notice
+   (`GET /v1/legal/documents/current`).
+   - `POST /v1/me/onboarding` with `{konamiId, phoneNumber, countryCode}` returns the
+     updated `Player`. Prefill the country from the phone's calling code (`+254` → KE,
+     `+91` → IN) and let the player change it.
+   - The Konami ID is as shown in eFootball; case, spaces, dots, dashes and underscores
+     are ignored when comparing, so `ABCD-1234-EFGH` and `abcd1234efgh` are the same ID.
+   - The phone is stored **unproven** (`phoneVerified: false`): a successful M-Pesa payment
+     from it later proves it. Any number may be saved unless another account has already
+     proven it.
+   - Errors: `400 invalid_konami_id`, `invalid_phone`, `invalid_country`;
+     `409 konami_id_taken` (another account has it: offer support), `phone_taken`,
+     `already_onboarded`.
+   - Finishing records the terms as accepted. Competition entry is blocked
+     (`profile_incomplete`) until then, so route a signed-in player whose
+     `onboardingCompleted` is false back to this screen.
+3. **Then Home.**
 
-- `POST /v1/auth/register` with `{username, konamiId, password}`, plus an optional
-  `countryCode` from the sign-up form's country picker (recorded as the player's chosen
-  country; `400 invalid_country` if malformed), returns `201` and an
-  `AuthSession`. The registration screen must show the current terms and privacy
-  notice (`GET /v1/legal/documents/current`): registering records them as accepted.
-  `409 username_taken` and `409 konami_id_taken` (offer sign-in) are the conflicts. A
-  registered player can enter competitions straight away.
-- `POST /v1/auth/login` with `{konamiId, password}` returns an `AuthSession`. An
-  unknown Konami ID and a wrong password both return `401 invalid_credentials`;
-  repeated failures return `429` with `Retry-After`.
+`player.signInMethods` lists how the player signs in (`apple`, `google`, `password`).
+
+Staff sign in to the admin dashboard with a Konami ID and password
+(`POST /v1/auth/login`); the player app never shows a password form.
+`POST /v1/auth/register` (password sign-up) exists only for local seeding and tests and
+answers `403 password_registration_disabled` in production.
+
 - `POST /v1/auth/refresh` rotates the refresh token. Serialize refresh attempts and
   replace the stored token atomically.
 - `POST /v1/auth/logout` revokes the current session and every push installation
@@ -53,32 +79,32 @@ Registration asks for exactly three things, and nothing else:
 
 ### 2. Contact details, password, legal consent, profile, and avatar
 
-Email and phone are never asked for at registration. Ask for them later, from the
-signed-in account, when they matter.
+The Google or Apple email is already verified and stored at sign-up when it is free.
 
-- **Email** (communication and password recovery): `POST /v1/me/email` sends a
-  6-digit code; `POST /v1/me/email/verify` with `{code}` stores the address as
-  verified. Encourage players to add one: it is the only self-service way to recover
-  a forgotten password.
+- **Email** (communication): `POST /v1/me/email` sends a 6-digit code;
+  `POST /v1/me/email/verify` with `{code}` stores a different address as verified.
 - **Phone** (payments): `PUT /v1/me/phone` with `{phoneNumber}` in international
   format with the country code, for example `+254712345678` (Kenya) or
-  `+919812345678` (India). Players from any country are accepted. One number belongs
-  to one account (`409 phone_taken`). It is not verified by SMS. M-Pesa uses it when a
-  payment request omits `phoneNumber`; M-Pesa itself accepts only Kenyan Safaricom
+  `+919812345678` (India). Players from any country are accepted. A new number is
+  unproven (`phoneVerified: false`) until a successful M-Pesa payment from it proves it;
+  only a proven number is locked to its account, so `409 phone_taken` means another
+  account has proven it. Re-saving the same number keeps it proven. M-Pesa uses it when
+  a payment request omits `phoneNumber`; M-Pesa itself accepts only Kenyan Safaricom
   numbers, so paid competitions are open to players in Kenya only (`country_not_allowed`
   otherwise). `DELETE /v1/me/phone` removes it. Saving a phone sets `countryCode` from
   its calling code (`+254` → `KE`, `+91` → `IN`), unless the player picked a country
-  with `PATCH /v1/me`. `+1` numbers leave the country unchanged, since the US, Canada
-  and much of the Caribbean share that code.
-- **Password**: `POST /v1/me/password` with `{currentPassword, newPassword}` keeps
-  this device signed in and signs every other device out.
-- **Forgotten password**: `POST /v1/auth/password-reset/request` with `{konamiId}`
-  always answers `202`; if the account has a verified email, a code is sent to it.
-  `POST /v1/auth/password-reset/confirm` with `{konamiId, code, newPassword}` sets the
-  password and signs every device out. Without a verified email the player must
-  contact support.
+  with `PATCH /v1/me` or at onboarding. `+1` numbers leave the country unchanged, since
+  the US, Canada and much of the Caribbean share that code.
+- **Password** (staff accounts only): `POST /v1/me/password` with
+  `{currentPassword, newPassword}` keeps this device signed in and signs every other
+  device out.
+- **Forgotten password** (staff accounts only): `POST /v1/auth/password-reset/request`
+  with `{konamiId}` always answers `202`; if the account has a verified email, a code is
+  sent to it. `POST /v1/auth/password-reset/confirm` with `{konamiId, code, newPassword}`
+  sets the password and signs every device out.
 - `GET /v1/me` returns the player: `username`, `konamiId`, `displayName`, `email`,
-  `emailVerified`, `phoneNumber`, `countryCode`, `birthDate` and `profile`.
+  `emailVerified`, `phoneNumber`, `phoneVerified`, `countryCode`, `birthDate`,
+  `onboardingCompleted`, `signInMethods` and `profile`.
 - `PATCH /v1/me` optionally changes `displayName` (2-80 characters), `countryCode` and
   `birthDate`. A country chosen here is kept when a phone number is saved later. A birth date is needed only for a competition with a minimum age, which
   reports `age_required`.

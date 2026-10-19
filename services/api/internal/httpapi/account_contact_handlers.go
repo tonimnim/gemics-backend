@@ -145,6 +145,16 @@ func (s *Server) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	s.getMe(w, r)
 }
 
+// phoneProvenElsewhere reports whether another account has proven phone with a
+// payment. An unproven number may sit on several accounts; a proven one is
+// locked to its owner, so payment prompts never go to someone else's phone.
+func phoneProvenElsewhere(ctx context.Context, queryer rowsQueryer, phone, userID string) (bool, error) {
+	var taken bool
+	err := queryer.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users
+		WHERE phone_e164=$1 AND phone_verified_at IS NOT NULL AND id::text<>$2)`, phone, userID).Scan(&taken)
+	return taken, err
+}
+
 func (s *Server) putPhone(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
 		return
@@ -159,12 +169,25 @@ func (s *Server) putPhone(w http.ResponseWriter, r *http.Request) {
 			"Enter the phone number with its country code, for example +254712345678 or +919812345678.")
 		return
 	}
+	userID := identityFromContext(r.Context()).UserID
+	taken, err := phoneProvenElsewhere(r.Context(), s.db.Writer, phone, userID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to save the phone number.")
+		return
+	}
+	if taken {
+		writeError(w, http.StatusConflict, "phone_taken",
+			"That phone number is linked to another Tonits account. Contact Tonits support if it is yours.")
+		return
+	}
 	// The country follows the phone unless the player chose one themselves or
 	// the calling code is shared by several countries.
 	country, _ := countryFromPhone(phone)
-	_, err := s.db.Writer.Exec(r.Context(), `UPDATE users SET phone_e164=$2,
+	// A new number starts unproven: a successful payment from it locks it in.
+	_, err = s.db.Writer.Exec(r.Context(), `UPDATE users SET
+		phone_verified_at=CASE WHEN phone_e164=$2 THEN phone_verified_at END,phone_e164=$2,
 		country_code=CASE WHEN country_chosen_at IS NULL AND $3<>'' THEN $3 ELSE country_code END,updated_at=now()
-		WHERE id=$1 AND status='active'`, identityFromContext(r.Context()).UserID, phone, country)
+		WHERE id=$1 AND status='active'`, userID, phone, country)
 	if uniqueViolationOn(err, "users_phone_unique") {
 		writeError(w, http.StatusConflict, "phone_taken",
 			"That phone number is linked to another Tonits account. Contact Tonits support if it is yours.")
@@ -181,7 +204,7 @@ func (s *Server) deletePhone(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
 		return
 	}
-	if _, err := s.db.Writer.Exec(r.Context(), `UPDATE users SET phone_e164=NULL,updated_at=now() WHERE id=$1`,
+	if _, err := s.db.Writer.Exec(r.Context(), `UPDATE users SET phone_e164=NULL,phone_verified_at=NULL,updated_at=now() WHERE id=$1`,
 		identityFromContext(r.Context()).UserID); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to remove the phone number.")
 		return

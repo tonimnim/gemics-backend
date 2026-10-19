@@ -8,6 +8,7 @@ import (
 
 func TestProductionDefaultsToExternalMigrationJob(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("GOOGLE_CLIENT_IDS", "android-client.apps.googleusercontent.com")
 	t.Setenv("RUN_MIGRATIONS", "")
 	t.Setenv("DATABASE_WRITE_URL", "postgres://writer.example/gamics")
 	t.Setenv("DATABASE_READ_URL", "postgres://reader.example/gamics")
@@ -128,6 +129,7 @@ func TestStorageRejectsUnsafePublicEndpoint(t *testing.T) {
 
 func TestProductionStorageRequiresHTTPS(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("GOOGLE_CLIENT_IDS", "android-client.apps.googleusercontent.com")
 	t.Setenv("DATABASE_WRITE_URL", "postgres://writer.example/gamics")
 	t.Setenv("DATABASE_READ_URL", "postgres://reader.example/gamics")
 	t.Setenv("AUTH_TOKEN_SECRET", "12345678901234567890123456789012")
@@ -178,6 +180,7 @@ func TestNotificationWorkerRejectsUnsafeConfiguration(t *testing.T) {
 	}
 	t.Setenv("NOTIFICATION_PUSH_BATCH", "100")
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("GOOGLE_CLIENT_IDS", "android-client.apps.googleusercontent.com")
 	t.Setenv("DATABASE_WRITE_URL", "postgres://writer.example/gamics")
 	t.Setenv("DATABASE_READ_URL", "postgres://reader.example/gamics")
 	t.Setenv("AUTH_TOKEN_SECRET", "12345678901234567890123456789012")
@@ -315,5 +318,31 @@ func TestVisionSettingsRejectUnsafeConfiguration(t *testing.T) {
 				t.Fatal("the reading worker should be on by default")
 			}
 		})
+	}
+}
+
+func TestProductionSignUpIsGoogleOrAppleOnly(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATABASE_WRITE_URL", "postgres://writer.example/gamics")
+	t.Setenv("DATABASE_READ_URL", "postgres://reader.example/gamics")
+	t.Setenv("AUTH_TOKEN_SECRET", "12345678901234567890123456789012")
+	t.Setenv("OTP_HASH_SECRET", "abcdefghijklmnopqrstuvwxyz123456")
+	t.Setenv("EMAIL_MODE", "smtp")
+	t.Setenv("SMTP_HOST", "smtp.example.com")
+	t.Setenv("SMTP_FROM", "login@example.com")
+	t.Setenv("MPESA_ENVIRONMENT", "disabled")
+	t.Setenv("GOOGLE_CLIENT_IDS", "")
+	t.Setenv("APPLE_CLIENT_IDS", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("production started with no Google or Apple client IDs")
+	}
+	t.Setenv("APPLE_CLIENT_IDS", "io.tonits.app")
+	config, err := Load()
+	if err != nil || config.PasswordRegistration || len(config.AppleClientIDs) != 1 {
+		t.Fatalf("production with Apple only = %+v, %v", config.AppleClientIDs, err)
+	}
+	t.Setenv("PASSWORD_REGISTRATION", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("production allowed password sign-up")
 	}
 }

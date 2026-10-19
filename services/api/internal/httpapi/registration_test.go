@@ -116,7 +116,7 @@ func TestRegistrationWritesTheWholeAccountInOneTransaction(t *testing.T) {
 		"s.markRecentWrite(r.Context(), userID)",
 		"s.writeSessionResponse(w, r, http.StatusCreated,",
 		"func createRegisteredPlayer(",
-		"INSERT INTO users(display_name,password_hash,password_changed_at,registration_ip,status,country_code,country_chosen_at)",
+		"INSERT INTO users(display_name,password_hash,password_changed_at,registration_ip,status,country_code,country_chosen_at,onboarded_at)",
 		"INSERT INTO player_profiles(user_id,handle)",
 		"INSERT INTO game_accounts(user_id,game_id,in_game_name,publisher_player_id)",
 		"INSERT INTO legal_acceptances")
@@ -144,8 +144,14 @@ func TestLoginDoesNotRevealWhichKonamiIDsExist(t *testing.T) {
 func TestAuthenticationRoutes(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server := New(config.Config{RequestTimeout: time.Second}, logger, "test")
+	// Password sign-up is off unless PASSWORD_REGISTRATION turns it on.
+	recorder := httptest.NewRecorder()
+	server.http.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/auth/register", strings.NewReader("{}")))
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "password_registration_disabled") {
+		t.Errorf("POST /v1/auth/register = %d %s, want 403 password_registration_disabled", recorder.Code, recorder.Body)
+	}
 	// Public routes reach their handler, which reports the missing database.
-	for _, path := range []string{"/v1/auth/register", "/v1/auth/login",
+	for _, path := range []string{"/v1/auth/login", "/v1/auth/google", "/v1/auth/apple",
 		"/v1/auth/password-reset/request", "/v1/auth/password-reset/confirm"} {
 		recorder := httptest.NewRecorder()
 		server.http.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")))
@@ -155,6 +161,7 @@ func TestAuthenticationRoutes(t *testing.T) {
 	}
 	for _, route := range []struct{ method, path string }{
 		{http.MethodPost, "/v1/me/password"},
+		{http.MethodPost, "/v1/me/onboarding"},
 		{http.MethodPost, "/v1/me/email"},
 		{http.MethodPost, "/v1/me/email/verify"},
 		{http.MethodPut, "/v1/me/phone"},

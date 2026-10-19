@@ -284,7 +284,7 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 		blocking("conduct_suspended", "conduct", "Your account has too many active conduct strikes to register for new competitions. Contact Tonits support.")
 	}
 	if !facts.ProfileComplete {
-		blocking("profile_incomplete", "profile", "Accept the current terms and privacy notice to enter competitions.")
+		blocking("profile_incomplete", "profile", "Finish setting up your account to enter competitions.")
 	}
 	if facts.EntryStatus != nil && (*facts.EntryStatus == "withdrawn" || *facts.EntryStatus == "disqualified") {
 		blocking("registration_not_reusable", "registration", "This player cannot create another entry for this competition.")

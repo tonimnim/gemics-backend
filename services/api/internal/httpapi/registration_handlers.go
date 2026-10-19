@@ -14,9 +14,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Players register with exactly three things: a username, their eFootball
-// Konami ID and a password. They sign in with the Konami ID and password.
-// Email and phone are added later, from the signed-in account.
+// Password accounts: a username, an eFootball Konami ID and a password, signed
+// in with the Konami ID and password. Players sign up with Google or Apple
+// (social_auth_handlers.go); password sign-up is kept only for development
+// seeding and tests, behind PASSWORD_REGISTRATION, which production refuses.
+// Staff sign in with Konami ID and password.
 
 // registrationGameID is the game whose publisher ID is the Konami ID.
 const registrationGameID = "efootball-mobile"
@@ -79,6 +81,10 @@ func passwordRepeatsIdentity(password, username, konamiKeyValue string) bool {
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+	if !s.config.PasswordRegistration {
+		writeError(w, http.StatusForbidden, "password_registration_disabled", "Sign up with Google or Apple.")
+		return
+	}
 	if !s.requireDatabase(w) {
 		return
 	}
@@ -160,11 +166,12 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 // username is the handle and display name, the Konami ID is the eFootball
 // game account, a given country is recorded as chosen (so a phone number
 // saved later does not replace it), and the current terms and privacy notice,
-// presented on the registration screen, are recorded as accepted.
+// presented on the registration screen, are recorded as accepted. Having its
+// Konami ID and terms, the account counts as onboarded.
 func createRegisteredPlayer(ctx context.Context, tx pgx.Tx, username, konamiID string, countryCode *string, passwordHash, ip, userAgent string) (string, error) {
 	var userID string
-	if err := tx.QueryRow(ctx, `INSERT INTO users(display_name,password_hash,password_changed_at,registration_ip,status,country_code,country_chosen_at)
-		VALUES ($1,$2,now(),$3,'active',COALESCE($4::text,'KE'),CASE WHEN $4::text IS NULL THEN NULL ELSE now() END)
+	if err := tx.QueryRow(ctx, `INSERT INTO users(display_name,password_hash,password_changed_at,registration_ip,status,country_code,country_chosen_at,onboarded_at)
+		VALUES ($1,$2,now(),$3,'active',COALESCE($4::text,'KE'),CASE WHEN $4::text IS NULL THEN NULL ELSE now() END,now())
 		RETURNING id`, username, passwordHash, ip, countryCode).Scan(&userID); err != nil {
 		return "", err
 	}
@@ -175,16 +182,24 @@ func createRegisteredPlayer(ctx context.Context, tx pgx.Tx, username, konamiID s
 		VALUES ($1,$2,'',$3)`, userID, registrationGameID, konamiID); err != nil {
 		return "", err
 	}
+	return userID, acceptCurrentLegalDocuments(ctx, tx, userID, ip, userAgent)
+}
+
+// acceptCurrentLegalDocuments records the current terms and privacy notice as
+// accepted by the player, as shown on the screen that just created or set up
+// the account.
+func acceptCurrentLegalDocuments(ctx context.Context, tx pgx.Tx, userID, ip, userAgent string) error {
 	_, err := tx.Exec(ctx, `WITH accepted AS (
 			INSERT INTO legal_acceptances(user_id,document_type,version,accepted_ip,user_agent)
 			SELECT $1,document_type,version,$2,$3 FROM legal_documents
 			WHERE is_current=true AND effective_at<=now()
+			ON CONFLICT DO NOTHING
 			RETURNING document_type)
 		UPDATE users SET
-			terms_accepted_at=CASE WHEN EXISTS(SELECT 1 FROM accepted WHERE document_type='terms') THEN now() END,
-			privacy_accepted_at=CASE WHEN EXISTS(SELECT 1 FROM accepted WHERE document_type='privacy') THEN now() END
+			terms_accepted_at=CASE WHEN EXISTS(SELECT 1 FROM accepted WHERE document_type='terms') THEN now() ELSE terms_accepted_at END,
+			privacy_accepted_at=CASE WHEN EXISTS(SELECT 1 FROM accepted WHERE document_type='privacy') THEN now() ELSE privacy_accepted_at END
 		WHERE id=$1`, userID, ip, userAgent)
-	return userID, err
+	return err
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

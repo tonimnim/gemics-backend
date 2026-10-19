@@ -54,29 +54,36 @@ type Config struct {
 	RegistrationWindow    time.Duration
 	RegistrationIPLimit   int
 	EmailMode             string
-	SMTPHost              string
-	SMTPPort              int
-	SMTPUsername          string
-	SMTPPassword          string
-	SMTPFrom              string
-	SMTPTimeout           time.Duration
-	SMTPRequireTLS        bool
-	MPesaEnvironment      string
-	MPesaConsumerKey      string
-	MPesaConsumerSecret   string
-	MPesaShortCode        string
-	MPesaPasskey          string
-	MPesaCallbackBaseURL  string
-	MPesaCallbackToken    string
-	MPesaTransactionType  string
-	MPesaTimeout          time.Duration
-	MPesaMaxAmountMinor   int64
-	MPesaUserLimit        int
-	MPesaPhoneLimit       int
-	MPesaIPLimit          int
-	MPesaUserWindow       time.Duration
-	MPesaPhoneWindow      time.Duration
-	MPesaIPWindow         time.Duration
+	// Players sign in with Google or Apple; each list holds that provider's
+	// client IDs (Android, iOS, web) accepted as identity-token audiences.
+	GoogleClientIDs []string
+	AppleClientIDs  []string
+	// PasswordRegistration allows POST /v1/auth/register, the password
+	// sign-up kept for development seeding and tests. Never in production.
+	PasswordRegistration bool
+	SMTPHost             string
+	SMTPPort             int
+	SMTPUsername         string
+	SMTPPassword         string
+	SMTPFrom             string
+	SMTPTimeout          time.Duration
+	SMTPRequireTLS       bool
+	MPesaEnvironment     string
+	MPesaConsumerKey     string
+	MPesaConsumerSecret  string
+	MPesaShortCode       string
+	MPesaPasskey         string
+	MPesaCallbackBaseURL string
+	MPesaCallbackToken   string
+	MPesaTransactionType string
+	MPesaTimeout         time.Duration
+	MPesaMaxAmountMinor  int64
+	MPesaUserLimit       int
+	MPesaPhoneLimit      int
+	MPesaIPLimit         int
+	MPesaUserWindow      time.Duration
+	MPesaPhoneWindow     time.Duration
+	MPesaIPWindow        time.Duration
 	// FXRatesURL returns exchange rates against USD: Frankfurter's v2 rates
 	// (the default) or any provider returning a "rates" object. Empty disables
 	// fetching (rates can still be entered by an admin). FXRefreshInterval is
@@ -178,6 +185,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	smtpTimeout, err := duration("SMTP_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	passwordRegistration, err := boolean("PASSWORD_REGISTRATION", environment != "production")
 	if err != nil {
 		return Config{}, err
 	}
@@ -383,6 +394,9 @@ func Load() (Config, error) {
 		RegistrationWindow:      registrationWindow,
 		RegistrationIPLimit:     integer("REGISTRATION_IP_LIMIT", 10),
 		EmailMode:               strings.ToLower(value("EMAIL_MODE", "log")),
+		GoogleClientIDs:         csv(os.Getenv("GOOGLE_CLIENT_IDS")),
+		AppleClientIDs:          csv(os.Getenv("APPLE_CLIENT_IDS")),
+		PasswordRegistration:    passwordRegistration,
 		SMTPHost:                strings.TrimSpace(os.Getenv("SMTP_HOST")),
 		SMTPPort:                integer("SMTP_PORT", 587),
 		SMTPUsername:            strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
@@ -463,6 +477,12 @@ func Load() (Config, error) {
 		}
 		if cfg.EmailMode != "smtp" || cfg.SMTPHost == "" || cfg.SMTPFrom == "" {
 			return Config{}, fmt.Errorf("production requires EMAIL_MODE=smtp, SMTP_HOST and SMTP_FROM")
+		}
+		if cfg.PasswordRegistration {
+			return Config{}, fmt.Errorf("PASSWORD_REGISTRATION must be off in production: players sign up with Google or Apple")
+		}
+		if len(cfg.GoogleClientIDs) == 0 && len(cfg.AppleClientIDs) == 0 {
+			return Config{}, fmt.Errorf("production requires GOOGLE_CLIENT_IDS or APPLE_CLIENT_IDS")
 		}
 	}
 	if cfg.EmailMode != "log" && cfg.EmailMode != "smtp" {

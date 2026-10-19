@@ -65,11 +65,13 @@ func newRegistrationHarness(t *testing.T) registrationHarness {
 		db:     &database.Cluster{Writer: pool, Reader: pool},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		tokens: gamicsauth.NewTokenManager("registration-access-secret", time.Minute),
+		identity: gamicsauth.NewIdentityVerifier(testIdentityKeys(t),
+			gamicsauth.GoogleProvider([]string{testGoogleClientID}), gamicsauth.AppleProvider([]string{testAppleClientID})),
 		mailer: mailer,
 		config: config.Config{OTPHashSecret: "registration-otp-secret", OTPMaxAttempts: 5, OTPTTL: 10 * time.Minute,
 			OTPRequestWindow: 15 * time.Minute, OTPEmailLimit: 5, OTPIPLimit: 50,
 			LoginFailureWindow: 15 * time.Minute, LoginAccountFailures: 3, LoginIPFailures: 100,
-			RegistrationWindow: time.Hour, RegistrationIPLimit: 100},
+			RegistrationWindow: time.Hour, RegistrationIPLimit: 100, PasswordRegistration: true},
 	}}
 }
 
@@ -220,8 +222,26 @@ func TestIntegrationContactDetailsAndPasswordRecovery(t *testing.T) {
 		http.StatusOK, "")
 	other := h.session(h.call(h.server.register, http.MethodPost, "/v1/auth/register",
 		`{"username":"Otieno_`+suffix+`","konamiId":"WXYZ-`+strings.ToUpper(suffix)+`-0002","password":"other password"}`, ""), http.StatusCreated)
+	// An unproven number may sit on two accounts; once a payment proves it for
+	// one, nobody else can take it.
+	h.expect(h.call(h.server.putPhone, http.MethodPut, "/v1/me/phone", `{"phoneNumber":"+919812345678"}`, other.Player.ID),
+		http.StatusOK, "")
+	if _, err := h.server.db.Writer.Exec(t.Context(), `UPDATE users SET phone_verified_at=now() WHERE id=$1`, userID); err != nil {
+		t.Fatal(err)
+	}
 	h.expect(h.call(h.server.putPhone, http.MethodPut, "/v1/me/phone", `{"phoneNumber":"+919812345678"}`, other.Player.ID),
 		http.StatusConflict, "phone_taken")
+	// Saving the same number again keeps it proven; a new number starts unproven.
+	same := h.call(h.server.putPhone, http.MethodPut, "/v1/me/phone", `{"phoneNumber":"+919812345678"}`, userID)
+	h.expect(same, http.StatusOK, "")
+	if !strings.Contains(same.Body.String(), `"phoneVerified":true`) {
+		t.Fatalf("re-saving a proven number unproved it: %s", same.Body)
+	}
+	changed := h.call(h.server.putPhone, http.MethodPut, "/v1/me/phone", `{"phoneNumber":"+919800000000"}`, userID)
+	h.expect(changed, http.StatusOK, "")
+	if !strings.Contains(changed.Body.String(), `"phoneVerified":false`) {
+		t.Fatalf("a new number came out proven: %s", changed.Body)
+	}
 
 	// A forgotten password is reset through the verified email, and every
 	// existing session is signed out.

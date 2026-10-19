@@ -1,6 +1,7 @@
 BEGIN;
 
 DROP TABLE IF EXISTS notification_preferences CASCADE;
+DROP TABLE IF EXISTS auth_identities CASCADE;
 DROP TABLE IF EXISTS push_tokens CASCADE;
 DROP TABLE IF EXISTS platform_staff_roles CASCADE;
 DROP TABLE IF EXISTS account_deletion_requests CASCADE;

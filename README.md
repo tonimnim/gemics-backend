@@ -9,8 +9,8 @@ eFootball Mobile in Kenya.
 - A React staff dashboard (`apps/admin`). The player app is built in Flutter in its
   own repository, against the API and contract in this one.
 - A Go API with graceful shutdown, timeouts, structured logs, CORS and request IDs.
-- Registration with only a username, Konami ID and password; Konami ID sign-in;
-  email and phone added after registration; rotating refresh sessions,
+- Player sign-in with Google or Apple, then onboarding for the Konami ID, phone and
+  country; staff sign in with Konami ID and password; rotating refresh sessions,
   player/game-account APIs and a replica-aware Redis-cached game catalog.
 - A role-based organizer API: an explicit permission matrix, per-route
   authorization over organization membership, and competition create/edit/publish

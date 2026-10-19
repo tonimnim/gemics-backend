@@ -198,6 +198,12 @@ services:
       LOGIN_IP_FAILURES: ${LOGIN_IP_FAILURES:-50}
       REGISTRATION_WINDOW: ${REGISTRATION_WINDOW:-1h}
       REGISTRATION_IP_LIMIT: ${REGISTRATION_IP_LIMIT:-10}
+      # Players sign in with Google or Apple: each holds that provider's client
+      # IDs (Android, iOS, web), comma-separated. Empty turns that sign-in off.
+      GOOGLE_CLIENT_IDS: ${GOOGLE_CLIENT_IDS:-}
+      APPLE_CLIENT_IDS: ${APPLE_CLIENT_IDS:-}
+      # Password sign-up is for local seeding and tests only; production refuses it.
+      PASSWORD_REGISTRATION: ${PASSWORD_REGISTRATION:-true}
       EMAIL_MODE: ${EMAIL_MODE:-log}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}

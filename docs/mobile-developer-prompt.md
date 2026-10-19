@@ -17,10 +17,11 @@ affiliation. Build native Flutter UI, not a website wrapped in a WebView.
 
 Build these player journeys:
 
-1. Registration with only a username, Konami ID and password (which also creates
-   the eFootball Mobile game account), and sign-in with Konami ID and password.
-2. Add an email (communication, password recovery) and a phone number (payments)
-   later from the account screen, plus profile and consent choices.
+1. Sign in with Google or Apple (Apple on iOS), then one onboarding screen for the
+   Konami ID, phone number and country (which also creates the eFootball Mobile game
+   account). No passwords or usernames: the handle is generated and editable.
+2. Change the email, phone and handle later from the account screen, plus profile and
+   consent choices.
 3. Discover/search competitions; view format, schedule, rules, capacity,
    organizer, entry type and prize source. A cancelled competition still opens by id
    and must show its cancelled state.

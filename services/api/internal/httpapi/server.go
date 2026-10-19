@@ -33,6 +33,9 @@ type Dependencies struct {
 	Mailer        gamicsmail.Sender
 	MPesa         mpesa.Provider
 	EvidenceStore storage.Provider
+	// IdentityKeys overrides where Google and Apple signing keys come from;
+	// tests pass fixed keys. Nil fetches the providers' published key sets.
+	IdentityKeys gamicsauth.KeySource
 }
 
 type Server struct {
@@ -48,6 +51,7 @@ type Server struct {
 	mpesa                  mpesa.Provider
 	evidenceStore          storage.Provider
 	tokens                 *gamicsauth.TokenManager
+	identity               *gamicsauth.IdentityVerifier
 	trustedProxies         []netip.Prefix
 	readerUnavailableUntil atomic.Int64
 	writerFallback         chan struct{}
@@ -66,6 +70,12 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 		tokens:         gamicsauth.NewTokenManager(cfg.AccessTokenSecret, cfg.AccessTokenTTL),
 		writerFallback: make(chan struct{}, max(1, cfg.DatabaseFallbackMax)),
 	}
+	identityKeys := deps.IdentityKeys
+	if identityKeys == nil {
+		identityKeys = gamicsauth.NewHTTPKeySource(nil)
+	}
+	s.identity = gamicsauth.NewIdentityVerifier(identityKeys,
+		gamicsauth.GoogleProvider(cfg.GoogleClientIDs), gamicsauth.AppleProvider(cfg.AppleClientIDs))
 	for _, raw := range cfg.TrustedProxyCIDRs {
 		if prefix, err := netip.ParsePrefix(raw); err == nil {
 			s.trustedProxies = append(s.trustedProxies, prefix)
@@ -82,6 +92,8 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	mux.HandleFunc("GET /v1/competitions/{id}/bracket", s.getCompetitionBracket)
 	mux.HandleFunc("GET /v1/competitions/{id}/standings", s.getCompetitionStandings)
 	mux.HandleFunc("POST /v1/auth/register", s.register)
+	mux.HandleFunc("POST /v1/auth/google", s.signInWithGoogle)
+	mux.HandleFunc("POST /v1/auth/apple", s.signInWithApple)
 	mux.HandleFunc("POST /v1/auth/login", s.login)
 	mux.HandleFunc("POST /v1/auth/password-reset/request", s.requestPasswordReset)
 	mux.HandleFunc("POST /v1/auth/password-reset/confirm", s.confirmPasswordReset)
@@ -89,6 +101,7 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	mux.Handle("POST /v1/auth/logout", s.requireAuth(http.HandlerFunc(s.logout)))
 	mux.Handle("GET /v1/me", s.requireAuth(http.HandlerFunc(s.getMe)))
 	mux.Handle("PATCH /v1/me", s.requireAuth(http.HandlerFunc(s.patchMe)))
+	mux.Handle("POST /v1/me/onboarding", s.requireAuth(http.HandlerFunc(s.completeOnboarding)))
 	mux.Handle("PUT /v1/me/profile", s.requireAuth(http.HandlerFunc(s.putProfile)))
 	mux.Handle("POST /v1/me/password", s.requireAuth(http.HandlerFunc(s.changePassword)))
 	mux.Handle("POST /v1/me/email", s.requireAuth(http.HandlerFunc(s.requestEmailVerification)))

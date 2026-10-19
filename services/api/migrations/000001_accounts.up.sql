@@ -1,6 +1,7 @@
 BEGIN;
 
--- Players and staff: accounts, sessions, email codes, sign-in throttling, legal consent and staff roles.
+-- Players and staff: accounts, Google and Apple identities, sessions, email codes, sign-in throttling, legal consent
+-- and staff roles.
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
 CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
@@ -24,6 +25,12 @@ CREATE TABLE users (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     terms_accepted_at timestamp with time zone,
     privacy_accepted_at timestamp with time zone,
+    -- Set when a player finishes onboarding: Konami ID, phone and country.
+    onboarded_at timestamp with time zone,
+    -- Set when a successful M-Pesa payment from phone_e164 proves the player
+    -- holds the number; only then is the number locked to this account.
+    phone_verified_at timestamp with time zone,
+    CONSTRAINT users_phone_verified_chk CHECK (((phone_verified_at IS NULL) OR (phone_e164 IS NOT NULL))),
     CONSTRAINT users_password_hash_check CHECK (((password_hash IS NULL) OR (password_hash ~~ '$argon2id$%'::text))),
     CONSTRAINT users_phone_e164_chk CHECK (((phone_e164 IS NULL) OR (phone_e164 ~ '^\+[1-9][0-9]{7,14}$'::text))),
     CONSTRAINT users_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'suspended'::text, 'deleted'::text])))
@@ -33,7 +40,7 @@ ALTER TABLE ONLY users
 CREATE INDEX users_active_display_name_trgm_idx ON users USING gin (lower(display_name) gin_trgm_ops) WHERE (status = 'active'::text);
 CREATE INDEX users_admin_status_idx ON users USING btree (status, created_at DESC, id);
 CREATE UNIQUE INDEX users_email_unique ON users USING btree (lower(email)) WHERE (email IS NOT NULL);
-CREATE UNIQUE INDEX users_phone_unique ON users USING btree (phone_e164) WHERE (phone_e164 IS NOT NULL);
+CREATE UNIQUE INDEX users_phone_unique ON users USING btree (phone_e164) WHERE (phone_verified_at IS NOT NULL);
 CREATE INDEX users_registration_ip_idx ON users USING btree (registration_ip, created_at DESC) WHERE (registration_ip IS NOT NULL);
 
 -- player_profiles
@@ -53,6 +60,27 @@ ALTER TABLE ONLY player_profiles
     ADD CONSTRAINT player_profiles_pkey PRIMARY KEY (user_id);
 CREATE INDEX player_profiles_discoverable_handle_trgm_idx ON player_profiles USING gin (lower(handle) gin_trgm_ops) WHERE (discoverable = true);
 CREATE UNIQUE INDEX player_profiles_handle_unique ON player_profiles USING btree (lower(handle));
+
+-- auth_identities
+
+-- A Google or Apple account a player signs in with, by the provider's stable
+-- subject. Email is the provider's address at the last sign-in, for support.
+CREATE TABLE auth_identities (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    provider text NOT NULL,
+    subject text NOT NULL,
+    email text,
+    email_verified boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_sign_in_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT auth_identities_provider_check CHECK ((provider = ANY (ARRAY['google'::text, 'apple'::text]))),
+    CONSTRAINT auth_identities_subject_check CHECK (((length(subject) >= 1) AND (length(subject) <= 255)))
+);
+ALTER TABLE ONLY auth_identities
+    ADD CONSTRAINT auth_identities_pkey PRIMARY KEY (id);
+CREATE UNIQUE INDEX auth_identities_provider_subject_unique ON auth_identities USING btree (provider, subject);
+CREATE INDEX auth_identities_user_idx ON auth_identities USING btree (user_id);
 
 -- refresh_sessions
 
@@ -258,6 +286,8 @@ ALTER TABLE ONLY push_tokens
     ADD CONSTRAINT push_tokens_session_id_fkey FOREIGN KEY (session_id) REFERENCES refresh_sessions(id) ON DELETE CASCADE;
 ALTER TABLE ONLY push_tokens
     ADD CONSTRAINT push_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY auth_identities
+    ADD CONSTRAINT auth_identities_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY refresh_sessions
     ADD CONSTRAINT refresh_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 

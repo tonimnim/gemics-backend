@@ -62,12 +62,13 @@ paths:
       operationId: registerPlayer
       tags:
         - Authentication
-      summary: Register with a username, eFootball Konami ID and password.
+      summary: Password sign-up, for development seeding and tests only.
       description: >-
-        Registration asks for nothing else. The username becomes the player's handle and display name, the Konami ID
-        becomes their eFootball game account, and the current terms and privacy notice, which the registration
-        screen must present, are recorded as accepted. The new player can enter competitions straight away. Email
-        and phone are added later from the signed-in account.
+        Players sign up with POST /v1/auth/google or /v1/auth/apple. This password sign-up exists only when
+        PASSWORD_REGISTRATION is on, which production refuses; otherwise it answers 403
+        password_registration_disabled. The username becomes the handle and display name, the Konami ID the
+        eFootball game account, and the current terms and privacy notice are recorded as accepted, so the account
+        counts as onboarded.
       requestBody:
         required: true
         content:
@@ -117,11 +118,142 @@ paths:
         '409':
           $ref: '#/components/responses/Error'
           description: username_taken; konami_id_taken (the Konami ID already has an account, so sign in instead).
+        '403':
+          $ref: '#/components/responses/Error'
+          description: password_registration_disabled (players sign up with Google or Apple).
         '429':
           $ref: '#/components/responses/Error'
           description: rate_limited (too many registrations from this network), with Retry-After.
         '503':
           $ref: '#/components/responses/Error'
+  /v1/auth/google:
+    post:
+      operationId: signInWithGoogle
+      tags:
+        - Authentication
+      summary: Sign in or sign up with a Google identity token.
+      description: >-
+        Send the ID token Google Sign-In returns on the device. The API checks its signature against Google's
+        published keys, its issuer, audience (one of GOOGLE_CLIENT_IDS) and expiry. A Google account already linked
+        to a player signs in to that player. A Google account whose verified email is a player's verified email
+        links to that player. Otherwise a new player is created with a generated handle (from the first name when
+        Google gives one; the real name is never stored or shown) and the verified email, and answers 201: send
+        them to onboarding (POST /v1/me/onboarding) while player.onboardingCompleted is false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idToken
+              properties:
+                idToken:
+                  type: string
+                  maxLength: 8192
+                nonce:
+                  type: string
+                  maxLength: 512
+                  description: The raw nonce passed to Google, when the app used one; it must then match the token.
+                deviceName:
+                  type: string
+                  maxLength: 120
+      responses:
+        '200':
+          description: Signed in to an existing player.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '201':
+          description: A new player was created and signed in; onboarding comes next.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_device_name.
+        '401':
+          $ref: '#/components/responses/Error'
+          description: invalid_identity_token (bad signature, wrong audience or issuer, expired, or nonce mismatch).
+        '403':
+          $ref: '#/components/responses/Error'
+          description: account_unavailable (the linked player is suspended or deleted).
+        '409':
+          $ref: '#/components/responses/Error'
+          description: sign_in_conflict (the same first sign-in raced from two requests); try again.
+        '429':
+          $ref: '#/components/responses/Error'
+          description: rate_limited (too many new accounts from this network), with Retry-After.
+        '503':
+          $ref: '#/components/responses/Error'
+          description: >-
+            sign_in_unavailable (Google sign-in is not configured), identity_provider_unavailable (Google's keys could
+            not be fetched), database_unavailable.
+  /v1/auth/apple:
+    post:
+      operationId: signInWithApple
+      tags:
+        - Authentication
+      summary: Sign in or sign up with an Apple identity token.
+      description: >-
+        As POST /v1/auth/google, for Sign in with Apple. The nonce is required: generate a random raw nonce, pass its
+        SHA-256 to Apple, and send the raw nonce here. The audience must be one of APPLE_CLIENT_IDS (the iOS bundle
+        ID, or a Services ID for web). Apple sends the email only on the first sign-in and may give a private relay
+        address; it still links accounts by verified email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - identityToken
+                - nonce
+              properties:
+                identityToken:
+                  type: string
+                  maxLength: 8192
+                nonce:
+                  type: string
+                  maxLength: 512
+                deviceName:
+                  type: string
+                  maxLength: 120
+      responses:
+        '200':
+          description: Signed in to an existing player.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '201':
+          description: A new player was created and signed in; onboarding comes next.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_device_name.
+        '401':
+          $ref: '#/components/responses/Error'
+          description: invalid_identity_token.
+        '403':
+          $ref: '#/components/responses/Error'
+          description: account_unavailable.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: sign_in_conflict; try again.
+        '429':
+          $ref: '#/components/responses/Error'
+          description: rate_limited, with Retry-After.
+        '503':
+          $ref: '#/components/responses/Error'
+          description: sign_in_unavailable, identity_provider_unavailable, database_unavailable.
   /v1/auth/login:
     post:
       operationId: signIn
@@ -342,6 +474,63 @@ paths:
           description: >-
             invalid_display_name (2-80 characters), invalid_country, invalid_birth_date, empty_update,
             versioned_legal_acceptance_required.
+  /v1/me/onboarding:
+    post:
+      operationId: completeOnboarding
+      tags:
+        - Players
+      summary: Finish a Google or Apple sign-up with the Konami ID, phone and country.
+      description: >-
+        The one step after a first Google or Apple sign-in, and the only way to add the Konami ID to such an
+        account. Competition entry is blocked (profile_incomplete) until it is done. The phone is stored unproven:
+        any number may be saved unless another account has already proven it, and a successful M-Pesa payment from
+        it later proves it (phoneVerified). Finishing records the current terms and privacy notice as accepted, so
+        the onboarding screen must show them. Afterwards, change these details with PATCH /v1/me and PUT
+        /v1/me/phone.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - konamiId
+                - phoneNumber
+                - countryCode
+              properties:
+                konamiId:
+                  type: string
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9 _.-]{5,63}$
+                phoneNumber:
+                  type: string
+                  description: International format with the country code, for example +254712345678.
+                countryCode:
+                  type: string
+                  pattern: ^[A-Z]{2}$
+                  description: Prefill it from the phone's calling code; the player may change it.
+      responses:
+        '200':
+          description: The onboarded player.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Player'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_konami_id, invalid_phone, invalid_country.
+        '401':
+          $ref: '#/components/responses/Error'
+          description: authentication_required, invalid_session.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: >-
+            konami_id_taken (another account has it; Tonits support can help the owner), phone_taken (another
+            account has proven that number), already_onboarded.
+        '503':
+          $ref: '#/components/responses/Error'
   /v1/me/profile:
     put:
       operationId: putPlayerProfile
@@ -517,7 +706,9 @@ paths:
           description: invalid_phone (missing country code or not a phone number).
         '409':
           $ref: '#/components/responses/Error'
-          description: phone_taken (linked to another account; Tonits support can help the owner).
+          description: >-
+            phone_taken (another account has proven that number with a payment; Tonits support can help the owner).
+            An unproven number may be saved on more than one account.
     delete:
       operationId: deletePhone
       tags:
@@ -5918,7 +6109,10 @@ components:
         - email
         - emailVerified
         - phoneNumber
+        - phoneVerified
         - countryCode
+        - onboardingCompleted
+        - signInMethods
         - status
       properties:
         id:
@@ -5945,6 +6139,25 @@ components:
           description: Null until the player adds and verifies one with POST /v1/me/email.
         emailVerified:
           type: boolean
+        onboardingCompleted:
+          type: boolean
+          description: >-
+            False after a first Google or Apple sign-in until POST /v1/me/onboarding. Send the player to onboarding
+            while it is false; competition entry is blocked until then.
+        signInMethods:
+          type: array
+          description: How the player signs in, sorted.
+          items:
+            type: string
+            enum:
+              - apple
+              - google
+              - password
+        phoneVerified:
+          type: boolean
+          description: >-
+            True once a successful M-Pesa payment from phoneNumber proved the player holds it. Only a proven number is
+            locked to the account.
         phoneNumber:
           type:
             - string

@@ -723,6 +723,9 @@ func (s *Server) completePayment(ctx context.Context, paymentID, receipt, transa
 	if err = stampPaymentUSD(ctx, tx, paymentID); err != nil {
 		return err
 	}
+	if err = provePaidPhone(ctx, tx, paymentID); err != nil {
+		return err
+	}
 	var refundID *string
 	if plan.RefundReason != "" {
 		var value string
@@ -1037,4 +1040,30 @@ func truncate(value string, maximum int) string {
 		return value
 	}
 	return value[:maximum]
+}
+
+// provePaidPhone locks a player's profile number to their account once a
+// payment from it succeeds: the M-Pesa prompt only reaches the phone that
+// holds the number. Payments store the number without its +. A number already
+// proven by another account stays theirs, and that conflict never fails the
+// payment, so the update runs in a savepoint.
+func provePaidPhone(ctx context.Context, tx pgx.Tx, paymentID string) error {
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = savepoint.Exec(ctx, `UPDATE users player SET phone_verified_at=now(),updated_at=now()
+		FROM payment_intents payment
+		WHERE payment.id=$1 AND player.id=payment.user_id AND player.phone_verified_at IS NULL
+		AND player.phone_e164='+'||payment.phone_e164
+		AND NOT EXISTS (SELECT 1 FROM users other WHERE other.phone_e164=player.phone_e164
+			AND other.phone_verified_at IS NOT NULL AND other.id<>player.id)`, paymentID)
+	if uniqueViolationOn(err, "users_phone_unique") {
+		return savepoint.Rollback(ctx)
+	}
+	if err != nil {
+		_ = savepoint.Rollback(ctx)
+		return err
+	}
+	return savepoint.Commit(ctx)
 }

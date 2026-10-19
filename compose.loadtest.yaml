@@ -46,6 +46,9 @@ services:
     environment:
       APP_ENV: production
       RUN_MIGRATIONS: "false"
+      # Production refuses password sign-up and needs a sign-in provider.
+      PASSWORD_REGISTRATION: "false"
+      GOOGLE_CLIENT_IDS: loadtest.apps.googleusercontent.com
       REDIS_CACHE_URL: redis://:${REDIS_PASSWORD}@redis-cache:6379/0
       EMAIL_MODE: smtp
       SMTP_HOST: mailpit
@@ -75,6 +78,8 @@ services:
     image: gamics-loadtest-api:local
     environment:
       APP_ENV: production
+      PASSWORD_REGISTRATION: "false"
+      GOOGLE_CLIENT_IDS: loadtest.apps.googleusercontent.com
   gateway:
     image: nginx:stable-alpine
     restart: unless-stopped
