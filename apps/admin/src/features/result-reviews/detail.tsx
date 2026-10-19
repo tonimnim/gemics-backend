@@ -32,6 +32,7 @@ function ReportCard({
   rejected,
   screenshot,
   strikes,
+  bestOf,
 }: {
   reviewId: string
   side: 'Home' | 'Away'
@@ -40,6 +41,7 @@ function ReportCard({
   rejected: boolean
   screenshot: StaffReport | null
   strikes: number
+  bestOf: number
 }) {
   return (
     <Card>
@@ -65,7 +67,7 @@ function ReportCard({
           submitted.awayScore != null ? (
             <>
               <div className='font-mono text-xs text-muted-foreground uppercase'>
-                Submitted the result
+                Submitted the result{bestOf > 1 && ' (games won)'}
               </div>
               <div className='text-2xl font-black'>
                 {scoreText({
@@ -88,6 +90,11 @@ function ReportCard({
           <div className='flex flex-wrap gap-3'>
             {screenshot.evidence.map((item) => (
               <div key={item.id} className='space-y-2'>
+                {bestOf > 1 && (
+                  <div className='font-mono text-xs text-muted-foreground uppercase'>
+                    Game {item.game}
+                  </div>
+                )}
                 <EvidenceImage id={item.id} ready={item.ready} />
                 {item.reading && (
                   <ScreenshotReadingNote
@@ -100,7 +107,7 @@ function ReportCard({
             ))}
           </div>
         ) : (
-          <p className='text-sm text-muted-foreground'>No screenshot.</p>
+          <p className='text-sm text-muted-foreground'>No screenshots.</p>
         )}
       </CardContent>
     </Card>
@@ -132,6 +139,7 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
           expectedVersion: review!.version,
           decision:
             decision === 'accept' ? `accept_${submittedSide}` : decision,
+          // A series is corrected in games won, like it is reported.
           correctedScore:
             decision === 'corrected_score'
               ? { homeScore: Number(score.home), awayScore: Number(score.away) }
@@ -153,6 +161,7 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
     : 'home'
   const otherSide = submittedSide === 'home' ? 'away' : 'home'
   const submitted = review?.reports[submittedSide].initial ?? null
+  const series = (review?.match.bestOf ?? 1) > 1
   const rejectedBy = review?.verification.rejectedBy ?? null
   // Only the player a decision proves wrong can be struck: the submitter or
   // the player who rejected the result.
@@ -213,6 +222,7 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
               submitted={review.reports.home.initial}
               rejected={submittedSide === 'away' && !!rejectedBy}
               screenshot={review.reports.home.final}
+              bestOf={review.match.bestOf}
               strikes={
                 review.activeStrikeCounts[
                   review.participants.home.captainUserId
@@ -226,6 +236,7 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
               submitted={review.reports.away.initial}
               rejected={submittedSide === 'home' && !!rejectedBy}
               screenshot={review.reports.away.final}
+              bestOf={review.match.bestOf}
               strikes={
                 review.activeStrikeCounts[
                   review.participants.away.captainUserId
@@ -243,7 +254,10 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
               </CardHeader>
               <CardContent className='space-y-1 text-sm'>
                 {review.decision.correctedScore && (
-                  <div>Score: {scoreText(review.decision.correctedScore)}</div>
+                  <div>
+                    Score: {scoreText(review.decision.correctedScore)}
+                    {series && ' (games won)'}
+                  </div>
                 )}
                 <div className='text-muted-foreground'>
                   {review.decision.note}
@@ -287,7 +301,7 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
                                 homeScore: submitted.homeScore,
                                 awayScore: submitted.awayScore,
                                 tiebreak: submitted.tiebreak,
-                              })})`
+                              })}${series ? ' games won' : ''})`
                             : 'Accept the submitted result',
                         ],
                         ['corrected_score', 'Enter the correct score'],
@@ -305,7 +319,9 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
                   {decision === 'corrected_score' && (
                     <div className='flex items-end gap-3'>
                       <div className='grid gap-1'>
-                        <Label htmlFor='home'>Home</Label>
+                        <Label htmlFor='home'>
+                          Home{series && ' games won'}
+                        </Label>
                         <Input
                           id='home'
                           type='number'
@@ -320,7 +336,9 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
                       </div>
                       <span className='pb-2'>–</span>
                       <div className='grid gap-1'>
-                        <Label htmlFor='away'>Away</Label>
+                        <Label htmlFor='away'>
+                          Away{series && ' games won'}
+                        </Label>
                         <Input
                           id='away'
                           type='number'

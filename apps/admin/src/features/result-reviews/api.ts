@@ -2,10 +2,13 @@ export type ReviewStatus = 'queued' | 'decided' | 'closed'
 export type ReviewDecision =
   'accept_home' | 'accept_away' | 'corrected_score' | 'remove_both'
 
+type Tiebreak = { type: 'penalties'; homeScore: number; awayScore: number }
+
+/** For a series homeScore and awayScore are games won. */
 type Score = {
   homeScore: number
   awayScore: number
-  tiebreak?: { type: 'penalties'; homeScore: number; awayScore: number } | null
+  tiebreak?: Tiebreak | null
 }
 
 export type ReviewMatch = {
@@ -38,11 +41,13 @@ export type StaffReport = {
   id: string
   homeScore: number | null
   awayScore: number | null
-  tiebreak?: { type: 'penalties'; homeScore: number; awayScore: number } | null
+  tiebreak?: Tiebreak | null
   reportedBy: { userId: string; displayName: string }
   reportedAt: string
   evidence: {
     id: string
+    /** The game of the series it shows; 1 in a best of 1. */
+    game: number
     mediaType: string
     byteSize: number
     ready: boolean
@@ -92,6 +97,15 @@ export type ScreenshotCheck = {
   decision?: 'accept_home' | 'accept_away'
   /** The reader will settle this review itself. */
   autoDecide: boolean
+  /** A series is compared game by game. */
+  games?: {
+    game: number
+    sides: ('home' | 'away')[]
+    score: ScreenshotScore | null
+    differences: string[]
+    /** Penalties decide a level knockout game; a level round-robin game has none. */
+    winner: 'home' | 'away' | null
+  }[]
 }
 
 type Participant = {

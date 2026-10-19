@@ -33,6 +33,7 @@ const flagLabels: Record<string, string> = {
   goals_and_saves_exceed_shots_on_target:
     'Goals + saves exceed shots on target',
   successful_exceeds_passes: 'More successful passes than passes',
+  duplicate_in_series: 'Also sent for another game',
 }
 
 /** Flags that inform staff without counting against the screenshot. */
@@ -70,13 +71,14 @@ export function ScreenshotVerdict({
 }) {
   const homeName = review.participants.home.displayName
   const awayName = review.participants.away.displayName
+  const inGames = check.games ? ' in games' : ''
   const text: Record<ScreenshotCheck['verdict'], string> = {
     pending: 'Reading the screenshots…',
     supports: check.score
-      ? `The screenshots show ${homeName} ${scoreLine(check.score)} ${awayName}, the submitted result.`
+      ? `The screenshots show ${homeName} ${scoreLine(check.score)} ${awayName}${inGames}, the submitted result.`
       : 'The screenshots match the submitted result.',
     neither: check.score
-      ? `The screenshots show ${homeName} ${scoreLine(check.score)} ${awayName}, not the submitted result.`
+      ? `The screenshots show ${homeName} ${scoreLine(check.score)} ${awayName}${inGames}, not the submitted result.`
       : "The screenshots don't match the submitted result.",
     conflicting: `The screenshots disagree on ${check.differences.map(fieldLabel).join(', ')}.`,
     unreadable: "The screenshots couldn't be read.",
@@ -111,6 +113,22 @@ export function ScreenshotVerdict({
             keeps a supported result from being settled automatically. */}
         {check.verdict === 'supports' && check.reasons.length > 0 && (
           <div className='text-sm opacity-80'>{check.reasons.join(' ')}</div>
+        )}
+        {check.games && check.games.length > 0 && (
+          <ul className='mt-1 grid gap-0.5 text-sm'>
+            {check.games.map((game) => (
+              <li key={game.game}>
+                Game {game.game}:{' '}
+                {game.differences.length > 0
+                  ? `screenshots disagree on ${game.differences.map(fieldLabel).join(', ')}`
+                  : game.score
+                    ? `${scoreLine(game.score)}, ${game.winner === 'home' ? `${homeName} won` : game.winner === 'away' ? `${awayName} won` : 'drawn'}`
+                    : 'sides not known yet'}
+                {game.sides.length < 2 &&
+                  ` · only ${game.sides[0] === 'home' ? homeName : awayName} sent one`}
+              </li>
+            ))}
+          </ul>
         )}
         {check.autoDecide && (
           <div className='text-sm opacity-80'>
