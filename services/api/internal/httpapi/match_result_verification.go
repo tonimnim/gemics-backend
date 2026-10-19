@@ -26,7 +26,8 @@ type scoreReportInput struct {
 }
 
 // scoreClaim is a validated result. Two results are equal on totals and
-// tiebreak only; the games breakdown never decides equality (D6).
+// tiebreak only; the games breakdown never decides equality (D6). A series
+// has no games: its totals are games won.
 type scoreClaim struct {
 	HomeScore, AwayScore int
 	Tiebreak             *tiebreakScoreInput
@@ -51,18 +52,26 @@ func normalizeScoreClaim(input scoreReportInput, bestOf int, format string) (sco
 		return scoreClaim{}, message
 	}
 	claim := scoreClaim{HomeScore: input.HomeScore, AwayScore: input.AwayScore, Games: slices.Clone(input.Games)}
-	if input.Tiebreak != nil {
-		tiebreak := *input.Tiebreak
-		tiebreak.Type = strings.ToLower(strings.TrimSpace(tiebreak.Type))
-		claim.Tiebreak = &tiebreak
+	claim.Tiebreak = normalizeTiebreak(input.Tiebreak)
+	if bestOf > 1 && claim.Games == nil {
+		claim.Games = []gameScoreInput{}
 	}
-	if len(claim.Games) == 0 {
+	if len(claim.Games) == 0 && bestOf <= 1 {
 		claim.Games = []gameScoreInput{{HomeScore: input.HomeScore, AwayScore: input.AwayScore}}
 	}
 	if message := validateScorePolicy(claim, bestOf, format); message != "" {
 		return scoreClaim{}, message
 	}
 	return claim, ""
+}
+
+func normalizeTiebreak(input *tiebreakScoreInput) *tiebreakScoreInput {
+	if input == nil {
+		return nil
+	}
+	tiebreak := *input
+	tiebreak.Type = strings.ToLower(strings.TrimSpace(tiebreak.Type))
+	return &tiebreak
 }
 
 func (claim scoreClaim) equal(other scoreClaim) bool {

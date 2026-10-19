@@ -91,22 +91,34 @@ func TestNormalizeScoreClaim(t *testing.T) {
 	}{
 		{name: "games omitted for best-of-one", input: scoreReportInput{HomeScore: 2, AwayScore: 1}, bestOf: 1,
 			format: "single_elimination", wantGames: []gameScoreInput{{HomeScore: 2, AwayScore: 1}}},
-		{name: "games omitted for best-of-three", input: scoreReportInput{HomeScore: 3, AwayScore: 1}, bestOf: 3,
-			format: "single_elimination", wantGames: []gameScoreInput{{HomeScore: 3, AwayScore: 1}}},
-		{name: "given games that sum to the totals", bestOf: 3, format: "single_elimination",
-			input: scoreReportInput{HomeScore: 3, AwayScore: 1,
-				Games: []gameScoreInput{{HomeScore: 1, AwayScore: 0}, {HomeScore: 0, AwayScore: 1}, {HomeScore: 2, AwayScore: 0}}},
-			wantGames: []gameScoreInput{{HomeScore: 1, AwayScore: 0}, {HomeScore: 0, AwayScore: 1}, {HomeScore: 2, AwayScore: 0}}},
-		{name: "given games that do not sum to the totals", bestOf: 3, format: "single_elimination", wantError: true,
+		{name: "best-of-one game that does not equal the totals", bestOf: 1, format: "single_elimination", wantError: true,
 			input: scoreReportInput{HomeScore: 3, AwayScore: 1, Games: []gameScoreInput{{HomeScore: 2, AwayScore: 1}}}},
-		{name: "round-robin draw", input: scoreReportInput{HomeScore: 1, AwayScore: 1}, bestOf: 1, format: "round_robin",
-			wantGames: []gameScoreInput{{HomeScore: 1, AwayScore: 1}}},
-		{name: "elimination tie without penalties", input: scoreReportInput{HomeScore: 1, AwayScore: 1}, bestOf: 1,
-			format: "double_elimination", wantError: true},
-		{name: "elimination tie with penalties", bestOf: 1, format: "double_elimination",
-			input:     scoreReportInput{HomeScore: 1, AwayScore: 1, Tiebreak: &tiebreakScoreInput{Type: " Penalties ", HomeScore: 5, AwayScore: 4}},
-			wantGames: []gameScoreInput{{HomeScore: 1, AwayScore: 1}}},
-		{name: "total out of range", input: scoreReportInput{HomeScore: 100, AwayScore: 0}, bestOf: 1,
+		// A series is reported in games won only: who won and by how many.
+		{name: "knockout best of 3 won 2-1", input: scoreReportInput{HomeScore: 2, AwayScore: 1}, bestOf: 3,
+			format: "single_elimination", wantGames: []gameScoreInput{}},
+		{name: "knockout best of 3 won 0-2", input: scoreReportInput{HomeScore: 0, AwayScore: 2}, bestOf: 3,
+			format: "double_elimination", wantGames: []gameScoreInput{}},
+		{name: "knockout best of 5 won 3-2", input: scoreReportInput{HomeScore: 3, AwayScore: 2}, bestOf: 5,
+			format: "single_elimination", wantGames: []gameScoreInput{}},
+		{name: "a knockout series nobody won", input: scoreReportInput{HomeScore: 1, AwayScore: 1}, bestOf: 3,
+			format: "single_elimination", wantError: true},
+		{name: "a knockout series won twice", input: scoreReportInput{HomeScore: 2, AwayScore: 2}, bestOf: 3,
+			format: "single_elimination", wantError: true},
+		{name: "a series scored in goals", input: scoreReportInput{HomeScore: 3, AwayScore: 1}, bestOf: 3,
+			format: "single_elimination", wantError: true},
+		{name: "a series with penalties", bestOf: 3, format: "single_elimination", wantError: true,
+			input: scoreReportInput{HomeScore: 2, AwayScore: 1, Tiebreak: &tiebreakScoreInput{Type: "penalties", HomeScore: 4, AwayScore: 3}}},
+		{name: "a series with its games", bestOf: 3, format: "single_elimination", wantError: true,
+			input: scoreReportInput{HomeScore: 2, AwayScore: 0, Games: []gameScoreInput{{HomeScore: 1, AwayScore: 0}, {HomeScore: 2, AwayScore: 0}}}},
+		{name: "a round-robin series that ends level", input: scoreReportInput{HomeScore: 1, AwayScore: 1}, bestOf: 3,
+			format: "round_robin", wantGames: []gameScoreInput{}},
+		{name: "a round-robin series of draws", input: scoreReportInput{HomeScore: 0, AwayScore: 0}, bestOf: 3,
+			format: "round_robin", wantGames: []gameScoreInput{}},
+		{name: "a round-robin series with too many games", input: scoreReportInput{HomeScore: 2, AwayScore: 2}, bestOf: 3,
+			format: "round_robin", wantError: true},
+		{name: "a round-robin best of 5 won 3-2", input: scoreReportInput{HomeScore: 3, AwayScore: 2}, bestOf: 5,
+			format: "round_robin", wantGames: []gameScoreInput{}},
+		{name: "a round-robin best of 5 with six games", input: scoreReportInput{HomeScore: 3, AwayScore: 3}, bestOf: 5,
 			format: "round_robin", wantError: true},
 	}
 	for _, test := range tests {
@@ -123,6 +135,9 @@ func TestNormalizeScoreClaim(t *testing.T) {
 			}
 			if claim.Tiebreak != nil && claim.Tiebreak.Type != "penalties" {
 				t.Fatalf("tiebreak type was not normalized: %+v", claim.Tiebreak)
+			}
+			if test.bestOf > 1 && (claim.HomeScore != test.input.HomeScore || claim.AwayScore != test.input.AwayScore) {
+				t.Fatalf("series score = %d-%d, want games won", claim.HomeScore, claim.AwayScore)
 			}
 		})
 	}
@@ -150,6 +165,8 @@ func TestScoreClaimsAgreeOnTotalsAndTiebreakOnly(t *testing.T) {
 	}{
 		{"different game order", breakdown, reordered, true},
 		{"one aggregate game against a breakdown", breakdown, resultReportsClaim(3, 1), true},
+		{"the same series in games won", scoreClaim{HomeScore: 2, AwayScore: 1, Games: []gameScoreInput{}},
+			scoreClaim{HomeScore: 2, AwayScore: 1, Games: []gameScoreInput{}}, true},
 		{"different totals", resultReportsClaim(2, 1), resultReportsClaim(1, 2), false},
 		{"different penalty scores", scoreClaim{HomeScore: 1, AwayScore: 1, Tiebreak: penalties(5, 4)},
 			scoreClaim{HomeScore: 1, AwayScore: 1, Tiebreak: penalties(4, 5)}, false},

@@ -249,11 +249,14 @@ func lockCompletedEvidence(ctx context.Context, tx pgx.Tx, evidenceIDs []string,
 	return nil
 }
 
-// validateScorePolicy checks a claim against the stage: 1..bestOf games that
-// sum to the totals, round-robin draws allowed, and elimination ties decided
-// by a penalty shootout.
+// validateScorePolicy checks a best-of-1 claim: one game that equals the
+// totals, round-robin draws allowed, and elimination ties decided by a penalty
+// shootout. A series is checked by validateSeriesPolicy.
 func validateScorePolicy(claim scoreClaim, bestOf int, format string) string {
-	if len(claim.Games) < 1 || len(claim.Games) > bestOf || bestOf < 1 {
+	if bestOf > 1 {
+		return validateSeriesPolicy(claim, bestOf, format)
+	}
+	if len(claim.Games) != 1 || bestOf < 1 {
 		return "The game breakdown does not match this stage's best-of rule."
 	}
 	homeTotal, awayTotal := 0, 0
@@ -282,6 +285,35 @@ func validateScorePolicy(claim scoreClaim, bestOf int, format string) string {
 	}
 	if claim.Tiebreak != nil {
 		return "A penalty tiebreak is only valid when the final score is tied."
+	}
+	return ""
+}
+
+// validateSeriesPolicy checks a best-of-3 or best-of-5 claim. A series is
+// reported as games won: who won and by how many, such as 2-1. Penalties only
+// decide who won a level knockout game, so nobody reports them, and the games
+// themselves are shown only by the screenshots of a dispute. A knockout series
+// ends when one side wins the majority; a round-robin series can also end
+// level, after at most bestOf games.
+func validateSeriesPolicy(claim scoreClaim, bestOf int, format string) string {
+	if claim.Tiebreak != nil {
+		return "A series is reported in games won, without penalties."
+	}
+	if len(claim.Games) > 0 {
+		return "A series is reported in games won only. Leave the games out."
+	}
+	need := gamesToWin(bestOf)
+	home, away := claim.HomeScore, claim.AwayScore
+	if format == "round_robin" {
+		if home > need || away > need || home+away > bestOf || (home == need && away == need) {
+			return fmt.Sprintf("Report the games each side won in this best of %d: at most %d each and %d in total.",
+				bestOf, need, bestOf)
+		}
+		return ""
+	}
+	if home > need || away > need || (home == need) == (away == need) {
+		return fmt.Sprintf("A best of %d is won by the first to %d games: report a score such as %d-%d.",
+			bestOf, need, need, need-1)
 	}
 	return ""
 }
