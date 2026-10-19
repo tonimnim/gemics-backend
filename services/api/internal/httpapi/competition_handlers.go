@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,11 @@ import (
 )
 
 var publicCompetitionStatuses = []string{"published", "registration_open", "check_in", "running", "completed"}
+
+// listableCompetitionStatuses can be asked for by name. A cancellation is
+// listed only when asked for, and only for a competition that was published
+// first, which is when it was ever public.
+var listableCompetitionStatuses = append(slices.Clone(publicCompetitionStatuses), "cancelled")
 
 // readableCompetitionSQL is the visibility rule of the addressable public reads
 // (detail, bracket, eligibility and entry) for a row aliased "competition": a
@@ -39,8 +45,9 @@ const readableCompetitionSQL = `(competition.status IN ('published','registratio
 const competitionCacheFamily = "competitions"
 
 type competitionListFilter struct {
-	GameID    string
-	Status    string
+	GameID string
+	// Statuses is the requested set; empty means every discovery status.
+	Statuses  []string
 	EntryType string
 	Query     string
 	Limit     int
@@ -740,12 +747,21 @@ func parseCompetitionFilter(w http.ResponseWriter, r *http.Request) (competition
 		return competitionListFilter{}, false
 	}
 	filter := competitionListFilter{
-		GameID: strings.TrimSpace(query.Get("gameId")), Status: strings.TrimSpace(query.Get("status")),
+		GameID:    strings.TrimSpace(query.Get("gameId")),
 		EntryType: strings.TrimSpace(query.Get("entryType")), Query: strings.TrimSpace(query.Get("q")), Limit: limit,
 	}
-	if filter.Status != "" && !containsCompetitionStatus(publicCompetitionStatuses, filter.Status) {
-		writeError(w, http.StatusBadRequest, "invalid_status", "Choose a public competition status.")
-		return competitionListFilter{}, false
+	// status takes one status or several, comma-separated: check_in,running.
+	for _, status := range strings.Split(query.Get("status"), ",") {
+		status = strings.TrimSpace(status)
+		if status == "" || slices.Contains(filter.Statuses, status) {
+			continue
+		}
+		if !containsCompetitionStatus(listableCompetitionStatuses, status) {
+			writeError(w, http.StatusBadRequest, "invalid_status",
+				"Choose published, registration_open, check_in, running, completed or cancelled.")
+			return competitionListFilter{}, false
+		}
+		filter.Statuses = append(filter.Statuses, status)
 	}
 	if filter.EntryType != "" && filter.EntryType != "free" && filter.EntryType != "paid" {
 		writeError(w, http.StatusBadRequest, "invalid_entry_type", "Entry type must be free or paid.")
@@ -798,8 +814,8 @@ func (s *Server) loadCompetitionPage(ctx context.Context, filter competitionList
 
 func queryCompetitionPage(ctx context.Context, pool *pgxpool.Pool, filter competitionListFilter) (competitionPage, error) {
 	statuses := publicCompetitionStatuses
-	if filter.Status != "" {
-		statuses = []string{filter.Status}
+	if len(filter.Statuses) > 0 {
+		statuses = filter.Statuses
 	}
 	var cursorTime *time.Time
 	var cursorID *string
@@ -817,6 +833,7 @@ func queryCompetitionPage(ctx context.Context, pool *pgxpool.Pool, filter compet
 		FROM competitions competition JOIN games game ON game.id=competition.game_id AND game.active=true
 		JOIN organizations organization ON organization.id=competition.organization_id AND organization.status='active'
 		WHERE competition.status=ANY($1::text[]) AND ($2='' OR competition.game_id=$2)
+		AND (competition.status<>'cancelled' OR competition.published_at IS NOT NULL)
 		AND ($3='' OR ($3='free' AND competition.entry_fee_minor=0) OR ($3='paid' AND competition.entry_fee_minor>0))
 		AND ($4='' OR lower(competition.name) LIKE '%'||lower($4)||'%' OR lower(organization.name) LIKE '%'||lower($4)||'%')
 		AND ($5::timestamptz IS NULL OR (competition.starts_at,competition.id)>($5,$6::uuid))

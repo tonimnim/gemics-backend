@@ -211,8 +211,19 @@ func TestIntegrationCancelledCompetitionStaysReadable(t *testing.T) {
 			}
 		}
 	}
+	// Discovery leaves cancellations out, but they can be listed by name, alone
+	// or with other statuses.
+	for _, query := range []string{"status=cancelled", "status=completed,cancelled"} {
+		cancelled := competitionVisibilityDecode[competitionPage](t, competitionVisibilityCall(t, server.listCompetitions,
+			http.MethodGet, "/v1/competitions?"+query, "", "", ""), http.StatusOK)
+		for _, competitionID := range []string{drawn.ID, registering} {
+			if !slices.ContainsFunc(cancelled.Data, func(item competitionSummary) bool { return item.ID == competitionID }) {
+				t.Fatalf("%s does not list cancelled %s", query, competitionID)
+			}
+		}
+	}
 	competitionVisibilityRefused(t, competitionVisibilityCall(t, server.listCompetitions, http.MethodGet,
-		"/v1/competitions?status=cancelled", "", "", ""), http.StatusBadRequest, "invalid_status")
+		"/v1/competitions?status=draft", "", "", ""), http.StatusBadRequest, "invalid_status")
 	if intents := resultReportsCount(t, pool, `SELECT count(*) FROM payment_intents WHERE user_id=$1`, outsider); intents != 0 {
 		t.Fatalf("refused paid entries created %d payment intents", intents)
 	}
@@ -273,6 +284,11 @@ func TestIntegrationCancelledDraftStaysHidden(t *testing.T) {
 		if recorder.Code != http.StatusNotFound || !strings.Contains(recorder.Body.String(), "competition_not_found") {
 			t.Fatalf("the %s of a cancelled draft is visible: %d %s", name, recorder.Code, recorder.Body.String())
 		}
+	}
+	cancelled := competitionVisibilityDecode[competitionPage](t, competitionVisibilityCall(t, server.listCompetitions,
+		http.MethodGet, "/v1/competitions?status=cancelled", "", "", ""), http.StatusOK)
+	if slices.ContainsFunc(cancelled.Data, func(item competitionSummary) bool { return item.ID == draftID }) {
+		t.Fatal("status=cancelled lists a draft that was never public")
 	}
 	resultFlowExec(t, pool, `UPDATE organizations SET status='suspended' WHERE id=$1`, seeded.OrganizationID)
 	for name, recorder := range hidden(seeded.ID) {
