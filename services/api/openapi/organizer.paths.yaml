@@ -403,9 +403,11 @@ components:
           description: >-
             Immutable rules snapshot, at most 32 KiB. Changing it on a published competition increments
             rulesVersion. rules.matchVerification accepts only the keys of CompetitionMatchVerificationRules;
-            anything else is refused with 400 invalid_match_verification_rules.
+            anything else is refused with 400 invalid_match_verification_rules. rules.matchFormat is checked
+            against the format and refused with 400 invalid_match_format.
           properties:
             matchVerification: { $ref: "#/components/schemas/CompetitionMatchVerificationRules" }
+            matchFormat: { $ref: "#/components/schemas/CompetitionMatchFormat" }
     CompetitionPatch:
       type: object
       minProperties: 1
@@ -430,8 +432,12 @@ components:
         startsAt: { type: string, format: date-time }
         rules:
           type: object
+          description: >-
+            rules.matchFormat cannot change once registration has opened (409 field_locked), because
+            players enter knowing how many games each round is.
           properties:
             matchVerification: { $ref: "#/components/schemas/CompetitionMatchVerificationRules" }
+            matchFormat: { $ref: "#/components/schemas/CompetitionMatchFormat" }
     OrganizerCompetition:
       type: object
       required: [id, organizationId, gameId, name, slug, format, status, maxEntries, entryCount, allowedTransitions, rulesVersion]

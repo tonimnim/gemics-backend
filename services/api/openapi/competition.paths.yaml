@@ -181,7 +181,13 @@ components:
     CompetitionDetail:
       allOf:
         - { $ref: "#/components/schemas/Competition" }
-        - { type: object, required: [rules], properties: { rules: { type: object, additionalProperties: true } } }
+        - type: object
+          required: [rules, matchFormat]
+          properties:
+            rules: { type: object, additionalProperties: true }
+            matchFormat:
+              allOf: [{ $ref: "#/components/schemas/CompetitionMatchFormat" }]
+              description: rules.matchFormat with its defaults applied; a competition without one is a best of 1.
     CompetitionPage:
       type: object
       required: [data, page]
