@@ -51,6 +51,8 @@ const queryClient = new QueryClient({
 // Create a new router instance
 const router = createRouter({
   routeTree,
+  // "/" normally; "/admin" when built to sit behind the phone tunnel.
+  basepath: import.meta.env.BASE_URL.replace(/\/$/, '') || '/',
   context: { queryClient },
   defaultPreload: 'intent',
   defaultPreloadStaleTime: 0,
