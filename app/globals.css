@@ -1318,6 +1318,17 @@ a {
   font-weight: 700;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  text-decoration: none;
+  transition:
+    border-color 0.2s,
+    background 0.2s,
+    transform 0.2s;
+}
+
+.store-badge:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(7, 8, 26, 0.75);
+  transform: translateY(-2px);
 }
 
 .store-badge svg {

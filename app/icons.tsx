@@ -48,19 +48,39 @@ export const ShieldCheckIcon = ({ className }: IconProps) => (
   </Icon>
 );
 
-export const AndroidIcon = ({ className }: IconProps) => (
-  <Icon className={className}>
-    <path d="M5 16V11a7 7 0 0 1 14 0v5Z" />
-    <path d="m7 5.5 1.5 2M17 5.5l-1.5 2" />
-    <path d="M9.5 11.5h.01M14.5 11.5h.01" />
-  </Icon>
+// The stores' own marks, in their colours, for the app download buttons.
+export const GooglePlayIcon = ({ className }: IconProps) => (
+  <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <defs>
+      <clipPath id="google-play-triangle">
+        <path d="M4.6 2.3c-.6.3-1 1-1 1.8v15.8c0 .8.4 1.5 1 1.8.6.3 1.3.3 1.9-.1l13.6-7.9c.7-.4 1.1-1.1 1.1-1.7s-.4-1.3-1.1-1.7L6.5 2.4c-.6-.4-1.3-.4-1.9-.1Z" />
+      </clipPath>
+    </defs>
+    <g clipPath="url(#google-play-triangle)">
+      <path fill="#00A0FF" d="M3 1 12.6 12 3 23Z" />
+      <path fill="#00D46A" d="M3 1h4l9.4 7.6L12.6 12Z" />
+      <path fill="#FF3A44" d="M3 23h4l9.4-7.6L12.6 12Z" />
+      <path fill="#FFC400" d="M12.6 12 16.4 8.6 23 12 16.4 15.4Z" />
+    </g>
+  </svg>
 );
 
-export const PhoneIcon = ({ className }: IconProps) => (
-  <Icon className={className}>
-    <rect x="6.5" y="2.5" width="11" height="19" rx="3" />
-    <path d="M10.5 18.5h3" />
-  </Icon>
+export const AppStoreIcon = ({ className }: IconProps) => (
+  <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient id="app-store-tile" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#18BFFB" />
+        <stop offset="1" stopColor="#2072F3" />
+      </linearGradient>
+    </defs>
+    <rect x="1" y="1" width="22" height="22" rx="5.2" fill="url(#app-store-tile)" />
+    <g stroke="#fff" strokeWidth="1.75" strokeLinecap="round" fill="none">
+      <path d="M13.4 5.6 8.4 14.3" />
+      <path d="M7.2 16.4 6.6 17.4" />
+      <path d="M10.6 5.6 16.8 16.4" />
+      <path d="M5.9 14.3h12.2" />
+    </g>
+  </svg>
 );
 
 // Brand marks for the social links, filled, on the same 24-unit grid.

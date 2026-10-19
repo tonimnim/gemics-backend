@@ -8,6 +8,12 @@ export const site = {
     { name: "YouTube", handle: "@tonits", href: "https://www.youtube.com/@tonits" },
     { name: "X", handle: "@tonits", href: "https://x.com/tonits" },
   ],
+  // Store listings for the app download buttons. Google Play addresses an app
+  // by its package name; the App Store needs the app's id once it is listed.
+  stores: {
+    googlePlay: "https://play.google.com/store/apps/details?id=com.tonits.tonits",
+    appStore: "https://apps.apple.com/app/ozone/id0000000000",
+  },
 } as const;
 
 export type SocialName = (typeof site.socials)[number]["name"];

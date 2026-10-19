@@ -2,8 +2,9 @@ import Link from "next/link";
 import type { CSSProperties } from "react";
 import { BrandMark } from "./brand-mark";
 import { CompetitionCard } from "./competition-card";
-import { AndroidIcon, ArrowIcon, ControllerIcon, PhoneIcon, ShieldCheckIcon, TicketIcon } from "./icons";
+import { AppStoreIcon, ArrowIcon, ControllerIcon, GooglePlayIcon, ShieldCheckIcon, TicketIcon } from "./icons";
 import { type Competition, formatLabel, loadCompetitions } from "./lib/competitions";
+import { site } from "./lib/site";
 import { SiteFooter, SiteHeader } from "./site-chrome";
 
 const openStatuses = new Set(["registration_open", "check_in"]);
@@ -182,20 +183,20 @@ export default async function Home() {
                 in your pocket.
               </h2>
               <div className="store-row">
-                <span className="store-badge">
-                  <AndroidIcon />
+                <a className="store-badge" href={site.stores.googlePlay} target="_blank" rel="noopener noreferrer">
+                  <GooglePlayIcon />
                   <span>
-                    <small>Coming soon</small>
-                    Android
+                    <small>Get it on</small>
+                    Google Play
                   </span>
-                </span>
-                <span className="store-badge">
-                  <PhoneIcon />
+                </a>
+                <a className="store-badge" href={site.stores.appStore} target="_blank" rel="noopener noreferrer">
+                  <AppStoreIcon />
                   <span>
-                    <small>Coming soon</small>
-                    iPhone
+                    <small>Download on the</small>
+                    App Store
                   </span>
-                </span>
+                </a>
               </div>
             </div>
           </div>
