@@ -56,7 +56,11 @@ export function TournamentRow({ competition, index }: { competition: Competition
       </div>
 
       <div className="row-main">
-        <h3>{competition.name}</h3>
+        <h3>
+          <Link className="row-link" href={`/tournaments/${competition.id}`}>
+            {competition.name}
+          </Link>
+        </h3>
         <p className="row-meta">
           <span>{formatLabel(competition.format)}</span>
           {date && (
@@ -117,7 +121,9 @@ export function FeaturedTournament({ competition }: { competition: Competition }
 
       <div className="featured-body">
         <Status competition={competition} />
-        <h2 id="featured-title">{competition.name}</h2>
+        <h2 id="featured-title">
+          <Link href={`/tournaments/${competition.id}`}>{competition.name}</Link>
+        </h2>
         <ul className="featured-meta">
           <li>{formatLabel(competition.format)}</li>
           {date && (
