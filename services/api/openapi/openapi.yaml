@@ -1441,14 +1441,17 @@ paths:
       operationId: createResultScreenshot
       tags:
         - Match results
-      summary: Send your entry's one screenshot after a rejection.
+      summary: Send your entry's screenshots after a rejection.
       description: >-
         Allowed while resultVerification.phase is awaiting_screenshots and before screenshotDeadline. Each
-        entry sends exactly one of its own processed (ready=true) JPEG or PNG uploads that is not attached
-        to anything else. Once both entries sent theirs, the match goes to the Ozone review queue, where
-        the screenshot reader reads both. When the window ends, an entry that sent none is removed from the
-        tournament and the other advances; if neither sent one, both are removed. An entry whose screenshot
-        is still stuck in Ozone's own processing is never removed; the match goes to Ozone review instead.
+        entry sends, once, its own processed (ready=true) JPEG or PNG uploads that are not attached to
+        anything else: one Full Time screen for a best of 1, or one per game played for a series, each
+        numbered by its game (verificationPolicy.screenshotEvidence). Once both entries sent theirs, the
+        match goes to the Ozone review queue, where the screenshot reader compares them game by game. When
+        the window ends, an entry that sent none is removed from the tournament and the other advances; if
+        neither sent one, both are removed. Sending at least one counts as responding: a game left out
+        counts against its entry in review, never as a removal. An entry whose screenshot is still stuck
+        in Ozone's own processing is never removed; the match goes to Ozone review instead.
       security:
         - bearerAuth: []
       parameters:
@@ -1465,8 +1468,19 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/ResultScreenshotRequest'
-            example:
-              evidenceId: 4d3e5536-bf3c-4dba-a643-575e43f56970
+            examples:
+              bestOfOne:
+                value:
+                  evidenceId: 4d3e5536-bf3c-4dba-a643-575e43f56970
+              series:
+                value:
+                  screenshots:
+                    - game: 1
+                      evidenceId: 4d3e5536-bf3c-4dba-a643-575e43f56970
+                    - game: 2
+                      evidenceId: 5d3e5536-bf3c-4dba-a643-575e43f56970
+                    - game: 3
+                      evidenceId: 6d3e5536-bf3c-4dba-a643-575e43f56970
       responses:
         '201':
           description: Screenshot attached. The body is the caller's room.
@@ -5726,10 +5740,13 @@ components:
           description: >-
             Immutable rules snapshot, at most 32 KiB. Changing it on a published competition increments
             rulesVersion. rules.matchVerification accepts only the keys of CompetitionMatchVerificationRules;
-            anything else is refused with 400 invalid_match_verification_rules.
+            anything else is refused with 400 invalid_match_verification_rules. rules.matchFormat is checked
+            against the format and refused with 400 invalid_match_format.
           properties:
             matchVerification:
               $ref: '#/components/schemas/CompetitionMatchVerificationRules'
+            matchFormat:
+              $ref: '#/components/schemas/CompetitionMatchFormat'
     CompetitionPatch:
       type: object
       minProperties: 1
@@ -5801,9 +5818,14 @@ components:
           format: date-time
         rules:
           type: object
+          description: >-
+            rules.matchFormat cannot change once registration has opened (409 field_locked), because players
+            enter knowing how many games each round is.
           properties:
             matchVerification:
               $ref: '#/components/schemas/CompetitionMatchVerificationRules'
+            matchFormat:
+              $ref: '#/components/schemas/CompetitionMatchFormat'
     OrganizerCompetition:
       type: object
       required:
@@ -6584,6 +6606,8 @@ components:
         - gameId
         - gameName
         - roundName
+        - bestOf
+        - gamesToWin
         - scheduledAt
         - checkInClosesAt
         - state
@@ -6612,6 +6636,14 @@ components:
           type: string
         roundName:
           type: string
+        bestOf:
+          type: integer
+          enum: [1, 3, 5]
+          description: This match's best-of, from rules.matchFormat. One point per game won.
+        gamesToWin:
+          type: integer
+          enum: [1, 2, 3]
+          description: Games a side needs to win the match; the series stops there.
         scheduledAt:
           type:
             - string
@@ -6683,7 +6715,6 @@ components:
             - roundNumber
             - matchNumber
             - bracket
-            - bestOf
             - drawAllowed
             - checkInOpensAt
             - resultDueAt
@@ -6710,9 +6741,6 @@ components:
               minimum: 1
             bracket:
               type: string
-            bestOf:
-              type: integer
-              minimum: 1
             drawAllowed:
               type: boolean
             checkInOpensAt:
@@ -6786,16 +6814,20 @@ components:
           maximum: 99
         games:
           type: array
-          maxItems: 99
+          maxItems: 5
           description: >-
-            Optional game-by-game breakdown: 1..bestOf games whose totals equal homeScore and awayScore. When
-            omitted, the server records one aggregate game.
+            Best of 1: optional, one game equal to homeScore and awayScore; when omitted the server records it.
+            Series (bestOf 3 or 5): leave it out. A series is reported as games won in homeScore and awayScore,
+            such as 2-1. A knockout series has exactly one side at gamesToWin (2-0 or 2-1 in a best of 3; 3-0,
+            3-1 or 3-2 in a best of 5). A round-robin series has each side at most gamesToWin, at most bestOf
+            games won in total, and may end level. Penalties only decide who won a level knockout game and are
+            never reported; the games themselves are shown by the screenshots of a dispute.
           items:
             $ref: '#/components/schemas/GameScore'
         tiebreak:
           description: >-
-            Required for a tied elimination match (a penalty shootout with a winner); forbidden otherwise.
-            Round-robin draws have no tiebreak.
+            Best of 1 only: required for a tied elimination match (a penalty shootout with a winner); forbidden
+            otherwise. Round-robin draws have no tiebreak, and a series never has one.
           oneOf:
             - $ref: '#/components/schemas/TiebreakScore'
             - type: 'null'
@@ -6817,15 +6849,34 @@ components:
     ResultScreenshotRequest:
       type: object
       additionalProperties: false
-      description: One screenshot of the Full Time screen, sent after a rejection.
-      required:
-        - evidenceId
+      description: >-
+        Screenshots of the Full Time screen, sent after a rejection: evidenceId for a best of 1 (it is game 1),
+        or screenshots with one entry per game played for a series. Send one form, not both. Each upload is
+        the caller's own processed (ready=true) JPEG or PNG that is not attached to anything else. A game
+        number above the match's bestOf is refused with 400 invalid_evidence.
       properties:
         evidenceId:
           type: string
           format: uuid
-          description: >-
-            The caller's own processed (ready=true) JPEG or PNG upload that is not attached to anything else.
+        screenshots:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - game
+              - evidenceId
+            properties:
+              game:
+                type: integer
+                minimum: 1
+                maximum: 5
+                description: The game of the series this Full Time screen shows; each game once.
+              evidenceId:
+                type: string
+                format: uuid
     SubmittedResult:
       type: object
       additionalProperties: false
@@ -6873,15 +6924,21 @@ components:
     ResultScreenshot:
       type: object
       additionalProperties: false
-      description: The viewer's own screenshot after a rejection.
+      description: One of the viewer's own screenshots after a rejection.
       required:
         - id
+        - game
         - evidenceId
         - submittedAt
       properties:
         id:
           type: string
           format: uuid
+        game:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: The game it shows; 1 for a best of 1.
         evidenceId:
           type: string
           format: uuid
@@ -6913,6 +6970,7 @@ components:
         - phase
         - submittedResult
         - myScreenshot
+        - myScreenshots
         - opponentScreenshotSubmitted
         - confirmationDeadline
         - screenshotDeadline
@@ -6935,9 +6993,15 @@ components:
             - $ref: '#/components/schemas/SubmittedResult'
             - type: 'null'
         myScreenshot:
+          description: The first of myScreenshots, the only one in a best of 1.
           oneOf:
             - $ref: '#/components/schemas/ResultScreenshot'
             - type: 'null'
+        myScreenshots:
+          type: array
+          description: The viewer's own screenshots, in game order; empty until sent.
+          items:
+            $ref: '#/components/schemas/ResultScreenshot'
         opponentScreenshotSubmitted:
           type: boolean
         confirmationDeadline:
@@ -7006,7 +7070,9 @@ components:
     MatchConfirmedResult:
       type: object
       additionalProperties: false
-      description: The canonical score, present only when the match state is completed.
+      description: >-
+        The canonical score, present only when the match state is completed. For a series homeScore and
+        awayScore are games won.
       required:
         - homeScore
         - awayScore
@@ -7767,10 +7833,15 @@ components:
         - type: object
           required:
             - rules
+            - matchFormat
           properties:
             rules:
               type: object
               additionalProperties: true
+            matchFormat:
+              allOf:
+                - $ref: '#/components/schemas/CompetitionMatchFormat'
+              description: rules.matchFormat with its defaults applied; a competition without one is a best of 1.
     CompetitionPage:
       type: object
       required:
@@ -7915,13 +7986,9 @@ components:
     OrganizerDrawConfig:
       type: object
       additionalProperties: false
+      description: >-
+        Each match's best-of comes from the competition's rules.matchFormat, never from the draw.
       properties:
-        bestOf:
-          type: integer
-          minimum: 1
-          maximum: 9
-          default: 1
-          description: Must be odd.
         thirdPlace:
           type: boolean
           default: false
@@ -7953,7 +8020,9 @@ components:
           default: 60
           description: >-
             Must be at least checkInGraceMinutes + 15, so a late but valid check-in still leaves time to play. When
-            nobody reports a score by the result deadline, both entries are removed from the tournament.
+            nobody reports a score by the result deadline, both entries are removed from the tournament. This is
+            the window of a best of 1; a series adds 15 minutes for every game after the first, to its result
+            window and, in a round robin, to the interval between rounds.
         roundIntervalMinutes:
           type: integer
           minimum: 15
@@ -8035,7 +8104,6 @@ components:
     OrganizerDrawConfigResolved:
       type: object
       required:
-        - bestOf
         - thirdPlace
         - groupCount
         - doubleRoundRobin
@@ -8045,10 +8113,6 @@ components:
         - roundIntervalMinutes
       additionalProperties: false
       properties:
-        bestOf:
-          type: integer
-          minimum: 1
-          maximum: 9
         thirdPlace:
           type: boolean
         groupCount:
@@ -8977,14 +9041,18 @@ components:
           minimum: 300
           maximum: 3600
           description: >-
-            How long each entry has to send its screenshot after a rejection (10 minutes by default).
+            How long each entry has to send its screenshots after a rejection (10 minutes by default, 15 for a
+            series).
         screenshotEvidence:
           type: object
           additionalProperties: false
-          description: Each entry sends exactly one screenshot after a rejection.
+          description: >-
+            What each entry sends after a rejection: one screenshot for a best of 1; for a series one per game
+            played, numbered by game (perGame), up to bestOf.
           required:
             - minItems
             - maxItems
+            - perGame
             - mediaTypes
           properties:
             minItems:
@@ -8992,7 +9060,11 @@ components:
               const: 1
             maxItems:
               type: integer
-              const: 1
+              enum: [1, 3, 5]
+              description: The match's best-of.
+            perGame:
+              type: boolean
+              description: True for a series; each screenshot is then numbered by its game.
             mediaTypes:
               type: array
               items:
@@ -9000,6 +9072,30 @@ components:
                 enum:
                   - image/jpeg
                   - image/png
+    CompetitionMatchFormat:
+      type: object
+      additionalProperties: false
+      required:
+        - bestOf
+      description: >-
+        rules.matchFormat: how many games each match is. One point per game won; a best of 3 is first to 2
+        wins and a best of 5 first to 3. rounds overrides bestOf for named rounds, counted back from the final
+        because the bracket size is only known at the draw. Single elimination: final, semifinal,
+        quarterfinal, round_of_16 up to round_of_1024, and third_place. Double elimination: final (the
+        grand final and its reset), winners_final and losers_final. A round robin has no rounds. Without
+        it every match is a best of 1. The draw copies each match's best-of onto the match.
+      properties:
+        bestOf:
+          type: integer
+          enum: [1, 3, 5]
+        rounds:
+          type: object
+          additionalProperties:
+            type: integer
+            enum: [1, 3, 5]
+          example:
+            semifinal: 3
+            final: 5
     CompetitionMatchVerificationRules:
       type: object
       additionalProperties: false
@@ -9125,6 +9221,7 @@ components:
         - id
         - code
         - matchNumber
+        - bestOf
         - state
         - home
         - away
@@ -9143,6 +9240,10 @@ components:
           type: string
         matchNumber:
           type: integer
+        bestOf:
+          type: integer
+          enum: [1, 3, 5]
+          description: This match's best-of, copied from rules.matchFormat at the draw.
           minimum: 1
         state:
           $ref: '#/components/schemas/MatchState'
@@ -9275,6 +9376,7 @@ components:
         - awayScore
         - tiebreak
         - confirmedAt
+      description: For a series, homeScore and awayScore are games won.
       properties:
         submissionId:
           type: string
@@ -9427,12 +9529,19 @@ components:
         - wins
         - draws
         - losses
+        - gamesWon
+        - gamesLost
         - goalsFor
         - goalsAgainst
         - goalDifference
         - points
         - walkovers
         - removed
+      description: >-
+        In a best-of-3 or best-of-5 stage wins, draws and losses count series, points are games won (one per
+        game; a walkover counts as the games a series needs), and ties on points are broken by game
+        difference, then goal difference. A best-of-1 stage scores 3 for a win and 1 for a draw and leaves
+        gamesWon and gamesLost at 0.
       properties:
         rank:
           type:
@@ -9440,7 +9549,8 @@ components:
             - 'null'
           minimum: 1
           description: >-
-            Competition rank within the group; entries level on points, goal difference and goals scored share it.
+            Competition rank within the group; entries level on points, game difference, goal difference and goals
+            scored share it.
             null exactly when removed is true.
         entryId:
           type: string
@@ -9457,6 +9567,12 @@ components:
           type: integer
           minimum: 0
         losses:
+          type: integer
+          minimum: 0
+        gamesWon:
+          type: integer
+          minimum: 0
+        gamesLost:
           type: integer
           minimum: 0
         goalsFor:
@@ -9969,13 +10085,14 @@ components:
           format: date-time
         evidence:
           type: array
-          maxItems: 3
-          description: Screenshots of a final report, in submission order; empty for an initial report.
+          maxItems: 5
+          description: Screenshots of a final report, in game order; empty for an initial report.
           items:
             type: object
             additionalProperties: false
             required:
               - id
+              - game
               - mediaType
               - byteSize
               - ready
@@ -9984,6 +10101,11 @@ components:
               id:
                 type: string
                 format: uuid
+              game:
+                type: integer
+                minimum: 1
+                maximum: 5
+                description: The game of the series it shows; 1 for a best of 1.
               mediaType:
                 type: string
                 enum:
@@ -10030,8 +10152,10 @@ components:
           maximum: 99
         games:
           type: array
-          maxItems: 99
-          description: Optional 1..bestOf breakdown; one aggregate game is recorded when omitted.
+          maxItems: 5
+          description: >-
+            Best of 1: optional, one game equal to the totals. Series: leave it out; homeScore and awayScore
+            are games won, under the same rules as ScoreReportRequest.
           items:
             $ref: '#/components/schemas/GameScore'
         tiebreak:
@@ -10192,7 +10316,12 @@ components:
         The reader's verdict on a review. supports: the screenshots agree and match exactly one claim (decision
         says which when the reader may settle it itself); neither: they agree but match no claim; conflicting:
         they disagree (differences names the fields); unreadable: nothing usable was read; inconclusive: they agree
-        but the team names don't match the players yet; pending: still reading.
+        but the team names don't match the players yet; pending: still reading. A series is compared game by
+        game: games has each game's score and winner, and score is the games won they add up to, which must equal
+        the reported games won. The reader settles a series only when the screenshots show the complete series
+        (games 1 to N, ending at the majority or after every game), each game from both players, unflagged,
+        with no game decided on penalties. The flag duplicate_in_series marks one player's screenshot sent
+        for two games.
       required: [verdict, score, differences, reasons, autoDecide]
       properties:
         verdict: { type: string, enum: [pending, supports, neither, conflicting, unreadable, inconclusive] }
@@ -10205,6 +10334,22 @@ components:
         differences: { type: array, items: { type: string } }
         reasons: { type: array, items: { type: string } }
         decision: { type: string, enum: [accept_home, accept_away] }
+        games:
+          type: array
+          description: Series only, in game order.
+          items:
+            type: object
+            additionalProperties: false
+            required: [game, sides, score, differences, winner]
+            properties:
+              game: { type: integer, minimum: 1, maximum: 5 }
+              sides: { type: array, items: { type: string, enum: [away, home] }, description: Who sent a screenshot of this game. }
+              score:
+                oneOf:
+                  - { $ref: '#/components/schemas/ScreenshotScore' }
+                  - { type: "null" }
+              differences: { type: array, items: { type: string } }
+              winner: { type: [string, "null"], enum: [home, away, null], description: "Who won the game; penalties decide a level knockout game, and a level round-robin game has none." }
     ResultReviewDetail:
       type: object
       additionalProperties: false
