@@ -35,11 +35,13 @@ result: organizers run competitions, and disagreements go to Gamics staff.
      window** opens (10 minutes by default).
 4. In the screenshot window each entry sends **one** processed JPEG or PNG
    screenshot of the Full Time screen with
-   `POST /v1/matches/{matchId}/score-reports/screenshot`. Nobody enters a new
-   score: the submitted result is the only claim. When both screenshots are in,
-   the match goes to the **Gamics review queue**, where the screenshot reader
-   reads both and says whether they show the submitted result (see
-   [screenshot reader](screenshot-reader.md)). Both entries are told the
+   `POST /v1/matches/{matchId}/score-reports/screenshot`, or, in a best of 3 or
+   5, one per game played, each numbered by its game (see
+   [series](series-matches.md)). Nobody enters a new score: the submitted
+   result is the only claim. When both entries' screenshots are in, the match
+   goes to the **Gamics review queue**, where the screenshot reader reads them
+   and says whether they show the submitted result, game by game for a series
+   (see [screenshot reader](screenshot-reader.md)). Both entries are told the
    result is under review.
 
 ## Deadlines and removal
@@ -319,7 +321,7 @@ longer exists: after a rejection nobody enters a new score.
 
 | Decision | What the code does | Why |
 |---|---|---|
-| D6 | `games` is optional. Without it the server records one aggregate game. Two results are equal on the home score, the away score and the tiebreak only. | Game order or detail must never decide whether a result stands. |
+| D6 | Best of 1: `games` is optional; without it the server records the one game. Two results are equal on the home score, the away score and the tiebreak only. A series (best of 3 or 5) is reported as games won, with no games and no tiebreak. | Game order or detail must never decide whether a result stands; players report who won a series and by how many, and only a dispute needs every game. |
 | D13 | A review has exactly four decisions. A liar on the losing side is struck, not removed. An automated decider can neither set a corrected score nor record a strike. | An unreviewed automated decision must never lead to a ban. |
 | D14 | Strikes come only from staff review decisions, against the player the decision proves wrong (the rejecter or the submitter), at most two per decision, and stay active until an admin revokes one. `RESULT_STRIKE_BAN_THRESHOLD` active strikes block free registration and M-Pesa checkout; an M-Pesa payment that completes after the limit gets a withdrawal-pending entry that never plays and a mandatory full refund. Existing entries are not affected. | Strikes are for liars, not for typo fixers or the accepted side, and paying must not bypass the ban. |
 | D17 | `matchVerification` accepts only the three window keys on write. Retired single-submission keys are refused by name, and stored rules that still carry them are read without them. | A clear contract, while older stored rules keep working. |
