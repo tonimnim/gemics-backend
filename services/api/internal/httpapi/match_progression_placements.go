@@ -21,9 +21,13 @@ type progressionPlacementEntry struct {
 	Live    bool
 }
 
+// GamesWon and GamesLost are counted only in a series stage, where the points
+// are games won; elsewhere they stay zero and never decide an order.
 type progressionStandingForPlacement struct {
 	EntryID      string
 	Points       int
+	GamesWon     int
+	GamesLost    int
 	GoalsFor     int
 	GoalsAgainst int
 }
@@ -98,13 +102,17 @@ func rankRoundRobinPlacements(entries []progressionPlacementEntry,
 	return result, nil
 }
 
-// sortRoundRobinStandings puts rows in table order: points, goal difference and
-// goals scored, then the entry id, which keeps exact ties in a stable order.
+// sortRoundRobinStandings puts rows in table order: points, game difference
+// (series stages only), goal difference and goals scored, then the entry id,
+// which keeps exact ties in a stable order.
 func sortRoundRobinStandings(rows []progressionStandingForPlacement) {
 	sort.Slice(rows, func(i, j int) bool {
 		left, right := rows[i], rows[j]
 		if left.Points != right.Points {
 			return left.Points > right.Points
+		}
+		if leftGames, rightGames := left.GamesWon-left.GamesLost, right.GamesWon-right.GamesLost; leftGames != rightGames {
+			return leftGames > rightGames
 		}
 		leftDifference := left.GoalsFor - left.GoalsAgainst
 		rightDifference := right.GoalsFor - right.GoalsAgainst
@@ -119,8 +127,8 @@ func sortRoundRobinStandings(rows []progressionStandingForPlacement) {
 }
 
 func sameRoundRobinPlacementScore(left, right progressionStandingForPlacement) bool {
-	return left.Points == right.Points && left.GoalsFor-left.GoalsAgainst == right.GoalsFor-right.GoalsAgainst &&
-		left.GoalsFor == right.GoalsFor
+	return left.Points == right.Points && left.GamesWon-left.GamesLost == right.GamesWon-right.GamesLost &&
+		left.GoalsFor-left.GoalsAgainst == right.GoalsFor-right.GoalsAgainst && left.GoalsFor == right.GoalsFor
 }
 
 // rankEliminationPlacements ranks the whole frozen field by exit depth (see
@@ -417,7 +425,7 @@ func writeProgressionPlacements(ctx context.Context, tx pgx.Tx, stage progressio
 func progressionPlacementRule(format string) string {
 	const omitted = "; non-live (removed) entries receive no placement"
 	if format == "round_robin" {
-		return "competition_rank(points,goal_difference,goals_for); exact metric ties share placement" + omitted
+		return "competition_rank(points,game_difference,goal_difference,goals_for); exact metric ties share placement" + omitted
 	}
 	return "champion first, then competition_rank by exit depth (no champion: nobody first, the deepest exits " +
 		"share second); exit depth = deepest match played or voided from and not won (single_elimination: " +
@@ -450,7 +458,7 @@ func loadProgressionPlacementEntries(ctx context.Context, tx pgx.Tx,
 
 func loadProgressionPlacementStandings(ctx context.Context, tx pgx.Tx,
 	stageID string) ([]progressionStandingForPlacement, error) {
-	rows, err := tx.Query(ctx, `SELECT entry_id::text,points,goals_for,goals_against
+	rows, err := tx.Query(ctx, `SELECT entry_id::text,points,games_won,games_lost,goals_for,goals_against
 		FROM competition_standings WHERE stage_id=$1 ORDER BY entry_id`, stageID)
 	if err != nil {
 		return nil, err
@@ -459,7 +467,7 @@ func loadProgressionPlacementStandings(ctx context.Context, tx pgx.Tx,
 	result := make([]progressionStandingForPlacement, 0)
 	for rows.Next() {
 		var row progressionStandingForPlacement
-		if err = rows.Scan(&row.EntryID, &row.Points, &row.GoalsFor, &row.GoalsAgainst); err != nil {
+		if err = rows.Scan(&row.EntryID, &row.Points, &row.GamesWon, &row.GamesLost, &row.GoalsFor, &row.GoalsAgainst); err != nil {
 			return nil, err
 		}
 		result = append(result, row)

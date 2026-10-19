@@ -46,6 +46,8 @@ type competitionStandingRow struct {
 	Wins           int    `json:"wins"`
 	Draws          int    `json:"draws"`
 	Losses         int    `json:"losses"`
+	GamesWon       int    `json:"gamesWon"`
+	GamesLost      int    `json:"gamesLost"`
 	GoalsFor       int    `json:"goalsFor"`
 	GoalsAgainst   int    `json:"goalsAgainst"`
 	GoalDifference int    `json:"goalDifference"`
@@ -153,7 +155,8 @@ func queryCompetitionStandings(ctx context.Context, pool *pgxpool.Pool, id strin
 func queryCompetitionStandingRecords(ctx context.Context, tx pgx.Tx, competitionID string) ([]competitionStandingRecord, error) {
 	rows, err := tx.Query(ctx, `SELECT stage.id::text,stage.name,stage.position,stage.status,standing.group_key,
 		entry.status,standing.entry_id::text,entry.display_name,standing.played,standing.wins,standing.draws,
-		standing.losses,standing.goals_for,standing.goals_against,standing.points,standing.walkovers
+		standing.losses,standing.games_won,standing.games_lost,standing.goals_for,standing.goals_against,
+		standing.points,standing.walkovers
 		FROM competition_stages stage
 		JOIN competition_standings standing ON standing.stage_id=stage.id
 		JOIN competition_entries entry ON entry.id=standing.entry_id
@@ -166,7 +169,8 @@ func queryCompetitionStandingRecords(ctx context.Context, tx pgx.Tx, competition
 		var record competitionStandingRecord
 		err := row.Scan(&record.StageID, &record.StageName, &record.StagePosition, &record.StageStatus,
 			&record.GroupKey, &record.EntryStatus, &record.Row.EntryID, &record.Row.DisplayName, &record.Row.Played,
-			&record.Row.Wins, &record.Row.Draws, &record.Row.Losses, &record.Row.GoalsFor, &record.Row.GoalsAgainst,
+			&record.Row.Wins, &record.Row.Draws, &record.Row.Losses, &record.Row.GamesWon, &record.Row.GamesLost,
+			&record.Row.GoalsFor, &record.Row.GoalsAgainst,
 			&record.Row.Points, &record.Row.Walkovers)
 		return record, err
 	})
@@ -232,7 +236,7 @@ func rankCompetitionStandingsGroup(key string, records []competitionStandingReco
 		rows[row.EntryID] = row
 		entries[index] = progressionPlacementEntry{EntryID: row.EntryID, Live: !row.Removed}
 		standings[index] = progressionStandingForPlacement{EntryID: row.EntryID, Points: row.Points,
-			GoalsFor: row.GoalsFor, GoalsAgainst: row.GoalsAgainst}
+			GamesWon: row.GamesWon, GamesLost: row.GamesLost, GoalsFor: row.GoalsFor, GoalsAgainst: row.GoalsAgainst}
 		if row.Removed {
 			removed = append(removed, standings[index])
 		}
