@@ -8853,6 +8853,8 @@ components:
         - requirements
         - issues
         - paymentId
+        - entryId
+        - entryStatus
         - evaluatedAt
       properties:
         competitionId:
@@ -8905,6 +8907,24 @@ components:
             payment also carries the refund when requiredAction is view_refund. requiredAction is poll_payment while
             the payment is unfinished (initiating, pending, callback_received or review), even when a blocking
             issue such as registration_closed or competition_full stops a new entry.
+        entryId:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The player's own entry in this competition, whatever its status, or null when they never entered.
+        entryStatus:
+          type:
+            - string
+            - 'null'
+          enum:
+            - registered
+            - checked_in
+            - accepted
+            - withdrawal_pending
+            - withdrawn
+            - disqualified
+            - null
         evaluatedAt:
           type: string
           format: date-time
