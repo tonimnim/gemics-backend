@@ -1,0 +1,39 @@
+# Opens the local stack to a phone through one ngrok domain. Run with
+#   npm run stack:tunnel:up
+# Needs NGROK_AUTHTOKEN and NGROK_URL in .env.docker, the dashboard built into
+# apps/admin/dist (npm run admin:tunnel:build), and STORAGE_S3_PUBLIC_ENDPOINT
+# set to NGROK_URL so presigned uploads point at the tunnel.
+services:
+  tunnel-router:
+    image: golang:1.26-alpine
+    working_dir: /router
+    command: ["go", "run", "main.go"]
+    environment:
+      API_URL: http://api:8080
+      WEB_URL: http://web:3000
+      STORAGE_URL: http://minio:9000
+      STORAGE_BUCKET: ${STORAGE_S3_BUCKET:-gamics-local}
+      ADMIN_DIR: /admin
+    volumes:
+      - ./tools/tunnel:/router:ro
+      - ./apps/admin/dist:/admin:ro
+      - tunnel-gocache:/root/.cache/go-build
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+
+  ngrok:
+    image: ngrok/ngrok:3.39.11-alpine
+    command: ["http", "--url=${NGROK_URL:?set NGROK_URL in .env.docker}", "--log=stdout", "--log-format=logfmt",
+              "http://tunnel-router:8080"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?set NGROK_AUTHTOKEN in .env.docker}
+    ports:
+      - "127.0.0.1:${NGROK_INSPECTOR_HOST_PORT:-4040}:4040"
+    restart: unless-stopped
+    depends_on:
+      - tunnel-router
+
+volumes:
+  tunnel-gocache:
