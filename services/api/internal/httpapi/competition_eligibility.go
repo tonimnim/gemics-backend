@@ -62,7 +62,11 @@ type competitionEligibilityResult struct {
 	Issues         []eligibilityIssue          `json:"issues"`
 	// PaymentID is the player's latest payment for the competition, so a
 	// client that lost the STK response can resume polling it.
-	PaymentID   *string   `json:"paymentId"`
+	PaymentID *string `json:"paymentId"`
+	// EntryID and EntryStatus are the player's own entry, whatever its
+	// status, or null when they never entered.
+	EntryID     *string   `json:"entryId"`
+	EntryStatus *string   `json:"entryStatus"`
 	EvaluatedAt time.Time `json:"evaluatedAt"`
 }
 
@@ -255,7 +259,8 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 		CompetitionID: facts.CompetitionID, GameID: facts.GameID,
 		Status: eligibilityStatusEligible, Eligible: true, RequiredAction: "none",
 		EntryFeeMinor: facts.EntryFeeMinor, Currency: facts.Currency,
-		Requirements: policy, Issues: []eligibilityIssue{}, PaymentID: facts.PaymentID, EvaluatedAt: now.UTC(),
+		Requirements: policy, Issues: []eligibilityIssue{}, PaymentID: facts.PaymentID,
+		EntryID: facts.EntryID, EntryStatus: facts.EntryStatus, EvaluatedAt: now.UTC(),
 	}
 	blocking := func(code, category, message string) {
 		result.Issues = append(result.Issues, eligibilityIssue{Code: code, Category: category, Severity: "blocking", Message: message})

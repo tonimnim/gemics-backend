@@ -226,7 +226,8 @@ func TestIntegrationCancelledCompetitionStaysReadable(t *testing.T) {
 	// The registered player keeps the registration view on the preflight.
 	registered := competitionVisibilityDecode[competitionVisibilityEligibility](t, competitionVisibilityCall(t,
 		server.getCompetitionEligibility, http.MethodGet, "/", player, registering, ""), http.StatusOK)
-	if registered.Data.Status != eligibilityStatusRegistered || registered.Data.RequiredAction != "view_registration" {
+	if registered.Data.Status != eligibilityStatusRegistered || registered.Data.RequiredAction != "view_registration" ||
+		registered.Data.EntryID == nil || *registered.Data.EntryID != freeEntryID {
 		t.Fatalf("entrant eligibility of the cancelled competition = %+v", registered.Data)
 	}
 }
