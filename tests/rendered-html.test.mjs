@@ -20,9 +20,9 @@ test("server-renders the Ozone landing page", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Ozone — Your game\. Your name\.<\/title>/i);
-  assert.match(html, /Your game\./);
-  assert.match(html, /Your name\./);
+  assert.match(html, /<title>Ozone — Your game, ranked\.<\/title>/i);
+  assert.match(html, /Your game,/);
+  assert.match(html, /ranked\./);
   assert.match(html, /How it works/);
   assert.match(html, /One of you submits the score\. The other confirms it\./);
   assert.match(html, /\/images\/player-left\.webp/);
@@ -80,7 +80,7 @@ test("removes starter-only preview infrastructure", async () => {
   ]);
 
   assert.doesNotMatch(page, /Nairobi Sunday Knockout/);
-  assert.match(layout, /Ozone — Your game\. Your name\./);
+  assert.match(layout, /Ozone — Your game, ranked\./);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await assert.rejects(access(new URL("../app/_sites-preview/preview.css", import.meta.url)));

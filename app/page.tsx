@@ -106,10 +106,10 @@ export default async function Home() {
           <div className="hero-copy shell">
             <h1 id="hero-title">
               <span className="line">
-                <span>Your game.</span>
+                <span>Your game,</span>
               </span>
               <span className="line">
-                <span className="shine">Your name.</span>
+                <span className="shine">ranked.</span>
               </span>
               <span className="swash" aria-hidden="true" />
             </h1>
