@@ -511,6 +511,13 @@ paths:
                   type: string
                   pattern: ^[A-Z]{2}$
                   description: Prefill it from the phone's calling code; the player may change it.
+                username:
+                  type: string
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9_.]{2,23}$
+                  description: >-
+                    Optional. Replaces the generated handle, and the display name while that still shows the generated
+                    handle. Omit it to keep the generated handle. Unique ignoring case; check it as the player types
+                    with GET /v1/usernames/{username}/availability.
       responses:
         '200':
           description: The onboarded player.
@@ -520,7 +527,7 @@ paths:
                 $ref: '#/components/schemas/Player'
         '400':
           $ref: '#/components/responses/Error'
-          description: invalid_konami_id, invalid_phone, invalid_country.
+          description: invalid_konami_id, invalid_phone, invalid_country, invalid_username.
         '401':
           $ref: '#/components/responses/Error'
           description: authentication_required, invalid_session.
@@ -528,7 +535,56 @@ paths:
           $ref: '#/components/responses/Error'
           description: >-
             konami_id_taken (another account has it; Tonits support can help the owner), phone_taken (another
-            account has proven that number), already_onboarded.
+            account has proven that number), username_taken, already_onboarded.
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/usernames/{username}/availability:
+    get:
+      operationId: checkUsernameAvailability
+      tags:
+        - Players
+      summary: Whether a username is free, for checking as the player types.
+      description: >-
+        Answers 200 either way. available is false with reason invalid (it breaks the 3-24 letters, numbers,
+        underscores or dots rule) or taken (another player has it, ignoring case). The caller's own current handle
+        is available. Submitting can still race another player, so handle username_taken on submit too.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 64
+      responses:
+        '200':
+          description: The verdict.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - username
+                  - available
+                  - reason
+                properties:
+                  username:
+                    type: string
+                  available:
+                    type: boolean
+                  reason:
+                    type:
+                      - string
+                      - 'null'
+                    enum:
+                      - invalid
+                      - taken
+                      - null
+        '401':
+          $ref: '#/components/responses/Error'
+          description: authentication_required, invalid_session.
         '503':
           $ref: '#/components/responses/Error'
   /v1/me/profile:

@@ -33,6 +33,8 @@ type onboardingInput struct {
 	KonamiID    string `json:"konamiId"`
 	PhoneNumber string `json:"phoneNumber"`
 	CountryCode string `json:"countryCode"`
+	// Username is optional: when given it replaces the generated handle.
+	Username *string `json:"username"`
 }
 
 const maxIdentityTokenLength = 8192
@@ -224,10 +226,11 @@ func handleCandidates(givenName string) ([]string, error) {
 }
 
 // completeOnboarding adds what a Google or Apple player needs before entering
-// competitions: the Konami ID, a phone number and the country. The phone is
-// not locked to the account until a payment from it succeeds. Finishing also
-// records the current terms and privacy notice as accepted, so the onboarding
-// screen must show them.
+// competitions: the Konami ID, a phone number and the country, and optionally
+// a username to replace the generated handle. The phone is not locked to the
+// account until a payment from it succeeds. Finishing also records the
+// current terms and privacy notice as accepted, so the onboarding screen must
+// show them.
 func (s *Server) completeOnboarding(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
 		return
@@ -251,6 +254,14 @@ func (s *Server) completeOnboarding(w http.ResponseWriter, r *http.Request) {
 	if !countryPattern.MatchString(country) {
 		writeError(w, http.StatusBadRequest, "invalid_country", "Country code must be a two-letter ISO code.")
 		return
+	}
+	chosenName := ""
+	if input.Username != nil {
+		chosenName = strings.TrimSpace(*input.Username)
+		if !handlePattern.MatchString(chosenName) {
+			writeError(w, http.StatusBadRequest, "invalid_username", "Username must be 3-24 letters, numbers, underscores or dots.")
+			return
+		}
 	}
 	current := identityFromContext(r.Context())
 	tx, err := s.db.Writer.Begin(r.Context())
@@ -291,6 +302,13 @@ func (s *Server) completeOnboarding(w http.ResponseWriter, r *http.Request) {
 			"That Konami ID is already linked to another Tonits account. Contact Tonits support if it is yours.")
 		return
 	}
+	if err == nil && chosenName != "" {
+		err = replaceGeneratedHandle(r.Context(), tx, current.UserID, chosenName)
+		if uniqueViolationOn(err, "player_profiles_handle_unique") {
+			writeError(w, http.StatusConflict, "username_taken", "That username is already taken.")
+			return
+		}
+	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `UPDATE users SET phone_e164=$2,phone_verified_at=NULL,country_code=$3,
 			country_chosen_at=now(),onboarded_at=now(),updated_at=now() WHERE id=$1`, current.UserID, phone, country)
@@ -310,4 +328,43 @@ func nullIfEmpty(value string) any {
 		return nil
 	}
 	return value
+}
+
+// replaceGeneratedHandle sets the player's chosen username as their handle,
+// and as their display name while that still shows the generated handle.
+func replaceGeneratedHandle(ctx context.Context, tx pgx.Tx, userID, chosen string) error {
+	var previous string
+	if err := tx.QueryRow(ctx, `UPDATE player_profiles profile SET handle=$2,updated_at=now()
+		FROM player_profiles before WHERE before.user_id=profile.user_id AND profile.user_id=$1
+		RETURNING before.handle`, userID, chosen).Scan(&previous); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE users SET display_name=$2 WHERE id=$1 AND display_name=$3`, userID, chosen, previous)
+	return err
+}
+
+// usernameAvailability tells the onboarding screen, as the player types,
+// whether a username can be theirs. The player's own current handle counts as
+// available.
+func (s *Server) usernameAvailability(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDatabase(w) {
+		return
+	}
+	name := strings.TrimSpace(r.PathValue("username"))
+	if !handlePattern.MatchString(name) {
+		writeJSON(w, http.StatusOK, map[string]any{"username": name, "available": false, "reason": "invalid"})
+		return
+	}
+	var taken bool
+	if err := s.db.Writer.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM player_profiles
+		WHERE lower(handle)=lower($1) AND user_id::text<>$2)`, name, identityFromContext(r.Context()).UserID).
+		Scan(&taken); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to check the username.")
+		return
+	}
+	result := map[string]any{"username": name, "available": !taken, "reason": nil}
+	if taken {
+		result["reason"] = "taken"
+	}
+	writeJSON(w, http.StatusOK, result)
 }

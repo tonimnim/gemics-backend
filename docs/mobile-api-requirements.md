@@ -42,20 +42,27 @@ Store requires it whenever Google is offered); Android can show Google alone.
    - Errors: `401 invalid_identity_token` (try again), `403 account_unavailable`,
      `409 sign_in_conflict` (retry), `429 rate_limited`, `503 sign_in_unavailable` (that
      provider isn't configured on this server) or `identity_provider_unavailable`.
-2. **Second screen, only while `player.onboardingCompleted` is false:** Konami ID, phone
-   number and country, nothing else, with a line accepting the terms and privacy notice
-   (`GET /v1/legal/documents/current`).
-   - `POST /v1/me/onboarding` with `{konamiId, phoneNumber, countryCode}` returns the
-     updated `Player`. Prefill the country from the phone's calling code (`+254` → KE,
-     `+91` → IN) and let the player change it.
+2. **Onboarding, only while `player.onboardingCompleted` is false:** username (optional),
+   Konami ID, country and phone number, with a line accepting the terms and privacy
+   notice (`GET /v1/legal/documents/current`).
+   - `POST /v1/me/onboarding` with `{konamiId, phoneNumber, countryCode, username?}`
+     returns the updated `Player`. Prefill the country from the phone's calling code
+     (`+254` → KE, `+91` → IN), or the phone prefix from the country, and let the player
+     change it.
+   - `username` replaces the generated handle (and the display name while that still
+     shows the generated handle); omit it to keep the generated one. Same rule as
+     handles: 3-24 letters, numbers, underscores or dots, unique ignoring case. Check it
+     as the player types with `GET /v1/usernames/{username}/availability`, which answers
+     `{username, available, reason}` with `reason` `invalid` or `taken`; still handle
+     `409 username_taken` on submit. Handles can change later with `PUT /v1/me/profile`.
    - The Konami ID is as shown in eFootball; case, spaces, dots, dashes and underscores
      are ignored when comparing, so `ABCD-1234-EFGH` and `abcd1234efgh` are the same ID.
    - The phone is stored **unproven** (`phoneVerified: false`): a successful M-Pesa payment
      from it later proves it. Any number may be saved unless another account has already
      proven it.
-   - Errors: `400 invalid_konami_id`, `invalid_phone`, `invalid_country`;
-     `409 konami_id_taken` (another account has it: offer support), `phone_taken`,
-     `already_onboarded`.
+   - Errors: `400 invalid_konami_id`, `invalid_phone`, `invalid_country`,
+     `invalid_username`; `409 konami_id_taken` (another account has it: offer support),
+     `phone_taken`, `username_taken`, `already_onboarded`.
    - Finishing records the terms as accepted. Competition entry is blocked
      (`profile_incomplete`) until then, so route a signed-in player whose
      `onboardingCompleted` is false back to this screen.

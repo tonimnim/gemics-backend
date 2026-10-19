@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -9,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -266,4 +268,66 @@ func TestIntegrationPaymentProvesThePhone(t *testing.T) {
 	assertFileOrder(t, "payment_handlers.go", "func (s *Server) completePayment(",
 		"UPDATE payment_intents SET status='succeeded'", "stampPaymentUSD(ctx, tx, paymentID)",
 		"provePaidPhone(ctx, tx, paymentID)")
+}
+
+// A player may pick their username at onboarding instead of keeping the
+// generated handle, and can check it as they type.
+func TestIntegrationOnboardingUsername(t *testing.T) {
+	h := newRegistrationHarness(t)
+	suffix := strings.ToLower(rand.Text())[:8]
+	signUp := func(subject string) socialPlayer {
+		t.Helper()
+		recorder := h.call(h.server.signInWithGoogle, http.MethodPost, "/v1/auth/google",
+			`{"idToken":"`+googleToken(t, subject, subject+"@example.com", "")+`"}`, "")
+		var session struct {
+			Player socialPlayer `json:"player"`
+		}
+		if recorder.Code != http.StatusCreated || json.Unmarshal(recorder.Body.Bytes(), &session) != nil {
+			t.Fatalf("sign-up = %d %s", recorder.Code, recorder.Body)
+		}
+		return session.Player
+	}
+	first, second := signUp("name-a-"+suffix), signUp("name-b-"+suffix)
+	chosen := "Kipchoge_" + suffix[:6]
+	available := func(userID, name string) string {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/v1/usernames/"+name+"/availability", nil)
+		request.SetPathValue("username", name)
+		request = request.WithContext(context.WithValue(t.Context(), identityContextKey{}, identity{UserID: userID}))
+		recorder := httptest.NewRecorder()
+		h.server.usernameAvailability(recorder, request)
+		return recorder.Body.String()
+	}
+	if body := available(first.ID, chosen); !strings.Contains(body, `"available":true`) {
+		t.Fatalf("free name = %s", body)
+	}
+	if body := available(first.ID, "x"); !strings.Contains(body, `"reason":"invalid"`) {
+		t.Fatalf("invalid name = %s", body)
+	}
+	onboard := func(userID, username, konami string) *httptest.ResponseRecorder {
+		return h.call(h.server.completeOnboarding, http.MethodPost, "/v1/me/onboarding",
+			`{"username":"`+username+`","konamiId":"`+konami+`","phoneNumber":"+254711000111","countryCode":"KE"}`, userID)
+	}
+	h.expect(onboard(first.ID, "no", "NAME-A-"+suffix), http.StatusBadRequest, "invalid_username")
+	done := onboard(first.ID, chosen, "NAME-A-"+suffix)
+	h.expect(done, http.StatusOK, "")
+	var player socialPlayer
+	if err := json.Unmarshal(done.Body.Bytes(), &player); err != nil || player.Username != chosen || player.DisplayName != chosen {
+		t.Fatalf("onboarded with a username = %s", done.Body)
+	}
+	// Taken now, case-insensitively, for anyone else, but still the owner's own.
+	if body := available(second.ID, strings.ToUpper(chosen)); !strings.Contains(body, `"reason":"taken"`) {
+		t.Fatalf("taken name = %s", body)
+	}
+	if body := available(first.ID, chosen); !strings.Contains(body, `"available":true`) {
+		t.Fatalf("own name = %s", body)
+	}
+	h.expect(onboard(second.ID, strings.ToLower(chosen), "NAME-B-"+suffix), http.StatusConflict, "username_taken")
+	// Without a username, the generated handle stays.
+	kept := h.call(h.server.completeOnboarding, http.MethodPost, "/v1/me/onboarding",
+		`{"konamiId":"NAME-B-`+suffix+`","phoneNumber":"+254711000222","countryCode":"KE"}`, second.ID)
+	h.expect(kept, http.StatusOK, "")
+	if err := json.Unmarshal(kept.Body.Bytes(), &player); err != nil || player.Username != second.Username {
+		t.Fatalf("onboarded without a username = %s", kept.Body)
+	}
 }

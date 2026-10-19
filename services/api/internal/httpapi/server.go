@@ -102,6 +102,7 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	mux.Handle("GET /v1/me", s.requireAuth(http.HandlerFunc(s.getMe)))
 	mux.Handle("PATCH /v1/me", s.requireAuth(http.HandlerFunc(s.patchMe)))
 	mux.Handle("POST /v1/me/onboarding", s.requireAuth(http.HandlerFunc(s.completeOnboarding)))
+	mux.Handle("GET /v1/usernames/{username}/availability", s.requireAuth(http.HandlerFunc(s.usernameAvailability)))
 	mux.Handle("PUT /v1/me/profile", s.requireAuth(http.HandlerFunc(s.putProfile)))
 	mux.Handle("POST /v1/me/password", s.requireAuth(http.HandlerFunc(s.changePassword)))
 	mux.Handle("POST /v1/me/email", s.requireAuth(http.HandlerFunc(s.requestEmailVerification)))
