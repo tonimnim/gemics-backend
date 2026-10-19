@@ -160,3 +160,43 @@ internal and public origins, a private bucket and scoped application credentials
 do not reuse MinIO root credentials. Never publish PostgreSQL or Redis ports
 publicly. Docker Compose remains a single-host environment and cannot guarantee
 zero downtime; see `production-architecture.md`.
+
+## Phone tunnel (ngrok)
+
+To test the app on a real phone against this stack, `compose.tunnel.yaml`
+puts everything behind one ngrok domain:
+
+| Path | Goes to |
+|---|---|
+| `/v1/…`, `/healthz`, `/readyz` | the API |
+| `/admin/` | the staff dashboard (a build served by the router) |
+| `/<bucket>/…` | MinIO, so presigned screenshot uploads and downloads work |
+| everything else | the website |
+
+1. **Configure.** In `.env.docker` (gitignored), set:
+
+   | Setting | Value |
+   |---|---|
+   | `NGROK_AUTHTOKEN` | your ngrok token |
+   | `NGROK_URL` | the ngrok domain |
+   | `STORAGE_S3_PUBLIC_ENDPOINT` | the ngrok domain, so storage URLs are signed for it |
+   | `PUBLIC_API_URL` | the ngrok domain |
+   | `CORS_ALLOWED_ORIGINS` | add the ngrok domain to the list |
+
+   Then restart `api`, `evidence-worker` and rebuild `web`.
+2. **Build the dashboard** for `/admin/`: `npm run admin:tunnel:build`.
+3. **Start** with `npm run stack:tunnel:up`, and stop with
+   `npm run stack:tunnel:down`. The ngrok inspector is at
+   http://127.0.0.1:4040.
+
+**Pointing the app at it:** use the ngrok domain as the API base URL.
+
+**Browser warning:** browsers see ngrok's free-plan warning once; the app's
+own HTTP client doesn't.
+
+**Sharing the domain:** a free ngrok domain serves one tunnel at a time. Stop
+any other project's ngrok that uses it first.
+
+**Payments:** the tunnel exposes the local API to the internet. With
+production M-Pesa keys in `.env.docker`, anyone with the link could sign up
+and trigger real payment prompts, so keep the tunnel up only while testing.
