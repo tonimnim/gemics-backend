@@ -297,14 +297,15 @@ components:
         reportedAt: { type: string, format: date-time }
         evidence:
           type: array
-          maxItems: 3
-          description: Screenshots of a final report, in submission order; empty for an initial report.
+          maxItems: 5
+          description: Screenshots of a final report, in game order; empty for an initial report.
           items:
             type: object
             additionalProperties: false
-            required: [id, mediaType, byteSize, ready, reading]
+            required: [id, game, mediaType, byteSize, ready, reading]
             properties:
               id: { type: string, format: uuid }
+              game: { type: integer, minimum: 1, maximum: 5, description: The game of the series it shows; 1 for a best of 1. }
               mediaType: { type: string, enum: [image/jpeg, image/png] }
               byteSize: { type: integer, format: int64 }
               ready: { type: boolean }
@@ -334,8 +335,10 @@ components:
         awayScore: { type: integer, minimum: 0, maximum: 99 }
         games:
           type: array
-          maxItems: 99
-          description: Optional 1..bestOf breakdown; one aggregate game is recorded when omitted.
+          maxItems: 5
+          description: >-
+            Best of 1: optional, one game equal to the totals. Series: leave it out; homeScore and awayScore
+            are games won, under the same rules as ScoreReportRequest.
           items: { $ref: "#/components/schemas/GameScore" }
         tiebreak:
           oneOf:
@@ -520,7 +523,12 @@ components:
         The reader's verdict on a review. supports: the screenshots agree and match exactly one claim (decision
         says which when the reader may settle it itself); neither: they agree but match no claim; conflicting:
         they disagree (differences names the fields); unreadable: nothing usable was read; inconclusive: they agree
-        but the team names don't match the players yet; pending: still reading.
+        but the team names don't match the players yet; pending: still reading. A series is compared game by
+        game: games has each game's score and winner, and score is the games won they add up to, which must equal
+        the reported games won. The reader settles a series only when the screenshots show the complete series
+        (games 1 to N, ending at the majority or after every game), each game from both players, unflagged,
+        with no game decided on penalties. The flag duplicate_in_series marks one player's screenshot sent
+        for two games.
       required: [verdict, score, differences, reasons, autoDecide]
       properties:
         verdict: { type: string, enum: [pending, supports, neither, conflicting, unreadable, inconclusive] }
@@ -533,6 +541,22 @@ components:
         differences: { type: array, items: { type: string } }
         reasons: { type: array, items: { type: string } }
         decision: { type: string, enum: [accept_home, accept_away] }
+        games:
+          type: array
+          description: Series only, in game order.
+          items:
+            type: object
+            additionalProperties: false
+            required: [game, sides, score, differences, winner]
+            properties:
+              game: { type: integer, minimum: 1, maximum: 5 }
+              sides: { type: array, items: { type: string, enum: [away, home] }, description: Who sent a screenshot of this game. }
+              score:
+                oneOf:
+                  - { $ref: "#/components/schemas/ScreenshotScore" }
+                  - { type: "null" }
+              differences: { type: array, items: { type: string } }
+              winner: { type: [string, "null"], enum: [home, away, null], description: "Who won the game; penalties decide a level knockout game, and a level round-robin game has none." }
     ResultReviewDecisionRequest:
       type: object
       additionalProperties: false
