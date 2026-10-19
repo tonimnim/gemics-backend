@@ -37,6 +37,8 @@ type integrationSeedOptions struct {
 	DoubleRoundRobin bool
 	ThirdPlace       bool
 	BestOf           int
+	// Rounds overrides BestOf for named rounds, as rules.matchFormat does.
+	Rounds map[string]int
 }
 
 type integrationEntry struct {
@@ -280,11 +282,12 @@ func persistIntegrationDraw(t *testing.T, tx pgx.Tx, seeded integrationCompetiti
 		t.Fatalf("load draw candidates: %v", err)
 	}
 	input := normalizedDrawRequest{SeedingPolicy: "seeded", ExpectedStatus: "check_in", Config: normalizedDrawConfigView{
-		BestOf: max(1, options.BestOf), ThirdPlace: options.ThirdPlace, GroupCount: max(1, options.GroupCount),
+		ThirdPlace: options.ThirdPlace, GroupCount: max(1, options.GroupCount),
 		DoubleRoundRobin: options.DoubleRoundRobin, CheckInLeadMinutes: 15, CheckInGraceMinutes: 10,
 		ResultWindowMinutes: 60, RoundIntervalMinutes: 90,
 	}}
-	plan, problem := buildOrganizerDrawPlan(seeded.ID, options.Format, now, now, input, candidates, nil)
+	format := matchFormatRules{BestOf: max(1, options.BestOf), Rounds: options.Rounds}
+	plan, problem := buildOrganizerDrawPlan(seeded.ID, options.Format, format, now, now, input, candidates, nil)
 	if problem != nil {
 		t.Fatalf("build draw: %s", problem.Code)
 	}

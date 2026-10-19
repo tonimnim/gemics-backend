@@ -23,7 +23,7 @@ func TestNormalizeOrganizerDrawRequestUsesCanonicalDefaults(t *testing.T) {
 	if problem != nil {
 		t.Fatalf("valid draw request rejected: %+v", problem)
 	}
-	want := normalizedDrawConfigView{BestOf: 1, GroupCount: 1, CheckInLeadMinutes: 15,
+	want := normalizedDrawConfigView{GroupCount: 1, CheckInLeadMinutes: 15,
 		CheckInGraceMinutes: 10, ResultWindowMinutes: 60, RoundIntervalMinutes: 90}
 	if normalized.ExpectedStatus != "check_in" || normalized.SeedingPolicy != "rating" || normalized.Config != want {
 		t.Fatalf("unexpected normalized request: %+v", normalized)
@@ -40,7 +40,6 @@ func TestNormalizeOrganizerDrawRequestRejectsUnsafeConfiguration(t *testing.T) {
 		{"unknown policy", func(input *organizerDrawRequest) { input.SeedingPolicy = "manual" }, "invalid_seeding_policy"},
 		{"wrong state", func(input *organizerDrawRequest) { input.ExpectedStatus = "running" }, "invalid_expected_status"},
 		{"missing config", func(input *organizerDrawRequest) { input.Config = nil }, "draw_config_required"},
-		{"even best of", func(input *organizerDrawRequest) { input.Config.BestOf = &two }, "invalid_best_of"},
 		{"zero groups", func(input *organizerDrawRequest) { zero := 0; input.Config.GroupCount = &zero }, "invalid_group_count"},
 		{"result before grace", func(input *organizerDrawRequest) {
 			input.Config.CheckInGraceMinutes, input.Config.ResultWindowMinutes = &sixty, &thirty
@@ -151,12 +150,12 @@ func TestRandomDrawSeedMakesPlanReplayable(t *testing.T) {
 	}
 	candidates := drawCandidates(8)
 	seed := bytes.Repeat([]byte{0x2c}, 32)
-	first, problem := buildOrganizerDrawPlan("competition", string(bracket.SingleElimination),
+	first, problem := buildOrganizerDrawPlan("competition", string(bracket.SingleElimination), bestOfOne,
 		drawTestClock.Add(time.Hour), drawTestClock, input, candidates, seed)
 	if problem != nil {
 		t.Fatal(problem.Message)
 	}
-	second, problem := buildOrganizerDrawPlan("competition", string(bracket.SingleElimination),
+	second, problem := buildOrganizerDrawPlan("competition", string(bracket.SingleElimination), bestOfOne,
 		drawTestClock.Add(time.Hour), drawTestClock, input, append([]drawCandidate(nil), candidates...), seed)
 	if problem != nil {
 		t.Fatal(problem.Message)
@@ -165,7 +164,7 @@ func TestRandomDrawSeedMakesPlanReplayable(t *testing.T) {
 		first.Graph.Fingerprint != second.Graph.Fingerprint || !reflect.DeepEqual(first.Entries, second.Entries) {
 		t.Fatal("the same random seed and frozen vector did not replay the same draw")
 	}
-	if _, problem = buildOrganizerDrawPlan("competition", string(bracket.SingleElimination),
+	if _, problem = buildOrganizerDrawPlan("competition", string(bracket.SingleElimination), bestOfOne,
 		drawTestClock.Add(time.Hour), drawTestClock, input, candidates, []byte("short")); problem == nil || problem.Code != "invalid_draw_seed" {
 		t.Fatalf("short random seed accepted: %+v", problem)
 	}
@@ -173,7 +172,7 @@ func TestRandomDrawSeedMakesPlanReplayable(t *testing.T) {
 
 func TestKnockoutOnlySchedulesInitiallyPlayableMatches(t *testing.T) {
 	input, _ := normalizeOrganizerDrawRequest(validDrawRequest("registration_order"))
-	plan, problem := buildOrganizerDrawPlan("competition", string(bracket.SingleElimination),
+	plan, problem := buildOrganizerDrawPlan("competition", string(bracket.SingleElimination), bestOfOne,
 		drawTestClock.Add(time.Hour), drawTestClock, input, drawCandidates(4), nil)
 	if problem != nil {
 		t.Fatal(problem.Message)
@@ -210,7 +209,7 @@ func TestRoundRobinGatesLaterRoundsButPersistsWindowsAndGroups(t *testing.T) {
 	if problem != nil {
 		t.Fatal(problem.Message)
 	}
-	plan, problem := buildOrganizerDrawPlan("competition", string(bracket.RoundRobin),
+	plan, problem := buildOrganizerDrawPlan("competition", string(bracket.RoundRobin), bestOfOne,
 		drawTestClock.Add(time.Hour), drawTestClock, input, drawCandidates(8), nil)
 	if problem != nil {
 		t.Fatal(problem.Message)
@@ -244,14 +243,14 @@ func TestFormatSpecificDrawConfigurationIsEnforced(t *testing.T) {
 	raw := validDrawRequest("seeded")
 	raw.Config.GroupCount = &groups
 	input, _ := normalizeOrganizerDrawRequest(raw)
-	if _, problem := buildOrganizerDrawPlan("competition", string(bracket.SingleElimination),
+	if _, problem := buildOrganizerDrawPlan("competition", string(bracket.SingleElimination), bestOfOne,
 		drawTestClock.Add(time.Hour), drawTestClock, input, drawCandidates(8), nil); problem == nil || problem.Code != "format_config_mismatch" {
 		t.Fatalf("knockout accepted round-robin config: %+v", problem)
 	}
 	raw = validDrawRequest("seeded")
 	raw.Config.ThirdPlace = true
 	input, _ = normalizeOrganizerDrawRequest(raw)
-	if _, problem := buildOrganizerDrawPlan("competition", string(bracket.DoubleElimination),
+	if _, problem := buildOrganizerDrawPlan("competition", string(bracket.DoubleElimination), bestOfOne,
 		drawTestClock.Add(time.Hour), drawTestClock, input, drawCandidates(8), nil); problem == nil || problem.Code != "format_config_mismatch" {
 		t.Fatalf("double elimination accepted third-place config: %+v", problem)
 	}
@@ -267,9 +266,72 @@ func TestDrawMatchEstimateRejectsQuadraticRoundRobinBeforeEmission(t *testing.T)
 		t.Fatalf("64-group estimate=%d, want 7680", got)
 	}
 	input, _ := normalizeOrganizerDrawRequest(validDrawRequest("registration_order"))
-	if _, problem := buildOrganizerDrawPlan("competition", string(bracket.RoundRobin),
+	if _, problem := buildOrganizerDrawPlan("competition", string(bracket.RoundRobin), bestOfOne,
 		drawTestClock.Add(time.Hour), drawTestClock, input, drawCandidates(1024), nil); problem == nil || problem.Code != "draw_too_large" {
 		t.Fatalf("quadratic draw was not rejected before emission: %+v", problem)
+	}
+}
+
+var bestOfOne = matchFormatRules{BestOf: 1}
+
+func TestDrawGivesEachRoundItsBestOf(t *testing.T) {
+	input, _ := normalizeOrganizerDrawRequest(validDrawRequest("registration_order"))
+	format := matchFormatRules{BestOf: 1, Rounds: map[string]int{"semifinal": 3, "final": 5}}
+	plan, problem := buildOrganizerDrawPlan("competition", string(bracket.SingleElimination), format,
+		drawTestClock.Add(time.Hour), drawTestClock, input, drawCandidates(8), nil)
+	if problem != nil {
+		t.Fatal(problem.Message)
+	}
+	got := map[int]int{}
+	for _, match := range plan.Matches {
+		got[match.Node.Ref.Round] = match.BestOf
+		if match.State == "ready" && match.ResultDueAt.Sub(*match.ScheduledAt) != 60*time.Minute {
+			t.Fatalf("a best-of-1 opener got a %s window", match.ResultDueAt.Sub(*match.ScheduledAt))
+		}
+	}
+	if want := map[int]int{1: 1, 2: 3, 3: 5}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("best-of by round=%v, want %v", got, want)
+	}
+
+	// A best-of-3 opener gets fifteen more minutes for each extra game.
+	plan, problem = buildOrganizerDrawPlan("competition", string(bracket.SingleElimination), matchFormatRules{BestOf: 3},
+		drawTestClock.Add(time.Hour), drawTestClock, input, drawCandidates(4), nil)
+	if problem != nil {
+		t.Fatal(problem.Message)
+	}
+	for _, match := range plan.Matches {
+		if match.State == "ready" && match.ResultDueAt.Sub(*match.ScheduledAt) != 90*time.Minute {
+			t.Fatalf("a best-of-3 opener got a %s window, want 1h30m", match.ResultDueAt.Sub(*match.ScheduledAt))
+		}
+	}
+}
+
+func TestMatchFormatRoundNames(t *testing.T) {
+	last := map[string]int{bracket.BracketMain: 6, bracket.BracketWinners: 3, bracket.BracketLosers: 4}
+	cases := []struct {
+		format string
+		ref    bracket.LocalRef
+		want   string
+	}{
+		{"single_elimination", bracket.LocalRef{Bracket: bracket.BracketMain, Round: 6}, "final"},
+		{"single_elimination", bracket.LocalRef{Bracket: bracket.BracketMain, Round: 5}, "semifinal"},
+		{"single_elimination", bracket.LocalRef{Bracket: bracket.BracketMain, Round: 4}, "quarterfinal"},
+		{"single_elimination", bracket.LocalRef{Bracket: bracket.BracketMain, Round: 3}, "round_of_16"},
+		{"single_elimination", bracket.LocalRef{Bracket: bracket.BracketMain, Round: 1}, "round_of_64"},
+		{"single_elimination", bracket.LocalRef{Bracket: bracket.BracketBronze, Round: 1}, "third_place"},
+		{"double_elimination", bracket.LocalRef{Bracket: bracket.BracketGrandFinal, Round: 2}, "final"},
+		{"double_elimination", bracket.LocalRef{Bracket: bracket.BracketWinners, Round: 3}, "winners_final"},
+		{"double_elimination", bracket.LocalRef{Bracket: bracket.BracketLosers, Round: 4}, "losers_final"},
+		{"double_elimination", bracket.LocalRef{Bracket: bracket.BracketLosers, Round: 2}, ""},
+		{"round_robin", bracket.LocalRef{Bracket: "group_A", Round: 1}, ""},
+	}
+	for _, test := range cases {
+		if got := matchFormatRoundName(test.format, test.ref, last); got != test.want {
+			t.Errorf("%s %s named %q, want %q", test.format, test.ref, got, test.want)
+		}
+		if test.want != "" && !matchFormatRoundAllowed(test.format, test.want) {
+			t.Errorf("%s does not allow its own round %q", test.format, test.want)
+		}
 	}
 }
 

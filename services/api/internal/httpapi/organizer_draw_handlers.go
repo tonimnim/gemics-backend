@@ -40,7 +40,6 @@ type organizerDrawRequest struct {
 // from an explicit zero (reject it). The normalized form below contains no
 // pointers, which gives request hashing and stored config one canonical shape.
 type organizerDrawConfig struct {
-	BestOf               *int `json:"bestOf"`
 	ThirdPlace           bool `json:"thirdPlace"`
 	GroupCount           *int `json:"groupCount"`
 	DoubleRoundRobin     bool `json:"doubleRoundRobin"`
@@ -57,7 +56,6 @@ type normalizedDrawRequest struct {
 }
 
 type normalizedDrawConfigView struct {
-	BestOf               int  `json:"bestOf"`
 	ThirdPlace           bool `json:"thirdPlace"`
 	GroupCount           int  `json:"groupCount"`
 	DoubleRoundRobin     bool `json:"doubleRoundRobin"`
@@ -87,6 +85,7 @@ type drawPlanEntry struct {
 type drawMatchPlan struct {
 	ID                       string
 	Node                     bracket.Node
+	BestOf                   int
 	HomeEntryID, AwayEntryID *string
 	State                    string
 	ScheduledAt              *time.Time
@@ -116,6 +115,7 @@ type organizerDrawPlan struct {
 	EntryFingerprint [32]byte
 	Graph            bracket.Graph
 	Config           normalizedDrawConfigView
+	MatchFormat      matchFormatRules
 	Entries          []drawPlanEntry
 	Matches          []drawMatchPlan
 	Slots            []drawSlotPlan
@@ -202,9 +202,10 @@ func (s *Server) createOrganizerDraw(w http.ResponseWriter, r *http.Request) {
 
 	var format, status, gameID string
 	var startsAt time.Time
-	err = tx.QueryRow(r.Context(), `SELECT format,status,game_id,starts_at
+	var rules []byte
+	err = tx.QueryRow(r.Context(), `SELECT format,status,game_id,starts_at,rules_snapshot
 		FROM competitions WHERE id=$1 AND organization_id=$2 FOR UPDATE`,
-		competitionID, membership.OrganizationID).Scan(&format, &status, &gameID, &startsAt)
+		competitionID, membership.OrganizationID).Scan(&format, &status, &gameID, &startsAt, &rules)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeCompetitionNotFound(w)
 		return
@@ -242,7 +243,8 @@ func (s *Server) createOrganizerDraw(w http.ResponseWriter, r *http.Request) {
 	}
 
 	generatedAt := time.Now().UTC()
-	plan, problem := buildOrganizerDrawPlan(competitionID, format, startsAt, generatedAt, input, candidates, nil)
+	plan, problem := buildOrganizerDrawPlan(competitionID, format, readMatchFormat(rules), startsAt, generatedAt,
+		input, candidates, nil)
 	if problem != nil {
 		problem.write(w)
 		return
@@ -267,7 +269,7 @@ func (s *Server) createOrganizerDraw(w http.ResponseWriter, r *http.Request) {
 		competitionID, nil, map[string]any{
 			"competitionId": competitionID, "stageId": plan.StageID, "algorithm": drawAlgorithm,
 			"algorithmVersion": drawAlgorithmVersion, "seedingPolicy": input.SeedingPolicy,
-			"drawSeed": view.DrawSeed, "config": plan.Config,
+			"drawSeed": view.DrawSeed, "config": plan.Config, "matchFormat": plan.MatchFormat,
 			"entryCount": len(plan.Entries), "matchCount": len(plan.Matches),
 			"entryFingerprint": view.EntryFingerprint, "graphFingerprint": view.GraphFingerprint,
 		}); err != nil {
@@ -327,12 +329,9 @@ func normalizeOrganizerDrawRequest(input organizerDrawRequest) (normalizedDrawRe
 		return normalizedDrawRequest{}, fault(http.StatusBadRequest, "draw_config_required", "Provide the draw config object.")
 	}
 	config := normalizedDrawConfigView{
-		BestOf: 1, GroupCount: 1, CheckInLeadMinutes: 15, CheckInGraceMinutes: 10,
+		GroupCount: 1, CheckInLeadMinutes: 15, CheckInGraceMinutes: 10,
 		ResultWindowMinutes: 60, RoundIntervalMinutes: 90,
 		ThirdPlace: input.Config.ThirdPlace, DoubleRoundRobin: input.Config.DoubleRoundRobin,
-	}
-	if input.Config.BestOf != nil {
-		config.BestOf = *input.Config.BestOf
 	}
 	if input.Config.GroupCount != nil {
 		config.GroupCount = *input.Config.GroupCount
@@ -350,8 +349,6 @@ func normalizeOrganizerDrawRequest(input organizerDrawRequest) (normalizedDrawRe
 		config.RoundIntervalMinutes = *input.Config.RoundIntervalMinutes
 	}
 	switch {
-	case config.BestOf < 1 || config.BestOf > 9 || config.BestOf%2 == 0:
-		return normalizedDrawRequest{}, fault(http.StatusBadRequest, "invalid_best_of", "bestOf must be an odd number from 1 to 9.")
 	case config.GroupCount < 1 || config.GroupCount > 64:
 		return normalizedDrawRequest{}, fault(http.StatusBadRequest, "invalid_group_count", "groupCount must be from 1 to 64.")
 	case config.CheckInLeadMinutes < 5 || config.CheckInLeadMinutes > 180:
@@ -400,7 +397,9 @@ func loadFrozenDrawCandidates(ctx context.Context, tx pgx.Tx, competitionID, gam
 	return candidates, rows.Err()
 }
 
-func buildOrganizerDrawPlan(competitionID, format string, startsAt, generatedAt time.Time,
+// buildOrganizerDrawPlan is pure. matchFormat is the competition's
+// rules.matchFormat; it decides each match's best-of, never the graph.
+func buildOrganizerDrawPlan(competitionID, format string, matchFormat matchFormatRules, startsAt, generatedAt time.Time,
 	input normalizedDrawRequest, candidates []drawCandidate, suppliedRandomSeed []byte) (organizerDrawPlan, *organizerFault) {
 	config := input.Config
 	switch bracket.Format(format) {
@@ -461,7 +460,7 @@ func buildOrganizerDrawPlan(competitionID, format string, startsAt, generatedAt 
 	}
 	graph, err := bracket.Emit(bracket.DrawInput{
 		Format: bracket.Format(format), Entries: drawEntries,
-		Config: bracket.Config{BestOf: config.BestOf, ThirdPlace: config.ThirdPlace,
+		Config: bracket.Config{BestOf: matchFormat.BestOf, ThirdPlace: config.ThirdPlace,
 			GroupCount: config.GroupCount, DoubleRoundRobin: config.DoubleRoundRobin},
 	})
 	if err != nil || bracket.Validate(graph) != nil {
@@ -477,7 +476,7 @@ func buildOrganizerDrawPlan(competitionID, format string, startsAt, generatedAt 
 	}
 	plan := organizerDrawPlan{CompetitionID: competitionID, StageID: stageID, Format: format,
 		GeneratedAt: generatedAt.UTC(), DrawSeed: seed, EntryFingerprint: entryFingerprint,
-		Graph: graph, Config: config, Entries: entries}
+		Graph: graph, Config: config, MatchFormat: matchFormat, Entries: entries}
 	if err = materializeDrawGraph(&plan, startsAt.UTC(), randomUUID); err != nil {
 		return organizerDrawPlan{}, fault(http.StatusServiceUnavailable, "randomness_unavailable", "Secure identifiers are unavailable.")
 	}
@@ -624,13 +623,18 @@ func materializeDrawGraph(plan *organizerDrawPlan, advertisedStart time.Time,
 	if earliest := plan.GeneratedAt.Add(lead); base.Before(earliest) {
 		base = earliest
 	}
-	interval := time.Duration(plan.Config.RoundIntervalMinutes) * time.Minute
+	// A series needs time for every game: each game after the first adds to
+	// the result window, and to a round robin's interval between rounds.
+	extra := func(bestOf int) time.Duration { return time.Duration(seriesExtraMinutes(bestOf)) * time.Minute }
+	interval := time.Duration(plan.Config.RoundIntervalMinutes)*time.Minute + extra(plan.MatchFormat.BestOf)
 	resultWindow := time.Duration(plan.Config.ResultWindowMinutes) * time.Minute
 	grace := time.Duration(plan.Config.CheckInGraceMinutes) * time.Minute
+	last := lastRounds(plan.Graph)
 	plan.Matches = make([]drawMatchPlan, 0, len(plan.Graph.Nodes))
 	plan.Slots = make([]drawSlotPlan, 0, len(plan.Graph.Nodes)*2)
 	for _, node := range plan.Graph.Nodes {
-		match := drawMatchPlan{ID: ids[node.Ref], Node: node, State: "pending"}
+		match := drawMatchPlan{ID: ids[node.Ref], Node: node, State: "pending",
+			BestOf: plan.MatchFormat.bestOfFor(plan.Format, node.Ref, last)}
 		if node.ActSrc != (bracket.LocalRef{}) {
 			activationID := ids[node.ActSrc]
 			match.ActivationSourceMatchID = &activationID
@@ -650,7 +654,7 @@ func materializeDrawGraph(plan *organizerDrawPlan, advertisedStart time.Time,
 			// Round one opens immediately. Later fixtures are fully scheduled but
 			// gated pending, ready for the round-release worker.
 			when := base.Add(time.Duration(node.Ref.Round-1) * interval)
-			assignMatchWindow(&match, when, lead, grace, resultWindow)
+			assignMatchWindow(&match, when, lead, grace, resultWindow+extra(match.BestOf))
 			if playable && node.Ref.Round == 1 {
 				match.State = "ready"
 			}
@@ -658,7 +662,7 @@ func materializeDrawGraph(plan *organizerDrawPlan, advertisedStart time.Time,
 			// Dependency matches get fresh windows when progression makes them
 			// ready. Anchoring them now would leave a late-running final with an
 			// already-expired check-in window.
-			assignMatchWindow(&match, base, lead, grace, resultWindow)
+			assignMatchWindow(&match, base, lead, grace, resultWindow+extra(match.BestOf))
 			match.State = "ready"
 		}
 		plan.Matches = append(plan.Matches, match)
@@ -706,7 +710,7 @@ func persistOrganizerDraw(ctx context.Context, tx pgx.Tx, plan organizerDrawPlan
 	if _, err = tx.Exec(ctx, `INSERT INTO competition_stages
 		(id,competition_id,position,name,format,best_of,config,status,created_at,updated_at)
 		VALUES ($1,$2,0,'Main stage',$3,$4,$5,'active',$6,$6)`,
-		plan.StageID, plan.CompetitionID, plan.Format, plan.Config.BestOf, configJSON, plan.GeneratedAt); err != nil {
+		plan.StageID, plan.CompetitionID, plan.Format, plan.MatchFormat.BestOf, configJSON, plan.GeneratedAt); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO competition_draws
@@ -734,13 +738,13 @@ func persistOrganizerDraw(ctx context.Context, tx pgx.Tx, plan organizerDrawPlan
 			match.Node.Ref.Round, match.Node.Ref.Number, match.HomeEntryID, match.AwayEntryID, match.State,
 			match.ScheduledAt, match.CheckInOpensAt, match.CheckInClosesAt, match.ResultDueAt, 1,
 			match.Node.Rank, nullableString(match.Node.GroupKey), match.Node.Activation,
-			match.ActivationSourceMatchID, plan.GeneratedAt, plan.GeneratedAt})
+			match.ActivationSourceMatchID, match.BestOf, plan.GeneratedAt, plan.GeneratedAt})
 	}
 	if _, err = tx.CopyFrom(ctx, pgx.Identifier{"matches"},
 		[]string{"id", "competition_id", "stage_id", "bracket", "round_number", "match_number",
 			"home_entry_id", "away_entry_id", "state", "scheduled_at", "check_in_opens_at", "check_in_closes_at",
 			"result_due_at", "version", "graph_rank", "group_key", "activation_rule", "activation_source_match_id",
-			"created_at", "updated_at"}, pgx.CopyFromRows(matchRows)); err != nil {
+			"best_of", "created_at", "updated_at"}, pgx.CopyFromRows(matchRows)); err != nil {
 		return err
 	}
 	ranks := sourceRanks(plan.Graph)
