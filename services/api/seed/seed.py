@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed a local Tonits stack with realistic, production-shaped data.
+"""Seed a local Ozone stack with realistic, production-shaped data.
 
 Drives the real API wherever it can (accounts, competitions, entries, draws,
 match reports, screenshots, staff decisions) so the data has exactly the shape
@@ -138,7 +138,7 @@ register.used = set()
 def main():
     step("Staff")
     password = os.environ.get("SEED_PASSWORD") or hashlib.sha256(os.urandom(16)).hexdigest()[:16]
-    admin = register("Tonits Admin", "KE", password)
+    admin = register("Ozone Admin", "KE", password)
     out = subprocess.run(COMPOSE + ["exec", "-T", "api", "gamics-staff", "grant", admin["konamiId"], "admin"],
                          capture_output=True, text=True, cwd=ROOT)
     print(out.stdout.strip() or out.stderr.strip())

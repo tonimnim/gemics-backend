@@ -84,7 +84,7 @@ def send_screenshot(match_id, player, evidence_id):
 
 
 def main():
-    step("Live bracket: Tonits Launch Cup")
+    step("Live bracket: Ozone Launch Cup")
     cid = launch["id"]
     c = call("POST", f"{orgs}/{cid}/transitions", {"status": "check_in"}, token=admin)["data"]
     print("  ->", c["status"])

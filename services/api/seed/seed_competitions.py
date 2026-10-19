@@ -91,12 +91,12 @@ c = create("Kisumu Invitational", max_entries=16, prize=3000, opens=3, closes=10
 move(c, "published")
 
 c = create("Nairobi Weekend Cup", max_entries=32, prize=5000, opens=-2, closes=4, starts=5,
-           desc="Free entry. Top four share the prize, funded by Tonits.")
+           desc="Free entry. Top four share the prize, funded by Ozone.")
 move(c, "published", "registration_open")
 register_free(c, pool[:23])
 
 c = create("Mombasa Masters", max_entries=16, fee=100, prize=8000, opens=-3, closes=3, starts=4,
-           desc="KES 100 entry. Prize funded by Tonits.")
+           desc="KES 100 entry. Prize funded by Ozone.")
 move(c, "published", "registration_open")
 register_paid(c, pool[23:34], 100)
 
@@ -111,8 +111,8 @@ for name, country, prize in [("Tokyo Rising Cup", "JP", 150000), ("Sao Paulo Der
                desc="Launch-market cup, priced in local currency.")
     move(c, "published")
 
-c = create("Tonits World Series", max_entries=64, prize=2000, opens=-1, closes=9, starts=10, countries=(),
-           desc="Open to every country. Prize in USD, funded by Tonits.")
+c = create("Ozone World Series", max_entries=64, prize=2000, opens=-1, closes=9, starts=10, countries=(),
+           desc="Open to every country. Prize in USD, funded by Ozone.")
 move(c, "published", "registration_open")
 
 c = create("Eldoret Open", max_entries=16, fee=200, prize=6000, opens=-5, closes=2, starts=3,
@@ -122,8 +122,8 @@ register_paid(c, pool[34:40], 200)
 state["eldoret"] = c["id"]
 
 # Running bracket: 16 checked-in players, check-in open now so matches can be played.
-c = create("Tonits Launch Cup", max_entries=16, prize=15000, opens=-4, closes=0.01, starts=0.03,
-           desc="The first official Tonits knockout.")
+c = create("Ozone Launch Cup", max_entries=16, prize=15000, opens=-4, closes=0.01, starts=0.03,
+           desc="The first official Ozone knockout.")
 move(c, "published", "registration_open")
 launch = pool[:16]
 register_free(c, launch)
