@@ -47,6 +47,25 @@ test("server-renders the public tournament and ranking pages", async () => {
   }
 });
 
+test("server-renders tournament and player pages, and a 404 for anything else", async () => {
+  // No API runs under the test, so a well-formed link degrades to its notice.
+  for (const [path, title, notice] of [
+    ["/tournaments/11e556a9-8ec6-451c-98be-0096d40d1ce1", /<title>Tournament — Ozone<\/title>/, /This tournament is unavailable right now/],
+    ["/players/11e556a9-8ec6-451c-98be-0096d40d1ce1", /<title>Player — Ozone<\/title>/, /This player is unavailable right now/],
+  ]) {
+    const response = await render(path);
+    assert.equal(response.status, 200, path);
+    const html = await response.text();
+    assert.match(html, title, path);
+    assert.match(html, notice, path);
+  }
+  for (const path of ["/tournaments/not-a-tournament", "/players/nobody"]) {
+    const response = await render(path);
+    assert.equal(response.status, 404, path);
+    assert.match(await response.text(), /That page doesn&#x27;t exist|That page doesn’t exist|That page doesn't exist/, path);
+  }
+});
+
 test("server-renders the legal pages and links them with the socials from every footer", async () => {
   for (const [path, title, heading] of [
     ["/terms", "Terms of Service", /Fair play and conduct/],
