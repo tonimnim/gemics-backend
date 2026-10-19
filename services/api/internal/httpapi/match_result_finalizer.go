@@ -120,7 +120,7 @@ func lockResultMatch(ctx context.Context, tx pgx.Tx, matchID, competitionID, act
 	m := lockedResultMatch{ActorUserID: actorID}
 	var actorEntryID *string
 	err := tx.QueryRow(ctx, `SELECT match.id::text,match.competition_id::text,competition.organization_id::text,
-		competition.game_id,competition.status,competition.rules_snapshot,stage.format,stage.best_of,stage.config,
+		competition.game_id,competition.status,competition.rules_snapshot,stage.format,match.best_of,stage.config,
 		match.state,match.version,match.result_due_at,match.home_entry_id::text,match.away_entry_id::text,
 		home_entry.captain_user_id::text,away_entry.captain_user_id::text,
 		(SELECT member.entry_id::text FROM entry_members member
@@ -342,7 +342,8 @@ func validateMatchResolution(m lockedResultMatch, r matchResolution) error {
 	}
 	switch r.FinalState {
 	case "completed":
-		if r.Claim == nil || len(r.Claim.Games) == 0 || r.ClaimAuthorID == nil || r.Origin == "" {
+		// A series claim is games won and has no games.
+		if r.Claim == nil || (len(r.Claim.Games) == 0 && m.BestOf <= 1) || r.ClaimAuthorID == nil || r.Origin == "" {
 			return invalid("a completed match needs a claim, its author and an origin")
 		}
 	case "forfeit":
