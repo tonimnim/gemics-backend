@@ -52,7 +52,7 @@ func (s *Server) getStaffSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if role == "" {
-		writeError(w, http.StatusForbidden, "platform_access_denied", "This account does not have Tonits staff access.")
+		writeError(w, http.StatusForbidden, "platform_access_denied", "This account does not have Ozone staff access.")
 		return
 	}
 	var username *string

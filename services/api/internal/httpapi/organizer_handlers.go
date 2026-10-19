@@ -124,7 +124,7 @@ func (s *Server) createOrganization(w http.ResponseWriter, r *http.Request) {
 	}
 	if owned >= maxOwnedOrganizations {
 		writeError(w, http.StatusConflict, "organization_limit_reached",
-			"You already own the maximum number of organizations. Contact Tonits support to raise the limit.")
+			"You already own the maximum number of organizations. Contact Ozone support to raise the limit.")
 		return
 	}
 

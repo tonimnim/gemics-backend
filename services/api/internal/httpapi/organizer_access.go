@@ -71,7 +71,7 @@ func (s *Server) requireOrgPermission(permission organizer.Permission, next http
 		}
 		if status != "active" {
 			writeError(w, http.StatusForbidden, "organization_suspended",
-				"This organization is suspended. Contact Tonits support.")
+				"This organization is suspended. Contact Ozone support.")
 			return
 		}
 		membership := organizerMembership{OrganizationID: organizationID, Role: organizer.Role(role)}
