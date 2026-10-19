@@ -323,3 +323,55 @@ func TestMinorUnitsFollowEachCurrency(t *testing.T) {
 		}
 	}
 }
+
+func TestMatchFormatRules(t *testing.T) {
+	cases := []struct {
+		format, rules, code string
+	}{
+		{"single_elimination", `{}`, ""},
+		{"single_elimination", `{"matchFormat":{"bestOf":3}}`, ""},
+		{"single_elimination", `{"matchFormat":{"bestOf":1,"rounds":{"semifinal":3,"final":5,"third_place":3,"round_of_16":3}}}`, ""},
+		{"double_elimination", `{"matchFormat":{"bestOf":1,"rounds":{"final":5,"winners_final":3,"losers_final":3}}}`, ""},
+		{"round_robin", `{"matchFormat":{"bestOf":5}}`, ""},
+		{"single_elimination", `{"matchFormat":{"bestOf":2}}`, "invalid_match_format"},
+		{"single_elimination", `{"matchFormat":{"bestOf":7}}`, "invalid_match_format"},
+		{"single_elimination", `{"matchFormat":{"rounds":{"final":3}}}`, "invalid_match_format"},
+		{"single_elimination", `{"matchFormat":{"bestOf":1,"rounds":{"final":4}}}`, "invalid_match_format"},
+		{"single_elimination", `{"matchFormat":{"bestOf":1,"rounds":{"winners_final":3}}}`, "invalid_match_format"},
+		{"single_elimination", `{"matchFormat":{"bestOf":1,"rounds":{"round_of_12":3}}}`, "invalid_match_format"},
+		{"double_elimination", `{"matchFormat":{"bestOf":1,"rounds":{"semifinal":3}}}`, "invalid_match_format"},
+		{"round_robin", `{"matchFormat":{"bestOf":1,"rounds":{"final":3}}}`, "invalid_match_format"},
+		{"single_elimination", `{"matchFormat":{"bestOf":1,"games":3}}`, "invalid_match_format"},
+		{"single_elimination", `{"matchFormat":3}`, "invalid_match_format"},
+	}
+	for _, test := range cases {
+		input := validCompetitionInput()
+		input.Format, input.Rules = test.format, json.RawMessage(test.rules)
+		_, problem := normalizeCompetitionInput(input, ruleClock)
+		switch {
+		case test.code == "" && problem != nil:
+			t.Errorf("%s %s rejected: %+v", test.format, test.rules, problem)
+		case test.code != "" && (problem == nil || problem.Code != test.code):
+			t.Errorf("%s %s = %+v, want %s", test.format, test.rules, problem, test.code)
+		}
+	}
+
+	// Players enter knowing the format, so it is frozen once registration
+	// opens; other rules stay editable.
+	current := storedDraft()
+	current.Rules = []byte(`{"matchFormat":{"bestOf":3}}`)
+	changed := json.RawMessage(`{"matchFormat":{"bestOf":5}}`)
+	if _, _, problem := applyCompetitionPatch(current, organizerCompetitionPatch{Rules: &changed},
+		"registration_open", 3, ruleClock); problem == nil || problem.Code != "field_locked" {
+		t.Fatalf("a live format change = %+v, want field_locked", problem)
+	}
+	if _, _, problem := applyCompetitionPatch(current, organizerCompetitionPatch{Rules: &changed},
+		"draft", 0, ruleClock); problem != nil {
+		t.Fatalf("a draft format change was refused: %+v", problem)
+	}
+	same := json.RawMessage(`{"matchFormat":{"bestOf":3},"matchVerification":{"responseWindowMinutes":20}}`)
+	if _, _, problem := applyCompetitionPatch(current, organizerCompetitionPatch{Rules: &same},
+		"registration_open", 3, ruleClock); problem != nil {
+		t.Fatalf("a live edit that keeps the format was refused: %+v", problem)
+	}
+}

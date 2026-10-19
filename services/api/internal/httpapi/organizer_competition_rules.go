@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -176,6 +177,10 @@ func applyCompetitionPatch(current competitionDraft, patch organizerCompetitionP
 			return competitionDraft{}, false, problem
 		}
 		rulesChanged = !bytes.Equal(rules, current.Rules)
+		// Players enter knowing how many games each round is.
+		if live && !reflect.DeepEqual(readMatchFormat(rules), readMatchFormat(current.Rules)) {
+			return competitionDraft{}, false, locked("matchFormat")
+		}
 		updated.Rules = rules
 		changed = changed || rulesChanged
 		if rulesChanged && patch.Currency == nil {
@@ -247,6 +252,14 @@ func validateCompetitionDraft(draft *competitionDraft, now time.Time, previous *
 	if !slices.Contains(competitionFormats, competition.Format(draft.Format)) {
 		return fault(http.StatusBadRequest, "invalid_format",
 			"Format must be single_elimination, double_elimination or round_robin.")
+	}
+	if err := validateMatchFormatRules(draft.Rules, draft.Format); err != nil {
+		message := "The match format is invalid."
+		var rule *matchFormatRuleError
+		if errors.As(err, &rule) {
+			message = rule.message
+		}
+		return fault(http.StatusBadRequest, "invalid_match_format", message)
 	}
 	if draft.MaxEntries < 2 || draft.MaxEntries > maxCompetitionEntries {
 		return fault(http.StatusBadRequest, "invalid_capacity",
