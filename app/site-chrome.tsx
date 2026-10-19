@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BrandMark } from "./brand-mark";
+import { BrandWordmark } from "./brand-wordmark";
 import { ArrowIcon, InstagramIcon, TikTokIcon, XIcon, YouTubeIcon } from "./icons";
 import { type SocialName, legalPages, site } from "./lib/site";
 
@@ -15,7 +15,7 @@ export function SiteHeader() {
     <header className="site-header">
       <div className="shell site-header-inner">
         <Link className="brand" href="/" aria-label="Home">
-          <BrandMark />
+          <BrandWordmark />
         </Link>
         <nav className="site-nav" aria-label="Primary">
           <Link href="/tournaments">Tournaments</Link>
@@ -36,7 +36,7 @@ export function SiteFooter() {
       <div className="shell">
         <div className="footer-row">
           <Link className="brand" href="/" aria-label="Home">
-            <BrandMark />
+            <BrandWordmark />
           </Link>
           <nav aria-label="Footer">
             <Link href="/tournaments">Tournaments</Link>
