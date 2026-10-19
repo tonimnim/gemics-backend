@@ -20,7 +20,10 @@
     "stack:up": "docker compose --env-file .env.docker up --build",
     "stack:r2:up": "docker compose --env-file .env.docker --env-file .env.r2 -f compose.yaml -f compose.r2.yaml up --build -d",
     "stack:r2:down": "docker compose --env-file .env.docker --env-file .env.r2 -f compose.yaml -f compose.r2.yaml down",
-    "stack:down": "docker compose --env-file .env.docker down"
+    "stack:down": "docker compose --env-file .env.docker down",
+    "admin:tunnel:build": "cd apps/admin && VITE_API_URL= npx vite build --base=/admin/",
+    "stack:tunnel:up": "docker compose --env-file .env.docker -f compose.yaml $(test -f compose.override.yaml && echo -f compose.override.yaml) -f compose.tunnel.yaml up -d tunnel-router ngrok",
+    "stack:tunnel:down": "docker compose --env-file .env.docker -f compose.yaml $(test -f compose.override.yaml && echo -f compose.override.yaml) -f compose.tunnel.yaml stop tunnel-router ngrok"
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.0.2",
