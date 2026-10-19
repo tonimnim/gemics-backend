@@ -205,7 +205,7 @@ func TestMatchVerificationRulesAreTolerantOnRead(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			settings := resolveMatchSettings("efootball-mobile", "single_elimination", []byte(test.competition), []byte(test.stage)).Verification
+			settings := resolveMatchSettings("efootball-mobile", "single_elimination", 1, []byte(test.competition), []byte(test.stage)).Verification
 			if settings != test.wantSettings {
 				t.Fatalf("settings = %+v, want %+v", settings, test.wantSettings)
 			}

@@ -77,8 +77,11 @@ type matchVerificationPolicyResponse struct {
 	ReminderBeforeDeadlineSeconds int64 `json:"reminderBeforeDeadlineSeconds"`
 	ResponseWindowSeconds         int64 `json:"responseWindowSeconds"`
 	ScreenshotEvidence            struct {
-		MinItems   int      `json:"minItems"`
+		MinItems int `json:"minItems"`
+		// MaxItems is the match's best-of. In a series each screenshot is
+		// one game's Full Time screen, numbered by its game.
 		MaxItems   int      `json:"maxItems"`
+		PerGame    bool     `json:"perGame"`
 		MediaTypes []string `json:"mediaTypes"`
 	} `json:"screenshotEvidence"`
 }
@@ -96,10 +99,12 @@ type submittedResultView struct {
 	SubmittedAt   time.Time           `json:"submittedAt"`
 }
 
-// screenshotView is the viewer's own screenshot after a rejection. The room
-// never carries the other entry's screenshot, only whether it sent one.
+// screenshotView is one of the viewer's own screenshots after a rejection: a
+// best of 1 has one, a series one per game. The room never carries the other
+// entry's screenshots, only whether it sent them.
 type screenshotView struct {
 	ID          string    `json:"id"`
+	Game        int       `json:"game"`
 	EvidenceID  string    `json:"evidenceId"`
 	SubmittedAt time.Time `json:"submittedAt"`
 }
@@ -108,14 +113,16 @@ type screenshotView struct {
 // submitted result, the viewer's screenshot after a rejection, and the
 // deadline of the current step.
 type matchResultVerificationResponse struct {
-	Phase                       string               `json:"phase"`
-	SubmittedResult             *submittedResultView `json:"submittedResult"`
-	MyScreenshot                *screenshotView      `json:"myScreenshot"`
-	OpponentScreenshotSubmitted bool                 `json:"opponentScreenshotSubmitted"`
-	ConfirmationDeadline        *time.Time           `json:"confirmationDeadline"`
-	ScreenshotDeadline          *time.Time           `json:"screenshotDeadline"`
-	Resolution                  *string              `json:"resolution"`
-	EntryRemoved                bool                 `json:"entryRemoved"`
+	Phase           string               `json:"phase"`
+	SubmittedResult *submittedResultView `json:"submittedResult"`
+	// MyScreenshot is the first of MyScreenshots, the only one in a best of 1.
+	MyScreenshot                *screenshotView  `json:"myScreenshot"`
+	MyScreenshots               []screenshotView `json:"myScreenshots"`
+	OpponentScreenshotSubmitted bool             `json:"opponentScreenshotSubmitted"`
+	ConfirmationDeadline        *time.Time       `json:"confirmationDeadline"`
+	ScreenshotDeadline          *time.Time       `json:"screenshotDeadline"`
+	Resolution                  *string          `json:"resolution"`
+	EntryRemoved                bool             `json:"entryRemoved"`
 }
 
 // matchRemovalView is an entry this match removed from the tournament. A
@@ -152,6 +159,7 @@ type matchRoomResponse struct {
 	MatchNumber             int                             `json:"matchNumber"`
 	Bracket                 string                          `json:"bracket"`
 	BestOf                  int16                           `json:"bestOf"`
+	GamesToWin              int                             `json:"gamesToWin"`
 	DrawAllowed             bool                            `json:"drawAllowed"`
 	ScheduledAt             *time.Time                      `json:"scheduledAt"`
 	CheckInOpensAt          *time.Time                      `json:"checkInOpensAt"`
@@ -184,6 +192,8 @@ type matchSummaryResponse struct {
 	GameID            string                    `json:"gameId"`
 	GameName          string                    `json:"gameName"`
 	RoundName         string                    `json:"roundName"`
+	BestOf            int16                     `json:"bestOf"`
+	GamesToWin        int                       `json:"gamesToWin"`
 	ScheduledAt       *time.Time                `json:"scheduledAt"`
 	CheckInClosesAt   *time.Time                `json:"checkInClosesAt"`
 	State             string                    `json:"state"`
@@ -245,7 +255,7 @@ type matchRecord struct {
 	ResponseDeadlineAt     *time.Time
 	VerificationResolution *string
 	SubmittedResult        *submittedResultView
-	MyScreenshot           *screenshotView
+	MyScreenshots          []screenshotView
 	OpponentScreenshot     bool
 	ConfirmedResult        *matchConfirmedResultResponse
 	Removals               []matchRemovalView
@@ -281,7 +291,7 @@ const activeMatchClause = `m.state IN ('pending','ready','in_progress','awaiting
 
 const matchSelectColumns = `
 	SELECT m.id::text,m.competition_id::text,c.name,c.game_id,g.name,
-		m.stage_id::text,stage.name,stage.format,stage.best_of,stage.config,c.rules_snapshot,
+		m.stage_id::text,stage.name,stage.format,m.best_of,stage.config,c.rules_snapshot,
 		m.bracket,m.round_number,m.match_number,m.state,m.completion_reason,m.scheduled_at,
 		m.check_in_opens_at,m.check_in_closes_at,m.result_due_at,m.completed_at,m.version,
 		COALESCE(m.completed_at,m.scheduled_at,m.created_at),mine.entry_id::text,mine_entry.status,
@@ -354,12 +364,11 @@ const matchSelectColumns = `
 		LIMIT 1
 	) submitted ON true
 	LEFT JOIN LATERAL (
-		SELECT json_build_object('id',report.id,'evidenceId',evidence.evidence_id,
-			'submittedAt',report.reported_at) AS screenshot
+		SELECT json_agg(json_build_object('id',report.id,'game',evidence.position+1,
+			'evidenceId',evidence.evidence_id,'submittedAt',report.reported_at) ORDER BY evidence.position) AS screenshot
 		FROM match_result_reports report
 		JOIN match_result_report_evidence evidence ON evidence.report_id=report.id
 		WHERE report.match_id=m.id AND report.kind='final' AND report.entry_id=mine.entry_id
-		LIMIT 1
 	) my_screenshot ON true
 	LEFT JOIN LATERAL (
 		SELECT EXISTS (SELECT 1 FROM match_result_reports other
@@ -738,12 +747,12 @@ func (record *matchRecord) decodeResultViews(submitted, screenshot, confirmed []
 		record.SubmittedResult = &result
 	}
 	if len(screenshot) > 0 {
-		var view screenshotView
-		if err := json.Unmarshal(screenshot, &view); err != nil {
+		if err := json.Unmarshal(screenshot, &record.MyScreenshots); err != nil {
 			return err
 		}
-		view.SubmittedAt = view.SubmittedAt.UTC()
-		record.MyScreenshot = &view
+		for index := range record.MyScreenshots {
+			record.MyScreenshots[index].SubmittedAt = record.MyScreenshots[index].SubmittedAt.UTC()
+		}
 	}
 	if len(confirmed) > 0 {
 		var result matchConfirmedResultResponse
@@ -787,7 +796,8 @@ func (record matchRecord) response(userID string, now time.Time) matchRoomRespon
 		CompetitionID: record.CompetitionID, CompetitionName: record.CompetitionName,
 		GameID: record.GameID, GameName: record.GameName, StageID: record.StageID, StageName: record.StageName,
 		RoundName: roundName, RoundNumber: record.RoundNumber, MatchNumber: record.MatchNumber,
-		Bracket: record.Bracket, BestOf: record.BestOf, DrawAllowed: settings.DrawAllowed,
+		Bracket: record.Bracket, BestOf: record.BestOf, GamesToWin: gamesToWin(int(record.BestOf)),
+		DrawAllowed: settings.DrawAllowed,
 		ScheduledAt: utcTime(record.ScheduledAt), CheckInOpensAt: utcTime(opensAt), CheckInClosesAt: utcTime(closesAt),
 		ResultDueAt: utcTime(record.ResultDueAt), CompletedAt: utcTime(record.CompletedAt),
 		State: record.State, CompletionReason: record.CompletionReason, Lifecycle: lifecycle, Version: record.Version,
@@ -797,7 +807,7 @@ func (record matchRecord) response(userID string, now time.Time) matchRoomRespon
 		Away: participantResponse(record.AwayPlayerID, record.AwayHandle, record.AwayDisplayName, "away",
 			record.AwayCheckedInAt, record.AwayIdentity, revealGameAccounts),
 		AllowedActions: actions, FriendMatchInstructions: settings.Instructions,
-		VerificationPolicy: resolveMatchVerificationPolicy(record.verificationSettings(settings.Verification)),
+		VerificationPolicy: resolveMatchVerificationPolicy(record.verificationSettings(settings.Verification), int(record.BestOf)),
 		ResultVerification: record.resultVerification(),
 		Removals:           record.Removals,
 	}
@@ -828,9 +838,14 @@ func (record matchRecord) verificationSettings(resolved matchVerificationSetting
 // entry removed by a later match keeps false on the matches it played before.
 func (record matchRecord) resultVerification() matchResultVerificationResponse {
 	view := matchResultVerificationResponse{
-		Phase: "not_started", SubmittedResult: record.SubmittedResult, MyScreenshot: record.MyScreenshot,
+		Phase: "not_started", SubmittedResult: record.SubmittedResult, MyScreenshots: record.MyScreenshots,
 		OpponentScreenshotSubmitted: record.OpponentScreenshot, Resolution: record.VerificationResolution,
 		EntryRemoved: record.removedHere(record.CurrentEntryID),
+	}
+	if view.MyScreenshots == nil {
+		view.MyScreenshots = []screenshotView{}
+	} else {
+		view.MyScreenshot = &view.MyScreenshots[0]
 	}
 	if record.VerificationPhase != nil {
 		view.Phase = *record.VerificationPhase
@@ -872,7 +887,7 @@ func summarizeMatch(room matchRoomResponse) matchSummaryResponse {
 	return matchSummaryResponse{
 		ID: room.ID, Code: room.Code, CompetitionID: room.CompetitionID, CompetitionName: room.CompetitionName,
 		GameID: room.GameID, GameName: room.GameName, RoundName: room.RoundName,
-		ScheduledAt: room.ScheduledAt, CheckInClosesAt: room.CheckInClosesAt,
+		BestOf: room.BestOf, GamesToWin: room.GamesToWin, ScheduledAt: room.ScheduledAt, CheckInClosesAt: room.CheckInClosesAt,
 		State: room.State, Lifecycle: room.Lifecycle, WinnerSide: room.WinnerSide, Outcome: room.Outcome, Version: room.Version,
 		CurrentPlayerSide: room.CurrentPlayerSide, Home: room.Home, Away: room.Away,
 		AllowedActions: room.AllowedActions,
@@ -965,7 +980,7 @@ func (record matchRecord) presentation(now time.Time, opensAt, closesAt *time.Ti
 		switch {
 		case record.VerificationPhase == nil || *record.VerificationPhase != "awaiting_screenshots":
 			return "under_review", actions
-		case record.MyScreenshot != nil:
+		case len(record.MyScreenshots) > 0:
 			return "awaiting_opponent_screenshot", actions
 		case deadlineOpen(record.ResponseDeadlineAt, now, false):
 			return "screenshot_required", append(actions, "submit_screenshot")

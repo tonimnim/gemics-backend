@@ -91,7 +91,7 @@ func TestMatchPresentationFollowsTheResultSteps(t *testing.T) {
 	phase := func(value string) *string { return &value }
 	mine := &submittedResultView{Side: "home", SubmittedByMe: true, HomeScore: 2, AwayScore: 1}
 	theirs := &submittedResultView{Side: "away", HomeScore: 2, AwayScore: 1}
-	myShot := &screenshotView{ID: "shot", EvidenceID: "evidence"}
+	myShot := []screenshotView{{ID: "shot", Game: 1, EvidenceID: "evidence"}}
 	tests := []struct {
 		name      string
 		record    matchRecord
@@ -112,7 +112,7 @@ func TestMatchPresentationFollowsTheResultSteps(t *testing.T) {
 			VerificationPhase: phase("awaiting_confirmation"), ReportDeadlineAt: at(now), SubmittedResult: theirs},
 			"awaiting_resolution", nil},
 		{"I sent my screenshot", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_screenshots"),
-			ResponseDeadlineAt: at(open), SubmittedResult: mine, MyScreenshot: myShot}, "awaiting_opponent_screenshot", nil},
+			ResponseDeadlineAt: at(open), SubmittedResult: mine, MyScreenshots: myShot}, "awaiting_opponent_screenshot", nil},
 		{"rejected result awaits my screenshot", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_screenshots"),
 			ResponseDeadlineAt: at(open), SubmittedResult: mine}, "screenshot_required", []string{"submit_screenshot"}},
 		{"screenshot window reached", matchRecord{State: "disputed", VerificationPhase: phase("awaiting_screenshots"),
@@ -145,7 +145,7 @@ func TestMatchRoomShowsTheSubmittedResultButNotTheOpponentScreenshot(t *testing.
 		ID: testMatchID, State: "disputed", CurrentSide: "away", VerificationPhase: &phase, ResponseDeadlineAt: &deadline,
 		SubmittedResult: &submittedResultView{ID: "result", Side: "home", HomeScore: 7, AwayScore: 3,
 			Games: []gameScoreInput{{HomeScore: 7, AwayScore: 3}}, SubmittedAt: now.Add(-time.Minute)},
-		MyScreenshot:       &screenshotView{ID: "mine", EvidenceID: "my-evidence", SubmittedAt: now},
+		MyScreenshots:      []screenshotView{{ID: "mine", Game: 1, EvidenceID: "my-evidence", SubmittedAt: now}},
 		OpponentScreenshot: true,
 	}
 	raw, err := json.Marshal(record.response("away-player", now))
@@ -160,8 +160,8 @@ func TestMatchRoomShowsTheSubmittedResultButNotTheOpponentScreenshot(t *testing.
 		t.Fatal(err)
 	}
 	keys := slices.Sorted(maps.Keys(room.ResultVerification))
-	want := []string{"confirmationDeadline", "entryRemoved", "myScreenshot", "opponentScreenshotSubmitted", "phase",
-		"resolution", "screenshotDeadline", "submittedResult"}
+	want := []string{"confirmationDeadline", "entryRemoved", "myScreenshot", "myScreenshots", "opponentScreenshotSubmitted",
+		"phase", "resolution", "screenshotDeadline", "submittedResult"}
 	if !slices.Equal(keys, want) {
 		t.Fatalf("resultVerification keys = %v, want %v", keys, want)
 	}
@@ -171,7 +171,9 @@ func TestMatchRoomShowsTheSubmittedResultButNotTheOpponentScreenshot(t *testing.
 		string(room.ResultVerification["screenshotDeadline"]) == "null" || string(room.Result) != "null" {
 		t.Fatalf("unexpected view: %s", raw)
 	}
-	if strings.Contains(string(raw), "opponentScreenshot\"") || strings.Count(string(raw), "evidenceId") != 1 {
+	// myScreenshot repeats the first of myScreenshots; no other evidence appears.
+	if strings.Contains(string(raw), "opponentScreenshot\"") ||
+		strings.Count(string(raw), `"evidenceId"`) != strings.Count(string(raw), `"evidenceId":"my-evidence"`) {
 		t.Fatalf("the room leaks the opponent's screenshot: %s", raw)
 	}
 }
@@ -622,20 +624,21 @@ func TestMatchRecordDecodesTheRoomQueryJSON(t *testing.T) {
 	submitted := []byte(`{"id":"4d3e5536-bf3c-4dba-a643-575e43f56970","entryId":"` + home + `","homeScore":1,"awayScore":1,
 		"tiebreak":{"type":"penalties","homeScore":4,"awayScore":3},"games":[{"homeScore":1,"awayScore":1}],
 		"submittedAt":"2026-09-28T14:31:00.123456+03:00"}`)
-	screenshot := []byte(`{"id":"5d3e5536-bf3c-4dba-a643-575e43f56970","evidenceId":"6d3e5536-bf3c-4dba-a643-575e43f56970",
-		"submittedAt":"2026-09-28T11:40:00+00:00"}`)
+	screenshot := []byte(`[{"id":"5d3e5536-bf3c-4dba-a643-575e43f56970","game":1,"evidenceId":"6d3e5536-bf3c-4dba-a643-575e43f56970",
+		"submittedAt":"2026-09-28T11:40:00+00:00"}]`)
 	confirmed := []byte(`{"homeScore":2,"awayScore":1,"tiebreak":null,"origin":"agreed_reports",
 		"confirmedAt":"2026-09-28T14:45:00+03:00"}`)
 	if err := record.decodeResultViews(submitted, screenshot, confirmed); err != nil {
 		t.Fatal(err)
 	}
-	result, shot := record.SubmittedResult, record.MyScreenshot
+	result, shots := record.SubmittedResult, record.MyScreenshots
 	if result == nil || result.Side != "home" || result.SubmittedByMe || result.Tiebreak == nil || result.Tiebreak.HomeScore != 4 ||
 		!result.SubmittedAt.Equal(time.Date(2026, 9, 28, 11, 31, 0, 123456000, time.UTC)) || result.SubmittedAt.Location() != time.UTC {
 		t.Fatalf("unexpected submitted result: %+v", result)
 	}
-	if shot == nil || shot.EvidenceID != "6d3e5536-bf3c-4dba-a643-575e43f56970" || shot.SubmittedAt.Location() != time.UTC {
-		t.Fatalf("unexpected screenshot: %+v", shot)
+	if len(shots) != 1 || shots[0].Game != 1 || shots[0].EvidenceID != "6d3e5536-bf3c-4dba-a643-575e43f56970" ||
+		shots[0].SubmittedAt.Location() != time.UTC {
+		t.Fatalf("unexpected screenshots: %+v", shots)
 	}
 	if record.ConfirmedResult == nil || record.ConfirmedResult.ConfirmedAt.Hour() != 11 {
 		t.Fatalf("unexpected confirmed result: %+v", record.ConfirmedResult)
@@ -675,12 +678,12 @@ func TestCheckInDeadlinesAreServerEnforced(t *testing.T) {
 func TestMatchSettingsUseValidatedStageOverrides(t *testing.T) {
 	competition := []byte(`{"drawAllowed":false,"friendMatchInstructions":[{"title":"Competition rule","detail":"Use this setting."}]}`)
 	stage := []byte(`{"drawAllowed":true,"friendMatchInstructions":[{"title":"Final rule","detail":"Use the final setting."}]}`)
-	settings := resolveMatchSettings("efootball-mobile", "single_elimination", competition, stage)
+	settings := resolveMatchSettings("efootball-mobile", "single_elimination", 1, competition, stage)
 	if !settings.DrawAllowed || len(settings.Instructions) != 1 || settings.Instructions[0].Title != "Final rule" {
 		t.Fatalf("unexpected settings: %+v", settings)
 	}
 	invalid := []byte(`{"friendMatchInstructions":[{"title":"","detail":"missing title"}]}`)
-	settings = resolveMatchSettings("efootball-mobile", "single_elimination", nil, invalid)
+	settings = resolveMatchSettings("efootball-mobile", "single_elimination", 1, nil, invalid)
 	if len(settings.Instructions) != 4 {
 		t.Fatalf("invalid rules must fall back to safe defaults: %+v", settings.Instructions)
 	}
