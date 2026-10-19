@@ -15,9 +15,11 @@ const (
 	defaultReportWindow       = 10 * time.Minute
 	defaultReportReminderLead = 3 * time.Minute
 	defaultResponseWindow     = 10 * time.Minute
-	minimumVerificationWindow = 5 * time.Minute
-	maximumVerificationWindow = 60 * time.Minute
-	minimumReportReminderLead = time.Minute
+	// A series sends a screenshot for every game, so it gets longer.
+	defaultSeriesResponseWindow = 15 * time.Minute
+	minimumVerificationWindow   = 5 * time.Minute
+	maximumVerificationWindow   = 60 * time.Minute
+	minimumReportReminderLead   = time.Minute
 )
 
 var errInvalidMatchVerificationPolicy = errors.New("match verification policy is invalid")
@@ -169,14 +171,15 @@ func verificationMinutes(minutes *int, minimum, maximum time.Duration) (time.Dur
 
 // resolveMatchVerificationPolicy describes the windows a player is held to.
 // Callers pass the snapshotted settings once a verification row exists.
-func resolveMatchVerificationPolicy(settings matchVerificationSettings) matchVerificationPolicyResponse {
+func resolveMatchVerificationPolicy(settings matchVerificationSettings, bestOf int) matchVerificationPolicyResponse {
 	response := matchVerificationPolicyResponse{
 		ReportWindowSeconds:           int64(settings.ReportWindow / time.Second),
 		ReminderBeforeDeadlineSeconds: int64(settings.ReminderLead / time.Second),
 		ResponseWindowSeconds:         int64(settings.ResponseWindow / time.Second),
 	}
 	response.ScreenshotEvidence.MinItems = resultScreenshotMinItems
-	response.ScreenshotEvidence.MaxItems = resultScreenshotMaxItems
+	response.ScreenshotEvidence.MaxItems = max(resultScreenshotMinItems, bestOf)
+	response.ScreenshotEvidence.PerGame = bestOf > 1
 	response.ScreenshotEvidence.MediaTypes = slices.Clone(screenshotMediaTypes)
 	return response
 }
