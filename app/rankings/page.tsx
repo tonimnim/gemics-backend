@@ -70,7 +70,11 @@ function Podium({ players }: { players: RankedPlayer[] }) {
             {player.rank}
           </span>
           <Avatar player={player} size="lg" />
-          <h3>{player.displayName}</h3>
+          <h3>
+            <Link className="row-link" href={`/players/${player.playerId}`}>
+              {player.displayName}
+            </Link>
+          </h3>
           <p className="podium-handle">@{player.handle}</p>
           <dl className="podium-stats">
             <div>
@@ -182,7 +186,11 @@ export default async function Rankings({
                   <span role="cell" className="col-player">
                     <Avatar player={player} />
                     <span className="player-names">
-                      <strong>{player.displayName}</strong>
+                      <strong>
+                        <Link className="row-link" href={`/players/${player.playerId}`}>
+                          {player.displayName}
+                        </Link>
+                      </strong>
                       <small>@{player.handle}</small>
                     </span>
                   </span>
