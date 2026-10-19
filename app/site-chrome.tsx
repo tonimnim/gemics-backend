@@ -65,7 +65,7 @@ export function SiteFooter() {
                     href={social.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    aria-label={`Tonits on ${social.name}`}
+                    aria-label={`Ozone on ${social.name}`}
                     title={`${social.name} ${social.handle}`}
                   >
                     <Icon />
@@ -77,10 +77,10 @@ export function SiteFooter() {
         </div>
         <div className="footer-legal">
           <p>
-            eFootball is a trademark of Konami Digital Entertainment. Tonits is an independent platform and is not
+            eFootball is a trademark of Konami Digital Entertainment. Ozone is an independent platform and is not
             affiliated with or endorsed by Konami.
           </p>
-          <span>© 2026 Tonits</span>
+          <span>© 2026 Ozone</span>
         </div>
       </div>
     </footer>

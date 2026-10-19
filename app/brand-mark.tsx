@@ -1,5 +1,5 @@
 /**
- * The Tonits mark, inlined so it inherits currentColor and costs no request.
+ * The Ozone mark, inlined so it inherits currentColor and costs no request.
  *
  * The viewBox is cropped to the ink bounds. The source artwork sat 137 units
  * right and 74 units low of its own canvas centre, which would otherwise show
