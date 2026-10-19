@@ -4,18 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
-// After a rejection each entry sends exactly one processed screenshot (R6).
+// After a rejection each entry sends its processed screenshots (R6): one for
+// a best of 1, one per game played for a series, each numbered by its game.
 // HEIC and video uploads are never accepted as match evidence.
 const (
 	resultScreenshotMinItems = 1
-	resultScreenshotMaxItems = 1
+	resultScreenshotMaxItems = 5
 )
 
 // resultConfirmationInput is the other entry's answer to a submitted result.
@@ -23,9 +26,54 @@ type resultConfirmationInput struct {
 	Decision string `json:"decision"`
 }
 
-// resultScreenshotInput is an entry's one screenshot after a rejection.
+// resultScreenshotInput is an entry's screenshots after a rejection:
+// evidenceId for a best of 1, or screenshots with one entry per game.
 type resultScreenshotInput struct {
+	EvidenceID  string                 `json:"evidenceId,omitempty"`
+	Screenshots []resultScreenshotGame `json:"screenshots,omitempty"`
+}
+
+type resultScreenshotGame struct {
+	Game       int    `json:"game"`
 	EvidenceID string `json:"evidenceId"`
+}
+
+// normalize folds evidenceId into screenshots as game 1 and checks what no
+// match could accept, before any lock. Screenshots come back in game order.
+func (input *resultScreenshotInput) normalize() string {
+	input.EvidenceID = strings.ToLower(strings.TrimSpace(input.EvidenceID))
+	if input.EvidenceID != "" {
+		if len(input.Screenshots) > 0 {
+			return "Send evidenceId for one screenshot or screenshots for several, not both."
+		}
+		input.Screenshots = []resultScreenshotGame{{Game: 1, EvidenceID: input.EvidenceID}}
+		input.EvidenceID = ""
+	}
+	if len(input.Screenshots) < resultScreenshotMinItems || len(input.Screenshots) > resultScreenshotMaxItems {
+		return "Attach a screenshot of the Full Time screen of each game you played."
+	}
+	games, evidence := map[int]bool{}, map[string]bool{}
+	for index := range input.Screenshots {
+		shot := &input.Screenshots[index]
+		shot.EvidenceID = strings.ToLower(strings.TrimSpace(shot.EvidenceID))
+		if !uuidPattern.MatchString(shot.EvidenceID) || evidence[shot.EvidenceID] {
+			return "Attach each screenshot once, as an uploaded image."
+		}
+		if shot.Game < 1 || shot.Game > resultScreenshotMaxItems || games[shot.Game] {
+			return "Number each screenshot by its game, once each."
+		}
+		games[shot.Game], evidence[shot.EvidenceID] = true, true
+	}
+	slices.SortFunc(input.Screenshots, func(a, b resultScreenshotGame) int { return a.Game - b.Game })
+	return ""
+}
+
+func (input resultScreenshotInput) evidenceIDs() []string {
+	ids := make([]string, len(input.Screenshots))
+	for index, shot := range input.Screenshots {
+		ids[index] = shot.EvidenceID
+	}
+	return ids
 }
 
 // Idempotency scopes are bound to the actor and the match, and differ per
@@ -108,7 +156,7 @@ func (s *Server) createResultConfirmation(w http.ResponseWriter, r *http.Request
 		})
 }
 
-// createResultScreenshot records an entry's one screenshot after a rejection
+// createResultScreenshot records an entry's screenshots after a rejection
 // (R6).
 func (s *Server) createResultScreenshot(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDatabase(w) {
@@ -127,14 +175,13 @@ func (s *Server) createResultScreenshot(w http.ResponseWriter, r *http.Request) 
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	input.EvidenceID = strings.ToLower(strings.TrimSpace(input.EvidenceID))
-	if !uuidPattern.MatchString(input.EvidenceID) {
-		writeError(w, http.StatusBadRequest, "invalid_evidence", "Attach one screenshot of the Full Time screen.")
+	if message := input.normalize(); message != "" {
+		writeError(w, http.StatusBadRequest, "invalid_evidence", message)
 		return
 	}
 	s.recordScoreReport(w, r, "screenshot", matchID, idempotencyKey, input,
 		func(ctx context.Context, tx pgx.Tx, state verificationState, actor resolutionActor) (*planRejection, error) {
-			return applyResultScreenshot(ctx, tx, state, input.EvidenceID, actor)
+			return applyResultScreenshot(ctx, tx, state, input.Screenshots, actor)
 		})
 }
 
@@ -320,12 +367,20 @@ func applyResultConfirmation(ctx context.Context, tx pgx.Tx, state verificationS
 	}
 }
 
-// applyResultScreenshot stores an entry's one screenshot after a rejection: a
-// lone screenshot waits for the other entry (T8) and the second sends the
-// match to Gamics (T9).
-func applyResultScreenshot(ctx context.Context, tx pgx.Tx, state verificationState, evidenceID string,
+// applyResultScreenshot stores an entry's screenshots after a rejection: the
+// first entry's wait for the other entry (T8) and the second's send the match
+// to Gamics (T9). Sending at least one counts as responding; a game left out
+// counts against its entry in review, never as a removal.
+func applyResultScreenshot(ctx context.Context, tx pgx.Tx, state verificationState, screenshots []resultScreenshotGame,
 	actor resolutionActor) (*planRejection, error) {
 	m := state.Match
+	if last := screenshots[len(screenshots)-1].Game; last > max(1, m.BestOf) {
+		message := "This match is a best of 1: send one screenshot of its Full Time screen."
+		if m.BestOf > 1 {
+			message = fmt.Sprintf("This match is a best of %d: number each screenshot by its game, 1 to %d.", m.BestOf, m.BestOf)
+		}
+		return &planRejection{Status: http.StatusBadRequest, Code: "invalid_evidence", Message: message}, nil
+	}
 	// Planning reads no rows, so it runs first: a screenshot that is no longer
 	// allowed is refused as such rather than as unusable evidence. The
 	// evidence lock still follows the report locks.
@@ -333,11 +388,11 @@ func applyResultScreenshot(ctx context.Context, tx pgx.Tx, state verificationSta
 	if rejection != nil {
 		return rejection, nil
 	}
-	evidenceIDs := []string{evidenceID}
+	evidenceIDs := resultScreenshotInput{Screenshots: screenshots}.evidenceIDs()
 	err := lockCompletedEvidence(ctx, tx, evidenceIDs, m.ActorUserID, screenshotMediaTypes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &planRejection{Status: http.StatusConflict, Code: "evidence_not_ready",
-			Message: "The screenshot must be a processed JPEG or PNG that you uploaded and have not used before."}, nil
+			Message: "Every screenshot must be a processed JPEG or PNG that you uploaded and have not used before."}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -345,12 +400,12 @@ func applyResultScreenshot(ctx context.Context, tx pgx.Tx, state verificationSta
 	reportID, err := insertScoreReport(ctx, tx, m, actor, "final", nil)
 	if isUniqueViolation(err) {
 		return &planRejection{Status: http.StatusConflict, Code: "screenshot_already_submitted",
-			Message: "Your side has already sent its screenshot for this match."}, nil
+			Message: "Your side has already sent its screenshots for this match."}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err = attachFinalReportEvidence(ctx, tx, reportID, evidenceIDs); err != nil {
+	if err = attachFinalReportEvidence(ctx, tx, reportID, screenshots); err != nil {
 		return nil, err
 	}
 	switch plan.Action {
@@ -367,7 +422,7 @@ func applyResultScreenshot(ctx context.Context, tx pgx.Tx, state verificationSta
 // openResultVerification snapshots the resolved windows when the result is
 // submitted (T2). Every deadline is computed from the database clock.
 func openResultVerification(ctx context.Context, tx pgx.Tx, m lockedResultMatch) error {
-	settings := resolveMatchSettings(m.GameID, m.StageFormat, m.RulesSnapshot, m.StageConfig).Verification
+	settings := resolveMatchSettings(m.GameID, m.StageFormat, m.BestOf, m.RulesSnapshot, m.StageConfig).Verification
 	reportDeadline := m.DatabaseNow.Add(settings.ReportWindow)
 	_, err := tx.Exec(ctx, `INSERT INTO match_result_verifications
 		(match_id,competition_id,phase,first_report_entry_id,first_reported_at,report_window_seconds,
@@ -454,12 +509,16 @@ func insertScoreReport(ctx context.Context, tx pgx.Tx, m lockedResultMatch, acto
 		nil, map[string]any{"reportId": reportID, "matchId": m.ID, "entryId": m.ActorEntryID, "kind": kind, "matchVersion": m.Version})
 }
 
-// attachFinalReportEvidence binds the locked screenshot to the screenshot
-// submission. An upload can back only one submission.
-func attachFinalReportEvidence(ctx context.Context, tx pgx.Tx, reportID string, evidenceIDs []string) error {
-	for position, evidenceID := range evidenceIDs {
+// attachFinalReportEvidence binds the locked screenshots to the screenshot
+// submission, each at its game's position (game 1 is position 0). An upload
+// can back only one submission.
+func attachFinalReportEvidence(ctx context.Context, tx pgx.Tx, reportID string, screenshots []resultScreenshotGame) error {
+	evidenceIDs := make([]string, 0, len(screenshots))
+	for _, shot := range screenshots {
+		evidenceID := shot.EvidenceID
+		evidenceIDs = append(evidenceIDs, evidenceID)
 		if _, err := tx.Exec(ctx, `INSERT INTO match_result_report_evidence(report_id,evidence_id,position)
-			VALUES ($1,$2,$3)`, reportID, evidenceID, position); err != nil {
+			VALUES ($1,$2,$3)`, reportID, evidenceID, shot.Game-1); err != nil {
 			return err
 		}
 		command, err := tx.Exec(ctx, `UPDATE evidence_uploads SET bound_kind='match_result_report',bound_id=$1,
