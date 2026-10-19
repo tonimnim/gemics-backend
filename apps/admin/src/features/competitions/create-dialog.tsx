@@ -32,6 +32,13 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { rateFor, useFxRates } from '@/features/finance/api'
 import { createCompetition, type CompetitionFormat } from './api'
+import {
+  bestOfChoices,
+  cleanMatchFormat,
+  formatRounds,
+  type BestOf,
+  type MatchFormat,
+} from './match-format'
 
 const empty = {
   name: '',
@@ -43,6 +50,7 @@ const empty = {
   // Only sent with a prize; the select shows Ozone until staff pick.
   prizeFunding: 'organizer' as 'organizer' | 'sponsor',
   countries: [] as string[],
+  matchFormat: { bestOf: 1, rounds: {} } as MatchFormat,
   registrationOpensAt: '',
   registrationClosesAt: '',
   startsAt: '',
@@ -112,10 +120,16 @@ export function CreateCompetitionDialog({
         registrationOpensAt: new Date(form.registrationOpensAt).toISOString(),
         registrationClosesAt: new Date(form.registrationClosesAt).toISOString(),
         startsAt: new Date(form.startsAt).toISOString(),
-        rules:
-          countries.length > 0
-            ? { eligibility: { allowedCountries: countries } }
-            : {},
+        rules: {
+          ...(countries.length > 0 && {
+            eligibility: { allowedCountries: countries },
+          }),
+          matchFormat: cleanMatchFormat(
+            form.matchFormat,
+            form.format,
+            Number(form.maxEntries)
+          ),
+        },
       })
     },
     onSuccess: () => {
@@ -199,6 +213,17 @@ export function CreateCompetitionDialog({
                 />
               </div>
             </div>
+          </Section>
+
+          <Section
+            title='Match format'
+            hint='One point per game won. A best of 3 is first to 2 wins, a best of 5 first to 3.'
+          >
+            <MatchFormatFields
+              value={form.matchFormat}
+              rounds={formatRounds(form.format, Number(form.maxEntries))}
+              onChange={(matchFormat) => set({ matchFormat })}
+            />
           </Section>
 
           <Section
@@ -343,6 +368,91 @@ export function CreateCompetitionDialog({
         </SheetFooter>
       </SheetContent>
     </Sheet>
+  )
+}
+
+/** The default best-of, then an override for each round that can differ. */
+function MatchFormatFields({
+  value,
+  rounds,
+  onChange,
+}: {
+  value: MatchFormat
+  rounds: { key: string; label: string }[]
+  onChange: (value: MatchFormat) => void
+}) {
+  const setRound = (key: string, bestOf: BestOf) =>
+    onChange({ ...value, rounds: { ...value.rounds, [key]: bestOf } })
+  return (
+    <div className='divide-y rounded-lg border'>
+      <BestOfRow
+        label='Every round'
+        value={value.bestOf}
+        onChange={(bestOf) => onChange({ ...value, bestOf })}
+      />
+      {rounds.map((round) => {
+        const override = value.rounds?.[round.key]
+        return (
+          <BestOfRow
+            key={round.key}
+            label={round.label}
+            value={override ?? value.bestOf}
+            inherited={override === undefined}
+            onChange={(bestOf) => setRound(round.key, bestOf)}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function BestOfRow({
+  label,
+  value,
+  inherited,
+  onChange,
+}: {
+  label: string
+  value: BestOf
+  inherited?: boolean
+  onChange: (value: BestOf) => void
+}) {
+  return (
+    <div className='flex items-center justify-between gap-4 px-4 py-2.5'>
+      <span
+        className={cn(
+          'text-sm',
+          inherited ? 'text-muted-foreground' : 'font-medium'
+        )}
+      >
+        {label}
+      </span>
+      <div
+        role='radiogroup'
+        aria-label={`${label}: best of`}
+        className='inline-flex rounded-md border bg-muted/40 p-0.5'
+      >
+        {bestOfChoices.map((choice) => (
+          <button
+            key={choice}
+            type='button'
+            role='radio'
+            aria-checked={value === choice}
+            onClick={() => onChange(choice)}
+            className={cn(
+              'h-7 rounded-[5px] px-3 text-xs font-medium transition-colors',
+              value === choice
+                ? inherited
+                  ? 'bg-background text-muted-foreground shadow-xs'
+                  : 'bg-background text-foreground shadow-xs'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            Bo{choice}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 
