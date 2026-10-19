@@ -92,7 +92,7 @@ func (s *Server) requestEmailVerification(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if taken {
-		writeError(w, http.StatusConflict, "email_taken", "That email address is used by another Tonits account.")
+		writeError(w, http.StatusConflict, "email_taken", "That email address is used by another Ozone account.")
 		return
 	}
 	ip := s.clientIP(r)
@@ -135,7 +135,7 @@ func (s *Server) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	_, err = tx.Exec(r.Context(), `UPDATE users SET email=$2,email_verified_at=now(),updated_at=now()
 		WHERE id=$1 AND status='active'`, userID, email)
 	if uniqueViolationOn(err, "users_email_unique") {
-		writeError(w, http.StatusConflict, "email_taken", "That email address is used by another Tonits account.")
+		writeError(w, http.StatusConflict, "email_taken", "That email address is used by another Ozone account.")
 		return
 	}
 	if err != nil || tx.Commit(r.Context()) != nil {
@@ -177,7 +177,7 @@ func (s *Server) putPhone(w http.ResponseWriter, r *http.Request) {
 	}
 	if taken {
 		writeError(w, http.StatusConflict, "phone_taken",
-			"That phone number is linked to another Tonits account. Contact Tonits support if it is yours.")
+			"That phone number is linked to another Ozone account. Contact Ozone support if it is yours.")
 		return
 	}
 	// The country follows the phone unless the player chose one themselves or
@@ -190,7 +190,7 @@ func (s *Server) putPhone(w http.ResponseWriter, r *http.Request) {
 		WHERE id=$1 AND status='active'`, userID, phone, country)
 	if uniqueViolationOn(err, "users_phone_unique") {
 		writeError(w, http.StatusConflict, "phone_taken",
-			"That phone number is linked to another Tonits account. Contact Tonits support if it is yours.")
+			"That phone number is linked to another Ozone account. Contact Ozone support if it is yours.")
 		return
 	}
 	if err != nil {

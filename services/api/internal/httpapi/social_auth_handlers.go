@@ -292,14 +292,14 @@ func (s *Server) completeOnboarding(w http.ResponseWriter, r *http.Request) {
 	}
 	if taken {
 		writeError(w, http.StatusConflict, "phone_taken",
-			"That phone number is linked to another Tonits account. Contact Tonits support if it is yours.")
+			"That phone number is linked to another Ozone account. Contact Ozone support if it is yours.")
 		return
 	}
 	_, err = tx.Exec(r.Context(), `INSERT INTO game_accounts(user_id,game_id,in_game_name,publisher_player_id)
 		VALUES ($1,$2,'',$3)`, current.UserID, registrationGameID, konamiID)
 	if uniqueViolationOn(err, "game_accounts_publisher_id_unique") {
 		writeError(w, http.StatusConflict, "konami_id_taken",
-			"That Konami ID is already linked to another Tonits account. Contact Tonits support if it is yours.")
+			"That Konami ID is already linked to another Ozone account. Contact Ozone support if it is yours.")
 		return
 	}
 	if err == nil && chosenName != "" {

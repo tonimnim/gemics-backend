@@ -146,7 +146,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "username_taken", "That username is already taken.")
 		return
 	case uniqueViolationOn(err, "game_accounts_publisher_id_unique"):
-		writeError(w, http.StatusConflict, "konami_id_taken", "That Konami ID already has a Tonits account. Sign in instead.")
+		writeError(w, http.StatusConflict, "konami_id_taken", "That Konami ID already has an Ozone account. Sign in instead.")
 		return
 	case err != nil:
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to create the player account.")
