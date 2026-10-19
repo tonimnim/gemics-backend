@@ -55,7 +55,9 @@ type resultReviewParticipants struct {
 }
 
 type staffReportEvidenceView struct {
-	ID        string `json:"id"`
+	ID string `json:"id"`
+	// Game is the game of the series the screenshot shows; 1 in a best of 1.
+	Game      int    `json:"game"`
 	MediaType string `json:"mediaType"`
 	ByteSize  int64  `json:"byteSize"`
 	Ready     bool   `json:"ready"`
@@ -140,7 +142,7 @@ type resultReviewDetail struct {
 // resultReviewConflictClause needs.
 const resultReviewSummaryColumns = `review.id::text,review.status,review.reason,review.version,review.queued_at,
 	review.decision,review.decided_at,review.decided_by::text,m.id::text,m.competition_id::text,competition.name,
-	competition.game_id,stage.format,m.bracket,m.round_number,m.match_number,stage.best_of`
+	competition.game_id,stage.format,m.bracket,m.round_number,m.match_number,m.best_of`
 
 const resultReviewFrom = ` FROM match_result_reviews review
 	JOIN matches m ON m.id=review.match_id
@@ -547,7 +549,7 @@ func queryResultReviewReports(ctx context.Context, queryer rowsQueryer, matchID 
 	rows, err := queryer.Query(ctx, `SELECT report.id::text,report.entry_id::text,report.kind,report.reported_by::text,
 		reporter.display_name,report.home_score,report.away_score,report.tiebreak_type,report.home_tiebreak_score,
 		report.away_tiebreak_score,report.game_results,report.reported_at,
-		COALESCE((SELECT json_agg(json_build_object('id',evidence.id::text,'mediaType',evidence.media_type,
+		COALESCE((SELECT json_agg(json_build_object('id',evidence.id::text,'game',link.position+1,'mediaType',evidence.media_type,
 			'byteSize',evidence.byte_size,'ready',evidence.status='completed') ORDER BY link.position)
 			FROM match_result_report_evidence link JOIN evidence_uploads evidence ON evidence.id=link.evidence_id
 			WHERE link.report_id=report.id),'[]'::json)
