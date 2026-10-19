@@ -89,7 +89,7 @@ def main():
     c = call("POST", f"{orgs}/{cid}/transitions", {"status": "check_in"}, token=admin)["data"]
     print("  ->", c["status"])
     draw = {"seedingPolicy": "random", "expectedStatus": "check_in",
-            "config": {"bestOf": 1, "checkInLeadMinutes": 180, "checkInGraceMinutes": 60,
+            "config": {"checkInLeadMinutes": 180, "checkInGraceMinutes": 60,
                        "resultWindowMinutes": 1440, "roundIntervalMinutes": 1440}}
     call("POST", f"{orgs}/{cid}/draws", draw, token=admin, idempotent=True)
     c = call("POST", f"{orgs}/{cid}/transitions", {"status": "running"}, token=admin)["data"]
