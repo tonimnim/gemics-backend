@@ -131,7 +131,7 @@ CREATE TABLE result_submissions (
     origin text DEFAULT 'legacy'::text NOT NULL,
     CONSTRAINT result_submissions_away_score_check CHECK ((away_score >= 0)),
     CONSTRAINT result_submissions_canonical_status_chk CHECK ((status <> ALL (ARRAY['pending_confirmation'::text, 'disputed'::text]))),
-    CONSTRAINT result_submissions_games_array_chk CHECK (((jsonb_typeof(game_results) = 'array'::text) AND ((jsonb_array_length(game_results) >= 1) AND (jsonb_array_length(game_results) <= 99)))),
+    CONSTRAINT result_submissions_games_array_chk CHECK (((jsonb_typeof(game_results) = 'array'::text) AND (jsonb_array_length(game_results) <= 99))),
     CONSTRAINT result_submissions_home_score_check CHECK ((home_score >= 0)),
     CONSTRAINT result_submissions_match_version_positive_chk CHECK ((match_version > 0)),
     CONSTRAINT result_submissions_not_self_superseding_chk CHECK (((supersedes_id IS NULL) OR (supersedes_id <> id))),
@@ -207,7 +207,7 @@ CREATE TABLE match_result_reports (
     reported_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT match_result_reports_kind_claim_chk CHECK ((((kind = 'initial'::text) AND (home_score IS NOT NULL) AND (away_score IS NOT NULL) AND (game_results IS NOT NULL)) OR ((kind = 'final'::text) AND (home_score IS NULL) AND (away_score IS NULL) AND (tiebreak_type IS NULL) AND (game_results IS NULL)))),
     CONSTRAINT match_result_reports_away_score_check CHECK (((away_score >= 0) AND (away_score <= 99))),
-    CONSTRAINT match_result_reports_games_array_chk CHECK (((jsonb_typeof(game_results) = 'array'::text) AND ((jsonb_array_length(game_results) >= 1) AND (jsonb_array_length(game_results) <= 99)))),
+    CONSTRAINT match_result_reports_games_array_chk CHECK (((jsonb_typeof(game_results) = 'array'::text) AND (jsonb_array_length(game_results) <= 99))),
     CONSTRAINT match_result_reports_home_score_check CHECK (((home_score >= 0) AND (home_score <= 99))),
     CONSTRAINT match_result_reports_kind_check CHECK ((kind = ANY (ARRAY['initial'::text, 'final'::text]))),
     CONSTRAINT match_result_reports_match_version_check CHECK ((match_version > 0)),
@@ -224,7 +224,7 @@ CREATE TABLE match_result_report_evidence (
     report_id uuid NOT NULL,
     evidence_id uuid NOT NULL,
     "position" smallint NOT NULL,
-    CONSTRAINT match_result_report_evidence_position_check CHECK (("position" = 0))
+    CONSTRAINT match_result_report_evidence_position_check CHECK ((("position" >= 0) AND ("position" < 5)))
 );
 ALTER TABLE ONLY match_result_report_evidence
     ADD CONSTRAINT match_result_report_evidence_evidence_id_key UNIQUE (evidence_id);
@@ -257,7 +257,7 @@ CREATE TABLE match_result_reviews (
     version integer DEFAULT 1 NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT match_result_reviews_corrected_away_score_check CHECK (((corrected_away_score >= 0) AND (corrected_away_score <= 99))),
-    CONSTRAINT match_result_reviews_corrected_chk CHECK ((((decision IS DISTINCT FROM 'corrected_score'::text) AND (corrected_home_score IS NULL) AND (corrected_away_score IS NULL) AND (corrected_game_results IS NULL) AND (corrected_tiebreak_type IS NULL) AND (corrected_home_tiebreak_score IS NULL) AND (corrected_away_tiebreak_score IS NULL)) OR ((decision = 'corrected_score'::text) AND (corrected_home_score IS NOT NULL) AND (corrected_away_score IS NOT NULL) AND (corrected_game_results IS NOT NULL) AND (jsonb_typeof(corrected_game_results) = 'array'::text) AND ((jsonb_array_length(corrected_game_results) >= 1) AND (jsonb_array_length(corrected_game_results) <= 99))))),
+    CONSTRAINT match_result_reviews_corrected_chk CHECK ((((decision IS DISTINCT FROM 'corrected_score'::text) AND (corrected_home_score IS NULL) AND (corrected_away_score IS NULL) AND (corrected_game_results IS NULL) AND (corrected_tiebreak_type IS NULL) AND (corrected_home_tiebreak_score IS NULL) AND (corrected_away_tiebreak_score IS NULL)) OR ((decision = 'corrected_score'::text) AND (corrected_home_score IS NOT NULL) AND (corrected_away_score IS NOT NULL) AND (corrected_game_results IS NOT NULL) AND (jsonb_typeof(corrected_game_results) = 'array'::text) AND (jsonb_array_length(corrected_game_results) <= 99)))),
     CONSTRAINT match_result_reviews_corrected_home_score_check CHECK (((corrected_home_score >= 0) AND (corrected_home_score <= 99))),
     CONSTRAINT match_result_reviews_corrected_tiebreak_chk CHECK ((((corrected_tiebreak_type IS NULL) AND (corrected_home_tiebreak_score IS NULL) AND (corrected_away_tiebreak_score IS NULL)) OR ((corrected_tiebreak_type = 'penalties'::text) AND (corrected_home_score = corrected_away_score) AND (corrected_home_tiebreak_score IS NOT NULL) AND (corrected_away_tiebreak_score IS NOT NULL) AND ((corrected_home_tiebreak_score >= 0) AND (corrected_home_tiebreak_score <= 99)) AND ((corrected_away_tiebreak_score >= 0) AND (corrected_away_tiebreak_score <= 99)) AND (corrected_home_tiebreak_score <> corrected_away_tiebreak_score)))),
     CONSTRAINT match_result_reviews_decider_chk CHECK (((decider_kind IS NULL) OR ((decider_kind = 'staff'::text) AND (decided_by IS NOT NULL)) OR ((decider_kind = 'system'::text) AND (decided_by IS NULL) AND (decider_ref IS NOT NULL) AND (decision <> 'corrected_score'::text)))),
