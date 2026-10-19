@@ -204,7 +204,7 @@ components:
         verificationMethod: { type: [string, "null"], enum: [manual_evidence, publisher_api, null] }
         publisherVerified:
           type: boolean
-          description: True only when verification came from an integrated publisher API; a Tonits evidence review remains false.
+          description: True only when verification came from an integrated publisher API; an Ozone evidence review remains false.
     PublicPlayerProfile:
       type: object
       required: [playerId, handle, displayName, bio, avatarUrl, countryCode, joinedAt, record, ratings, gameAccounts]

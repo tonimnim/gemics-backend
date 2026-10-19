@@ -1,4 +1,4 @@
-# Tonits result review queue and conduct strikes. Merge this OpenAPI 3.1
+# Ozone result review queue and conduct strikes. Merge this OpenAPI 3.1
 # fragment with the main contract and match-score-reports.paths.yaml, which
 # define CursorPage, GameScore, TiebreakScore, IdempotencyKey and the Error
 # response.
@@ -19,7 +19,7 @@ paths:
     get:
       operationId: listResultReviews
       tags: [Platform result review]
-      summary: List a signed, operator-bound page of the Tonits result review queue.
+      summary: List a signed, operator-bound page of the Ozone result review queue.
       description: >-
         queued reviews are served oldest first; decided and closed reviews newest first. Reviews of
         matches the operator plays in, captains in or organizes are silently omitted.
@@ -84,7 +84,7 @@ paths:
       summary: Decide a queued review and settle the match.
       description: >-
         accept_home or accept_away confirms that entry's current claim (its final report, or its initial
-        report when it has none); corrected_score confirms a score Tonits sets; all three apply
+        report when it has none); corrected_score confirms a score Ozone sets; all three apply
         progression and ratings. remove_both cancels the match and removes both entries from the
         tournament without touching ratings. strikeUserIds may name only the reporter of a current claim
         that this decision rejects; each strike counts towards the registration ban until an admin
@@ -224,7 +224,7 @@ components:
       type: string
       description: >-
         reports_differ when both entries responded to a mismatch and still disagree; evidence_unavailable
-        when the response window ended while a non-responder's screenshot was still stuck in Tonits'
+        when the response window ended while a non-responder's screenshot was still stuck in Ozone's
         own processing, so nobody was removed. Never sent to players.
       enum: [reports_differ, evidence_unavailable]
     ResultReviewDecisionCode:
@@ -274,7 +274,7 @@ components:
     StaffScoreReportView:
       type: object
       additionalProperties: false
-      description: One entry's claim as Tonits staff see it. Players never receive this view.
+      description: One entry's claim as Ozone staff see it. Players never receive this view.
       required: [id, reportedBy, homeScore, awayScore, tiebreak, games, reportedAt, evidence]
       properties:
         id: { type: string, format: uuid }
@@ -574,7 +574,7 @@ components:
     PlayerStrike:
       type: object
       additionalProperties: false
-      description: A conduct strike recorded by a Tonits review against the reporter of a rejected claim. Active strikes count towards the registration ban.
+      description: A conduct strike recorded by an Ozone review against the reporter of a rejected claim. Active strikes count towards the registration ban.
       required: [id, userId, matchId, reviewId, reasonCode, note, createdByKind, createdBy, createdAt, revokedAt, revokedBy, revokeReason]
       properties:
         id: { type: string, format: uuid }

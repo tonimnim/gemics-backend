@@ -2,7 +2,7 @@
 # resolves the caller's organization_members row and refuses the request unless
 # that role grants the permission named in the description. A caller who is not
 # a member receives 404, never 403, so organization identifiers cannot be probed.
-# No organization role decides match results: disagreements go to the Tonits
+# No organization role decides match results: disagreements go to the Ozone
 # review queue (result-reviews.paths.yaml), and organization members can
 # neither read players' score claims nor their screenshots.
 paths:
@@ -106,7 +106,7 @@ paths:
       description: >-
         Requires member.manage (owner). Members are resolved by handle rather than
         email so this route cannot be used to test whether an email address has a
-        Tonits account. An unknown handle returns 404.
+        Ozone account. An unknown handle returns 404.
       security: [{ bearerAuth: [] }]
       parameters: [{ name: orgId, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody:
@@ -281,7 +281,7 @@ paths:
         requires every match to be finished, forfeited or cancelled. Cancelling
         a competition also cancels every match that is not finished yet
         (completionReason competition_cancelled), settles open result
-        verifications and closes queued Tonits reviews, in the same transaction.
+        verifications and closes queued Ozone reviews, in the same transaction.
         Nobody is removed from the tournament, no rating changes and no strike
         is recorded.
       security: [{ bearerAuth: [] }]
