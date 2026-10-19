@@ -6,7 +6,13 @@ paths:
       summary: Discover public competitions with bounded keyset pagination.
       parameters:
         - { name: gameId, in: query, schema: { type: string } }
-        - { name: status, in: query, schema: { type: string, enum: [published, registration_open, check_in, running, completed] } }
+        - name: status
+          in: query
+          description: >-
+            One status, or several comma-separated (check_in,running). Without it the list holds every
+            discovery status. cancelled is listed only when asked for, and only for competitions that were
+            published first. Any other value is 400 invalid_status.
+          schema: { type: string, example: "check_in,running" }
         - { name: entryType, in: query, schema: { type: string, enum: [free, paid] } }
         - { name: q, in: query, schema: { type: string, maxLength: 100 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }

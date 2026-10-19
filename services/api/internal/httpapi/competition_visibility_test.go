@@ -134,8 +134,8 @@ func TestCompetitionEligibilityReportsCancellation(t *testing.T) {
 }
 
 // Competition.status and Registration.competitionStatus admit cancelled in the
-// assembled contract and in its fragment, while discovery stays filterable by
-// the discovery statuses only.
+// assembled contract and in its fragment, and the list documents that
+// cancelled is listed only when asked for.
 func TestOpenAPICompetitionStatusesAdmitCancelled(t *testing.T) {
 	readable := append(slices.Clone(publicCompetitionStatuses), "cancelled")
 	for _, name := range []string{"openapi.yaml", "competition.paths.yaml"} {
@@ -154,8 +154,8 @@ func TestOpenAPICompetitionStatusesAdmitCancelled(t *testing.T) {
 			t.Errorf("%s Registration does not require competitionStatus", name)
 		}
 		listParameters, _, _ := strings.Cut(openAPIBlock(t, contract, "/v1/competitions", 2), "responses:")
-		if strings.Contains(listParameters, "cancelled") {
-			t.Errorf("%s lets discovery filter by cancelled", name)
+		if !strings.Contains(listParameters, "cancelled is listed only when asked for") {
+			t.Errorf("%s does not say cancelled is listed only when asked for", name)
 		}
 	}
 }

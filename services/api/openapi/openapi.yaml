@@ -1821,14 +1821,13 @@ paths:
             type: string
         - name: status
           in: query
+          description: >-
+            One status, or several comma-separated (check_in,running). Without it the list holds every discovery
+            status. cancelled is listed only when asked for, and only for competitions that were published first.
+            Any other value is 400 invalid_status.
           schema:
             type: string
-            enum:
-              - published
-              - registration_open
-              - check_in
-              - running
-              - completed
+            example: check_in,running
         - name: entryType
           in: query
           schema:
