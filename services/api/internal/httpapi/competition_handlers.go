@@ -88,6 +88,8 @@ type competitionSummary struct {
 type competitionDetail struct {
 	competitionSummary
 	Rules json.RawMessage `json:"rules"`
+	// MatchFormat is rules.matchFormat with its defaults applied.
+	MatchFormat matchFormatRules `json:"matchFormat"`
 }
 
 type competitionPage struct {
@@ -150,6 +152,7 @@ type bracketMatch struct {
 	ID            string             `json:"id"`
 	Code          string             `json:"code"`
 	MatchNumber   int                `json:"matchNumber"`
+	BestOf        int                `json:"bestOf"`
 	State         string             `json:"state"`
 	Home          bracketSlot        `json:"home"`
 	Away          bracketSlot        `json:"away"`
@@ -220,6 +223,7 @@ type bracketQueryRow struct {
 	Bracket                 *string
 	RoundNumber             *int
 	MatchNumber             *int
+	MatchBestOf             *int
 	MatchState              *string
 	GraphRank               *int
 	ActivationRule          *string
@@ -871,6 +875,7 @@ func (s *Server) loadCompetitionDetail(ctx context.Context, id string) (competit
 				&detail.RegistrationClosesAt, &detail.CheckInOpensAt, &detail.StartsAt, &detail.RulesVersion, &detail.Rules)
 		if err == nil {
 			finalizeCompetitionSummary(&detail.competitionSummary)
+			detail.MatchFormat = readMatchFormat(detail.Rules)
 		}
 		return detail, err
 	}
@@ -923,7 +928,7 @@ func queryCompetitionBracket(ctx context.Context, pool *pgxpool.Pool, id string)
 	}
 	rows, err := pool.Query(ctx, `SELECT
 		stage.id::text,stage.name,stage.position,stage.format,stage.best_of,stage.status,
-		match.id::text,match.bracket,match.round_number,match.match_number,match.state,
+		match.id::text,match.bracket,match.round_number,match.match_number,match.best_of,match.state,
 		match.graph_rank,match.activation_rule,match.activation_source_match_id::text,match.completion_reason,
 		home.id::text,home.display_name,home.seed,
 		away.id::text,away.display_name,away.seed,match.winner_entry_id::text,
@@ -962,7 +967,7 @@ func queryCompetitionBracket(ctx context.Context, pool *pgxpool.Pool, id string)
 		var row bracketQueryRow
 		if err := rows.Scan(
 			&row.StageID, &row.StageName, &row.StagePosition, &row.StageFormat, &row.StageBestOf, &row.StageStatus,
-			&row.MatchID, &row.Bracket, &row.RoundNumber, &row.MatchNumber, &row.MatchState,
+			&row.MatchID, &row.Bracket, &row.RoundNumber, &row.MatchNumber, &row.MatchBestOf, &row.MatchState,
 			&row.GraphRank, &row.ActivationRule, &row.ActivationSourceMatchID, &row.CompletionReason,
 			&row.HomeEntryID, &row.HomeDisplayName, &row.HomeSeed,
 			&row.AwayEntryID, &row.AwayDisplayName, &row.AwaySeed, &row.WinnerEntryID,
@@ -1008,7 +1013,7 @@ func appendBracketRow(stages *[]bracketStage, stageIndex, roundIndex map[string]
 	}
 	match := bracketMatch{
 		ID: *row.MatchID, Code: fmt.Sprintf("R%02d-M%02d", *row.RoundNumber, *row.MatchNumber),
-		MatchNumber: *row.MatchNumber, State: *row.MatchState,
+		MatchNumber: *row.MatchNumber, BestOf: 1, State: *row.MatchState,
 		Home:          bracketSlot{Side: "home", Participant: bracketParticipantFromRow(row.HomeEntryID, row.HomeDisplayName, row.HomeSeed), Source: bracketSourceFromRecord(row.HomeSource)},
 		Away:          bracketSlot{Side: "away", Participant: bracketParticipantFromRow(row.AwayEntryID, row.AwayDisplayName, row.AwaySeed), Source: bracketSourceFromRecord(row.AwaySource)},
 		WinnerEntryID: row.WinnerEntryID, ScheduledAt: utcTime(row.ScheduledAt), ResultDueAt: utcTime(row.ResultDueAt),
@@ -1017,6 +1022,9 @@ func appendBracketRow(stages *[]bracketStage, stageIndex, roundIndex map[string]
 			GraphRank: *row.GraphRank, ActivationRule: *row.ActivationRule,
 			ActivationSourceMatchID: row.ActivationSourceMatchID, CompletionReason: row.CompletionReason,
 		},
+	}
+	if row.MatchBestOf != nil {
+		match.BestOf = *row.MatchBestOf
 	}
 	if row.ScoreSubmissionID != nil && row.HomeScore != nil && row.AwayScore != nil && row.ScoreConfirmedAt != nil {
 		match.Score = &bracketScore{
