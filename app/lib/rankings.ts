@@ -70,13 +70,13 @@ export async function loadRankings(countryCode: string | null, cursor: string | 
 }
 
 /** Absolute avatar address, or null when there is none or no browser-facing API to load it from. */
-export function avatarSource(player: RankedPlayer) {
+export function avatarSource(player: Pick<RankedPlayer, "avatarUrl">) {
   if (!player.avatarUrl) return null;
   if (/^https?:\/\//.test(player.avatarUrl)) return player.avatarUrl;
   return publicApiURL ? `${publicApiURL.replace(/\/$/, "")}${player.avatarUrl}` : null;
 }
 
-export function initials(player: RankedPlayer) {
+export function initials(player: Pick<RankedPlayer, "displayName" | "handle">) {
   const source = player.displayName.trim() || player.handle;
   const parts = source.split(/\s+/).filter(Boolean);
   const letters = parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : source.slice(0, 2);
