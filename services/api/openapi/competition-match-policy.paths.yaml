@@ -255,18 +255,38 @@ components:
           format: int64
           minimum: 300
           maximum: 3600
-          description: How long each entry has to send its screenshot after a rejection (10 minutes by default).
+          description: How long each entry has to send its screenshots after a rejection (10 minutes by default, 15 for a series).
         screenshotEvidence:
           type: object
           additionalProperties: false
-          description: Each entry sends exactly one screenshot after a rejection.
-          required: [minItems, maxItems, mediaTypes]
+          description: >-
+            What each entry sends after a rejection: one screenshot for a best of 1; for a series one per
+            game played, numbered by game (perGame), up to bestOf.
+          required: [minItems, maxItems, perGame, mediaTypes]
           properties:
             minItems: { type: integer, const: 1 }
-            maxItems: { type: integer, const: 1 }
+            maxItems: { type: integer, enum: [1, 3, 5], description: "The match's best-of." }
+            perGame: { type: boolean, description: True for a series; each screenshot is then numbered by its game. }
             mediaTypes:
               type: array
               items: { type: string, enum: [image/jpeg, image/png] }
+    CompetitionMatchFormat:
+      type: object
+      additionalProperties: false
+      required: [bestOf]
+      description: >-
+        rules.matchFormat: how many games each match is. One point per game won; a best of 3 is first
+        to 2 wins and a best of 5 first to 3. rounds overrides bestOf for named rounds, counted back from
+        the final because the bracket size is only known at the draw. Single elimination: final,
+        semifinal, quarterfinal, round_of_16 up to round_of_1024, and third_place. Double elimination:
+        final (the grand final and its reset), winners_final and losers_final. A round robin has no
+        rounds. Without it every match is a best of 1. The draw copies each match's best-of onto the match.
+      properties:
+        bestOf: { type: integer, enum: [1, 3, 5] }
+        rounds:
+          type: object
+          additionalProperties: { type: integer, enum: [1, 3, 5] }
+          example: { semifinal: 3, final: 5 }
     CompetitionMatchVerificationRules:
       type: object
       additionalProperties: false
@@ -337,6 +357,7 @@ components:
         - id
         - code
         - matchNumber
+        - bestOf
         - state
         - home
         - away
@@ -351,6 +372,7 @@ components:
         id: { type: string, format: uuid }
         code: { type: string }
         matchNumber: { type: integer, minimum: 1 }
+        bestOf: { type: integer, enum: [1, 3, 5], description: "This match's best-of, copied from rules.matchFormat at the draw." }
         state: { $ref: "#/components/schemas/MatchState" }
         home: { $ref: "#/components/schemas/BracketSlot" }
         away: { $ref: "#/components/schemas/BracketSlot" }
@@ -402,6 +424,7 @@ components:
       type: object
       additionalProperties: false
       required: [submissionId, homeScore, awayScore, tiebreak, confirmedAt]
+      description: For a series, homeScore and awayScore are games won.
       properties:
         submissionId: { type: string, format: uuid }
         homeScore: { type: integer, minimum: 0, maximum: 99 }
@@ -501,18 +524,26 @@ components:
         - wins
         - draws
         - losses
+        - gamesWon
+        - gamesLost
         - goalsFor
         - goalsAgainst
         - goalDifference
         - points
         - walkovers
         - removed
+      description: >-
+        In a best-of-3 or best-of-5 stage wins, draws and losses count series, points are games won (one per
+        game; a walkover counts as the games a series needs), and ties on points are broken by game
+        difference, then goal difference. A best-of-1 stage scores 3 for a win and 1 for a draw and leaves
+        gamesWon and gamesLost at 0.
       properties:
         rank:
           type: [integer, "null"]
           minimum: 1
           description: >-
-            Competition rank within the group; entries level on points, goal difference and goals scored share it.
+            Competition rank within the group; entries level on points, game difference, goal difference and goals
+            scored share it.
             null exactly when removed is true.
         entryId: { type: string, format: uuid }
         displayName: { type: string }
@@ -520,6 +551,8 @@ components:
         wins: { type: integer, minimum: 0 }
         draws: { type: integer, minimum: 0 }
         losses: { type: integer, minimum: 0 }
+        gamesWon: { type: integer, minimum: 0 }
+        gamesLost: { type: integer, minimum: 0 }
         goalsFor: { type: integer, minimum: 0 }
         goalsAgainst: { type: integer, minimum: 0 }
         goalDifference: { type: integer }
