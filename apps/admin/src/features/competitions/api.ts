@@ -57,7 +57,8 @@ export type CompetitionInput = {
 export type DrawRequest = {
   seedingPolicy: 'seeded' | 'rating' | 'random' | 'registration_order'
   expectedStatus: 'check_in'
-  config: { bestOf: number; thirdPlace?: boolean; groupCount?: number }
+  /** Best-of comes from the competition's match format, not the draw. */
+  config: { thirdPlace?: boolean; groupCount?: number }
 }
 
 export const competitionsPath = (orgId: string) =>

@@ -24,7 +24,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -33,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -54,6 +54,7 @@ import {
   type DrawRequest,
 } from './api'
 import { CreateCompetitionDialog } from './create-dialog'
+import { describeMatchFormat } from './match-format'
 
 /** What staff call each lifecycle step. */
 const transitionLabels: Record<CompetitionStatus, string> = {
@@ -79,7 +80,7 @@ export function CompetitionsPage() {
   const [draw, setDraw] = useState<DrawRequest>({
     seedingPolicy: 'random',
     expectedStatus: 'check_in',
-    config: { bestOf: 1 },
+    config: {},
   })
   const list = usePagedList<Competition>(
     ['competitions'],
@@ -322,22 +323,23 @@ export function CompetitionsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className='grid gap-2'>
-              <Label htmlFor='best-of'>Best of (odd)</Label>
-              <Input
-                id='best-of'
-                type='number'
-                min={1}
-                max={9}
-                step={2}
-                value={draw.config.bestOf}
-                onChange={(e) =>
-                  setDraw({
-                    ...draw,
-                    config: { ...draw.config, bestOf: Number(e.target.value) },
-                  })
-                }
-              />
+            {drawing?.format === 'single_elimination' && (
+              <div className='flex items-center justify-between gap-4'>
+                <Label htmlFor='third-place'>Third-place match</Label>
+                <Switch
+                  id='third-place'
+                  checked={!!draw.config.thirdPlace}
+                  onCheckedChange={(thirdPlace) =>
+                    setDraw({ ...draw, config: { ...draw.config, thirdPlace } })
+                  }
+                />
+              </div>
+            )}
+            <div className='grid gap-1'>
+              <Label>Match format</Label>
+              <p className='text-sm text-muted-foreground'>
+                {describeMatchFormat(drawing?.rules)}
+              </p>
             </div>
           </div>
           <DialogFooter>
