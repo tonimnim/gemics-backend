@@ -3306,3 +3306,28 @@ a {
   }
 }
 
+/* Phone widths: the logo and the header links must fit beside "Get the app". */
+@media (max-width: 480px) {
+  .site-header-inner {
+    gap: 14px;
+  }
+
+  .site-header .brand-wordmark {
+    height: 24px;
+  }
+
+  .site-nav {
+    gap: 12px;
+  }
+
+  .site-nav .button-small {
+    padding: 0 12px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 400px) {
+  .site-nav a[href="/rankings"] {
+    display: none;
+  }
+}
