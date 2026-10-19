@@ -320,7 +320,7 @@ func (c screenshotContext) evaluationInput(minConfidence float64) screenshotEval
 func loadScreenshotContext(ctx context.Context, queryer rowsQueryer, matchID string) (screenshotContext, error) {
 	var result screenshotContext
 	if err := queryer.QueryRow(ctx, `SELECT m.home_entry_id::text,m.away_entry_id::text,
-		home.captain_user_id::text,away.captain_user_id::text,stage.best_of
+		home.captain_user_id::text,away.captain_user_id::text,m.best_of
 		FROM matches m
 		JOIN competition_stages stage ON stage.id=m.stage_id
 		JOIN competition_entries home ON home.id=m.home_entry_id
@@ -354,7 +354,7 @@ func loadScreenshotContext(ctx context.Context, queryer rowsQueryer, matchID str
 	}
 	// The submitted result is the only claim; screenshots carry no score.
 	rows, err = queryer.Query(ctx, `SELECT entry_id::text,home_score,away_score,
-		home_tiebreak_score,away_tiebreak_score,jsonb_array_length(game_results)
+		home_tiebreak_score,away_tiebreak_score
 		FROM match_result_reports WHERE match_id=$1 AND kind='initial'`, matchID)
 	if err != nil {
 		return result, err
@@ -362,13 +362,12 @@ func loadScreenshotContext(ctx context.Context, queryer rowsQueryer, matchID str
 	for rows.Next() {
 		var entryID string
 		var claim claimScore
-		var games int
 		if err = rows.Scan(&entryID, &claim.Score.HomeScore, &claim.Score.AwayScore, &claim.Score.HomePenalties,
-			&claim.Score.AwayPenalties, &games); err != nil {
+			&claim.Score.AwayPenalties); err != nil {
 			rows.Close()
 			return result, err
 		}
-		claim.Series = games > 1
+		claim.Series = result.BestOf > 1
 		if entryID == result.HomeEntryID {
 			result.HomeClaim = &claim
 		} else if entryID == result.AwayEntryID {
@@ -379,13 +378,15 @@ func loadScreenshotContext(ctx context.Context, queryer rowsQueryer, matchID str
 	if err = rows.Err(); err != nil {
 		return result, err
 	}
-	rows, err = queryer.Query(ctx, `SELECT reading.evidence_id::text,report.entry_id::text,reading.status,
+	rows, err = queryer.Query(ctx, `SELECT reading.evidence_id::text,report.entry_id::text,
+		COALESCE(link.position,0)+1,reading.status,
 		reading.screen,reading.confidence::float8,reading.full_time,reading.left_team,reading.left_score,
 		reading.right_team,reading.right_score,reading.left_penalties,reading.right_penalties,reading.stats,
 		reading.image_hash,reading.reused_match_id::text,reading.reuse_kind,reading.last_error,reading.engine,
 		reading.model_version
 		FROM screenshot_readings reading JOIN match_result_reports report ON report.id=reading.report_id
-		WHERE reading.match_id=$1 ORDER BY report.entry_id,reading.created_at,reading.evidence_id`, matchID)
+		LEFT JOIN match_result_report_evidence link ON link.evidence_id=reading.evidence_id
+		WHERE reading.match_id=$1 ORDER BY report.entry_id,link.position,reading.created_at,reading.evidence_id`, matchID)
 	if err != nil {
 		return result, err
 	}
@@ -398,7 +399,7 @@ func loadScreenshotContext(ctx context.Context, queryer rowsQueryer, matchID str
 		var leftScore, rightScore *int
 		var stats []byte
 		reading := screenshotReading{}
-		if err = rows.Scan(&item.EvidenceID, &entryID, &item.Status, &screen, &confidence, &reading.FullTime,
+		if err = rows.Scan(&item.EvidenceID, &entryID, &item.Game, &item.Status, &screen, &confidence, &reading.FullTime,
 			&leftTeam, &leftScore, &rightTeam, &rightScore, &reading.LeftPenalties, &reading.RightPenalties, &stats,
 			&reading.ImageHash, &item.ReusedMatchID, &item.ReuseKind, &item.LastError, &engine, &modelVersion); err != nil {
 			return result, err
@@ -543,11 +544,13 @@ func learnTeamNamesSafely(ctx context.Context, tx pgx.Tx, matchID string, s *Ser
 }
 
 // learnTeamNames records whose team was whose, after a staff decision only.
-// Every result screen must come from both players, carry exactly the same
-// team names (no OCR tolerance), have no flag, and fit the decided result one
-// way round; a draw without penalties fits both ways and teaches nothing. A
-// player who edits the names on their own screenshot therefore teaches
-// nothing, because the opponent's real screenshot disagrees.
+// Every result screen of a game must come from both players, carry exactly
+// the same team names (no OCR tolerance), have no flag, and fit the decided
+// score of that game one way round; a draw without penalties fits both ways
+// and teaches nothing. A player who edits the names on their own screenshot
+// therefore teaches nothing, because the opponent's real screenshot
+// disagrees. A series is decided in games won, which says nothing about any
+// one game's score, so it teaches nothing either.
 func learnTeamNames(ctx context.Context, tx pgx.Tx, matchID string) error {
 	var result screenshotScore
 	err := tx.QueryRow(ctx, `SELECT home_score,away_score,home_tiebreak_score,away_tiebreak_score
@@ -567,48 +570,11 @@ func learnTeamNames(ctx context.Context, tx pgx.Tx, matchID string) error {
 	if screenshots.BestOf > 1 {
 		return nil
 	}
-	// Evaluate with no names known, only to get each reading's flags.
-	evaluateScreenshots(screenshotEvaluationInput{Readings: screenshots.Readings,
+	// Prepare with no names known, only to get each reading's flags.
+	prepareScreenshotReadings(screenshotEvaluationInput{Readings: screenshots.Readings,
 		MinConfidence: screenshotLearnMinConfidence})
-	var screens []screenshotReading
-	sides := map[string]bool{}
-	for _, item := range screenshots.Readings {
-		if item.Reading == nil || item.Reading.Screen != "match_result" {
-			continue
-		}
-		for _, flag := range item.Flags {
-			if flag != "teams_unknown" && !slices.Contains(screenshotHints, flag) {
-				return nil
-			}
-		}
-		screens = append(screens, *item.Reading)
-		sides[item.UploadedBySide] = true
-	}
-	if !sides["home"] || !sides["away"] {
-		return nil
-	}
-	first := screens[0]
-	leftKey, rightKey := teamNameKey(first.LeftTeam), teamNameKey(first.RightTeam)
-	if leftKey == rightKey || len([]rune(leftKey)) < 2 || len([]rune(rightKey)) < 2 {
-		return nil
-	}
-	for _, screen := range screens[1:] {
-		if teamNameKey(screen.LeftTeam) != leftKey || teamNameKey(screen.RightTeam) != rightKey ||
-			screen.LeftScore != first.LeftScore || screen.RightScore != first.RightScore ||
-			!equalOptionalInt(screen.LeftPenalties, first.LeftPenalties) ||
-			!equalOptionalInt(screen.RightPenalties, first.RightPenalties) {
-			return nil
-		}
-	}
-	homeLeft, _ := first.inMatchOrientation(orientationHomeLeft)
-	homeRight, _ := first.inMatchOrientation(orientationHomeRight)
-	var homeName, awayName string
-	switch {
-	case homeLeft.equals(result) && !homeRight.equals(result):
-		homeName, awayName = first.LeftTeam, first.RightTeam
-	case homeRight.equals(result) && !homeLeft.equals(result):
-		homeName, awayName = first.RightTeam, first.LeftTeam
-	default:
+	homeName, awayName, ok := learnedGameNames(screenshots.Readings, result)
+	if !ok {
 		return nil
 	}
 	for _, learned := range []struct{ userID, name string }{
@@ -622,4 +588,48 @@ func learnTeamNames(ctx context.Context, tx pgx.Tx, matchID string) error {
 		}
 	}
 	return nil
+}
+
+// learnedGameNames is whose team was whose, when the screenshots prove it
+// under learnTeamNames' rules.
+func learnedGameNames(readings []*evaluatedReading, result screenshotScore) (string, string, bool) {
+	var screens []screenshotReading
+	sides := map[string]bool{}
+	for _, item := range readings {
+		if item.Reading == nil || item.Reading.Screen != "match_result" {
+			continue
+		}
+		for _, flag := range item.Flags {
+			if flag != "teams_unknown" && !slices.Contains(screenshotHints, flag) {
+				return "", "", false
+			}
+		}
+		screens = append(screens, *item.Reading)
+		sides[item.UploadedBySide] = true
+	}
+	if !sides["home"] || !sides["away"] {
+		return "", "", false
+	}
+	first := screens[0]
+	leftKey, rightKey := teamNameKey(first.LeftTeam), teamNameKey(first.RightTeam)
+	if leftKey == rightKey || len([]rune(leftKey)) < 2 || len([]rune(rightKey)) < 2 {
+		return "", "", false
+	}
+	for _, screen := range screens[1:] {
+		if teamNameKey(screen.LeftTeam) != leftKey || teamNameKey(screen.RightTeam) != rightKey ||
+			screen.LeftScore != first.LeftScore || screen.RightScore != first.RightScore ||
+			!equalOptionalInt(screen.LeftPenalties, first.LeftPenalties) ||
+			!equalOptionalInt(screen.RightPenalties, first.RightPenalties) {
+			return "", "", false
+		}
+	}
+	homeLeft, _ := first.inMatchOrientation(orientationHomeLeft)
+	homeRight, _ := first.inMatchOrientation(orientationHomeRight)
+	switch {
+	case homeLeft.equals(result) && !homeRight.equals(result):
+		return first.LeftTeam, first.RightTeam, true
+	case homeRight.equals(result) && !homeLeft.equals(result):
+		return first.RightTeam, first.LeftTeam, true
+	}
+	return "", "", false
 }
