@@ -498,6 +498,7 @@ type claimScore struct {
 type evaluatedReading struct {
 	EvidenceID     string
 	UploadedBySide string // home | away
+	Game           int    // the game of the series it was sent for; 1 in a best of 1
 	Status         string
 	Reading        *screenshotReading
 	ReusedMatchID  *string
@@ -522,6 +523,19 @@ type screenshotEvaluation struct {
 	// AutoDecide says the reader will settle this review itself: automatic
 	// decisions are on, the review is open, and Decision is set.
 	AutoDecide bool `json:"autoDecide"`
+	// Games is what each game's screenshots say, for a series only.
+	Games []seriesGameEvaluation `json:"games,omitempty"`
+}
+
+// seriesGameEvaluation is one game of a series: the score its screenshots
+// agree on, what they disagree on, and who won it (penalties decide a level
+// knockout game; a level round-robin game has no winner).
+type seriesGameEvaluation struct {
+	Game        int              `json:"game"`
+	Sides       []string         `json:"sides"`
+	Score       *screenshotScore `json:"score"`
+	Differences []string         `json:"differences"`
+	Winner      *string          `json:"winner"`
 }
 
 // screenshotHints are flags shown to staff that never block a decision.
@@ -555,63 +569,13 @@ type screenshotEvaluationInput struct {
 // evaluateScreenshots decides what the readings of one review say. It is pure
 // so the staff view and the auto-decider can never disagree.
 func evaluateScreenshots(in screenshotEvaluationInput) screenshotEvaluation {
+	if in.BestOf > 1 {
+		return evaluateSeriesScreenshots(in)
+	}
 	evaluation := screenshotEvaluation{Differences: []string{}, Reasons: []string{}}
 	reason := func(text string) { evaluation.Reasons = append(evaluation.Reasons, text) }
-	usable := map[string][]*evaluatedReading{}
-	var all []*evaluatedReading
-	pending, blocked := false, false
-	for _, item := range in.Readings {
-		item.Flags = []string{}
-		item.Orientation = orientationUnknown
-		item.Score = nil
-		switch {
-		case item.Status == "queued":
-			pending = true
-			continue
-		case item.Status != "read" || item.Reading == nil:
-			item.Flags = append(item.Flags, "not_read")
-			blocked = true
-			continue
-		case item.Reading.Screen != "match_result":
-			item.Flags = append(item.Flags, "not_result_screen")
-			blocked = true
-			continue
-		}
-		reading := *item.Reading
-		item.Flags = append(item.Flags, screenshotPlausibility(reading)...)
-		if reading.Confidence < in.MinConfidence {
-			item.Flags = append(item.Flags, "low_confidence")
-		}
-		switch {
-		case item.ReuseKind != nil && *item.ReuseKind == "stats":
-			item.Flags = append(item.Flags, "reused_stats")
-		case item.ReuseKind != nil:
-			// A perceptual hash summarises the fixed layout more than the
-			// digits, so a matching image is a hint for staff, not proof.
-			item.Flags = append(item.Flags, "similar_image")
-		}
-		if _, ok := reading.Stats["shotsOnTarget"]; !ok {
-			item.Flags = append(item.Flags, "stats_incomplete")
-		}
-		switch {
-		case reading.FullTime == nil:
-			item.Flags = append(item.Flags, "full_time_unknown")
-		case !*reading.FullTime:
-			item.Flags = append(item.Flags, "not_full_time")
-		}
-		item.Orientation = screenshotOrientation(reading, in.HomeNames, in.AwayNames)
-		if score, ok := reading.inMatchOrientation(item.Orientation); ok {
-			item.Score = &score
-		} else {
-			item.Flags = append(item.Flags, "teams_unknown")
-		}
-		all = append(all, item)
-		if !hasBlockingFlag(item.Flags) {
-			usable[item.UploadedBySide] = append(usable[item.UploadedBySide], item)
-		} else {
-			blocked = true
-		}
-	}
+	prepared := prepareScreenshotReadings(in)
+	usable, all, pending, blocked := prepared.usable, prepared.all, prepared.pending, prepared.blocked
 	// Every pair of read result screens must agree on everything read.
 	for index := 1; index < len(all); index++ {
 		for _, difference := range screenshotDifferences(*all[0], *all[index]) {
@@ -744,4 +708,73 @@ func formatScreenshotScore(score screenshotScore) string {
 		text += fmt.Sprintf(" (%d-%d pens)", *score.HomePenalties, *score.AwayPenalties)
 	}
 	return text
+}
+
+// preparedReadings are the readings of one review with their flags, side
+// orientation and score worked out.
+type preparedReadings struct {
+	usable           map[string][]*evaluatedReading // by side: result screens with no blocking flag
+	all              []*evaluatedReading            // every result screen that was read
+	pending, blocked bool
+}
+
+// prepareScreenshotReadings flags each reading and orients it by the learned
+// team names. It is the first step of every evaluation.
+func prepareScreenshotReadings(in screenshotEvaluationInput) preparedReadings {
+	usable := map[string][]*evaluatedReading{}
+	var all []*evaluatedReading
+	pending, blocked := false, false
+	for _, item := range in.Readings {
+		item.Flags = []string{}
+		item.Orientation = orientationUnknown
+		item.Score = nil
+		switch {
+		case item.Status == "queued":
+			pending = true
+			continue
+		case item.Status != "read" || item.Reading == nil:
+			item.Flags = append(item.Flags, "not_read")
+			blocked = true
+			continue
+		case item.Reading.Screen != "match_result":
+			item.Flags = append(item.Flags, "not_result_screen")
+			blocked = true
+			continue
+		}
+		reading := *item.Reading
+		item.Flags = append(item.Flags, screenshotPlausibility(reading)...)
+		if reading.Confidence < in.MinConfidence {
+			item.Flags = append(item.Flags, "low_confidence")
+		}
+		switch {
+		case item.ReuseKind != nil && *item.ReuseKind == "stats":
+			item.Flags = append(item.Flags, "reused_stats")
+		case item.ReuseKind != nil:
+			// A perceptual hash summarises the fixed layout more than the
+			// digits, so a matching image is a hint for staff, not proof.
+			item.Flags = append(item.Flags, "similar_image")
+		}
+		if _, ok := reading.Stats["shotsOnTarget"]; !ok {
+			item.Flags = append(item.Flags, "stats_incomplete")
+		}
+		switch {
+		case reading.FullTime == nil:
+			item.Flags = append(item.Flags, "full_time_unknown")
+		case !*reading.FullTime:
+			item.Flags = append(item.Flags, "not_full_time")
+		}
+		item.Orientation = screenshotOrientation(reading, in.HomeNames, in.AwayNames)
+		if score, ok := reading.inMatchOrientation(item.Orientation); ok {
+			item.Score = &score
+		} else {
+			item.Flags = append(item.Flags, "teams_unknown")
+		}
+		all = append(all, item)
+		if !hasBlockingFlag(item.Flags) {
+			usable[item.UploadedBySide] = append(usable[item.UploadedBySide], item)
+		} else {
+			blocked = true
+		}
+	}
+	return preparedReadings{usable: usable, all: all, pending: pending, blocked: blocked}
 }

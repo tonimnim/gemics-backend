@@ -295,7 +295,9 @@ func TestEvaluateScreenshotsDecidesOnlyWhenBothPlayersAgree(t *testing.T) {
 	}
 	bestOfThree := evaluateScreenshots(screenshotEvaluationInput{Readings: both(mugz, mugz), HomeNames: []string{"Mugz FC"},
 		AwayNames: []string{"SQUAD 0"}, HomeClaim: claim(2, 1), AwayClaim: claim(1, 2), BestOf: 3, MinConfidence: 0.9})
-	if bestOfThree.Decision != "" || bestOfThree.SupportedSide != "home" {
+	// A best of 3 is compared game by game (screenshot_reader_series_test.go);
+	// one pair of screenshots never settles it.
+	if bestOfThree.Decision != "" {
 		t.Fatalf("best of three = %+v", bestOfThree)
 	}
 	series := claim(2, 1)
