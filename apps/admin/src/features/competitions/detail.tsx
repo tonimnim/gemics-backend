@@ -20,6 +20,7 @@ import { ListRows, LoadMore } from '@/components/list-state'
 import { Page } from '@/components/page'
 import { StatusBadge } from '@/components/status-badge'
 import { competitionsPath, type Competition } from './api'
+import { describeMatchFormat } from './match-format'
 
 type Entry = {
   id: string
@@ -71,7 +72,10 @@ export function CompetitionDetailPage({ id }: { id: string }) {
   return (
     <Page
       title={data?.name ?? 'Competition'}
-      description={data && `${humanize(data.format)} · eFootball Mobile`}
+      description={
+        data &&
+        `${humanize(data.format)} · ${describeMatchFormat(data.rules)} · eFootball Mobile`
+      }
       permission='competition.manage'
       actions={
         <Button variant='outline' asChild>
