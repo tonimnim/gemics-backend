@@ -3,7 +3,7 @@ import { LegalPage } from "../legal-page";
 import { terms } from "../lib/legal-docs";
 
 export const metadata: Metadata = {
-  title: `${terms.title} — Tonits`,
+  title: `${terms.title} — Ozone`,
   description: terms.description,
 };
 

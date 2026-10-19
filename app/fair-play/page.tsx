@@ -3,7 +3,7 @@ import { LegalPage } from "../legal-page";
 import { fairPlay } from "../lib/legal-docs";
 
 export const metadata: Metadata = {
-  title: `${fairPlay.title} — Tonits`,
+  title: `${fairPlay.title} — Ozone`,
   description: fairPlay.description,
 };
 

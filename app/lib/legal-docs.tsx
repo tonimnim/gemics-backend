@@ -9,23 +9,23 @@ const email = <a href={`mailto:${site.contactEmail}`}>{site.contactEmail}</a>;
 
 export const terms: LegalDoc = {
   title: "Terms of Service",
-  description: "The rules for using Tonits and entering its tournaments.",
+  description: "The rules for using Ozone and entering its tournaments.",
   updated,
   intro: (
     <p>
-      These terms are the agreement between you and Tonits for using the Tonits app, this website and the tournaments
+      These terms are the agreement between you and Ozone for using the Ozone app, this website and the tournaments
       we run. By creating an account or entering a tournament, you accept them. If you don&apos;t agree, please
-      don&apos;t use Tonits.
+      don&apos;t use Ozone.
     </p>
   ),
   sections: [
     {
       id: "about",
-      title: "About Tonits",
+      title: "About Ozone",
       body: (
         <>
           <p>
-            Tonits runs online tournaments for eFootball™ Mobile. We are an independent platform. We are not affiliated
+            Ozone runs online tournaments for eFootball™ Mobile. We are an independent platform. We are not affiliated
             with, endorsed by or sponsored by Konami Digital Entertainment, and eFootball is Konami&apos;s trademark.
           </p>
           <p>
@@ -37,7 +37,7 @@ export const terms: LegalDoc = {
     },
     {
       id: "eligibility",
-      title: "Who can use Tonits",
+      title: "Who can use Ozone",
       body: (
         <ul>
           <li>You must be at least 13 years old.</li>
@@ -112,7 +112,7 @@ export const terms: LegalDoc = {
             <li>play on someone else&apos;s account, or let someone else play on yours;</li>
             <li>run more than one account;</li>
             <li>harass, threaten or abuse anyone, or post hateful or illegal content;</li>
-            <li>exploit bugs, or interfere with Tonits, its systems or other players.</li>
+            <li>exploit bugs, or interfere with Ozone, its systems or other players.</li>
           </ul>
           <p>
             If you do, we may change results, remove you from a tournament, record conduct strikes, withhold prizes, or
@@ -149,7 +149,7 @@ export const terms: LegalDoc = {
       body: (
         <p>
           You keep the rights to what you upload, such as screenshots and your avatar. You give us permission to use it
-          to run Tonits: showing your username and results in brackets, reviewing disputes, and similar. Only upload
+          to run Ozone: showing your username and results in brackets, reviewing disputes, and similar. Only upload
           things you have the right to share, and nothing unlawful or offensive.
         </p>
       ),
@@ -170,9 +170,9 @@ export const terms: LegalDoc = {
       title: "Changes and availability",
       body: (
         <p>
-          We may change or pause parts of Tonits, for example for maintenance. We don&apos;t control eFootball,
-          Konami&apos;s servers or your internet connection, so we can&apos;t promise Tonits will always be available.
-          We may update these terms and will tell you about important changes before they apply. Using Tonits after
+          We may change or pause parts of Ozone, for example for maintenance. We don&apos;t control eFootball,
+          Konami&apos;s servers or your internet connection, so we can&apos;t promise Ozone will always be available.
+          We may update these terms and will tell you about important changes before they apply. Using Ozone after
           that means you accept the new terms.
         </p>
       ),
@@ -193,7 +193,7 @@ export const terms: LegalDoc = {
       title: "Liability",
       body: (
         <p>
-          Tonits is provided as it is. As far as the law allows, we aren&apos;t liable for indirect losses, or for
+          Ozone is provided as it is. As far as the law allows, we aren&apos;t liable for indirect losses, or for
           problems caused by the game, its servers or your device and connection. Our total liability to you is limited
           to the fees you paid us in the 12 months before the claim. Nothing in these terms takes away rights you have
           under consumer law that can&apos;t be excluded.
@@ -220,11 +220,11 @@ export const terms: LegalDoc = {
 
 export const privacy: LegalDoc = {
   title: "Privacy Policy",
-  description: "What Tonits collects, why, who sees it, and your choices.",
+  description: "What Ozone collects, why, who sees it, and your choices.",
   updated,
   intro: (
     <p>
-      This policy explains what personal data Tonits collects when you use the app, this website and our tournaments,
+      This policy explains what personal data Ozone collects when you use the app, this website and our tournaments,
       why we use it, who we share it with, how long we keep it, and the rights you have over it.
     </p>
   ),
@@ -234,7 +234,7 @@ export const privacy: LegalDoc = {
       title: "Who is responsible",
       body: (
         <p>
-          Tonits is responsible for your personal data. We follow Kenya&apos;s Data Protection Act 2019 and the data
+          Ozone is responsible for your personal data. We follow Kenya&apos;s Data Protection Act 2019 and the data
           protection laws that apply where our players live. You can reach us at {email}.
         </p>
       ),
@@ -278,9 +278,9 @@ export const privacy: LegalDoc = {
             <li>to run your account and the tournaments you enter;</li>
             <li>to verify results, including reading screenshots and reviewing disputes;</li>
             <li>to take payments and pay refunds and prizes;</li>
-            <li>to keep Tonits fair and secure, and to enforce our rules;</li>
+            <li>to keep Ozone fair and secure, and to enforce our rules;</li>
             <li>to send you match reminders, result confirmations and other notifications;</li>
-            <li>to understand how Tonits is used, through combined statistics;</li>
+            <li>to understand how Ozone is used, through combined statistics;</li>
             <li>to meet our legal obligations.</li>
           </ul>
           <p>
@@ -320,11 +320,11 @@ export const privacy: LegalDoc = {
         <>
           <ul>
             <li>payment providers such as Safaricom (M-Pesa), to take payments and pay refunds;</li>
-            <li>hosting, storage and infrastructure providers that run Tonits for us;</li>
+            <li>hosting, storage and infrastructure providers that run Ozone for us;</li>
             <li>Apple and Google, to deliver push notifications;</li>
             <li>providers that help us read screenshots;</li>
             <li>professional advisers, and authorities when the law requires it;</li>
-            <li>a buyer or successor if Tonits is sold or reorganised.</li>
+            <li>a buyer or successor if Ozone is sold or reorganised.</li>
           </ul>
           <p>
             We don&apos;t sell your personal data. Partners only ever receive combined, de-identified statistics, never
@@ -360,7 +360,7 @@ export const privacy: LegalDoc = {
       title: "Children",
       body: (
         <p>
-          Tonits isn&apos;t for children under 13. Players aged 13 to 17 need a parent or guardian&apos;s permission and
+          Ozone isn&apos;t for children under 13. Players aged 13 to 17 need a parent or guardian&apos;s permission and
           can only enter free tournaments. Their profiles are private, and their data is never used for commercial
           profiling.
         </p>
@@ -502,7 +502,7 @@ export const fairPlay: LegalDoc = {
   updated,
   intro: (
     <p>
-      Every Tonits result is checked by both players. These rules explain how that works, how disputes are settled and
+      Every Ozone result is checked by both players. These rules explain how that works, how disputes are settled and
       what happens when someone breaks the rules.
     </p>
   ),
@@ -512,7 +512,7 @@ export const fairPlay: LegalDoc = {
       title: "Before your match",
       body: (
         <p>
-          Be ready at the scheduled time and play on the Konami account linked to your Tonits profile. A tournament page
+          Be ready at the scheduled time and play on the Konami account linked to your Ozone profile. A tournament page
           may add its own rules, such as match settings. Those apply too.
         </p>
       ),
