@@ -21,7 +21,7 @@ SET default_table_access_method = heap;
 
 -- currencies
 
--- Every currency Tonits can price a competition in. minor_unit is the ISO 4217
+-- Every currency Ozone can price a competition in. minor_unit is the ISO 4217
 -- exponent: amounts are stored as integers of 10^-minor_unit (cents for KES,
 -- whole yen for JPY).
 CREATE TABLE currencies (
@@ -567,9 +567,9 @@ CREATE TRIGGER competitions_stamp_published_at BEFORE INSERT OR UPDATE OF status
 
 -- Seed data
 
--- Gamics runs every V1 competition itself. Staff holding the competition.manage
+-- Ozone runs every V1 competition itself. Staff holding the competition.manage
 -- platform permission act as admins of this organization (gamicsOrganizationID).
 INSERT INTO organizations (id, name, slug, country_code)
-VALUES ('6a1c5e00-0000-4000-8000-000000000001', 'Gamics', 'gamics', 'KE');
+VALUES ('6a1c5e00-0000-4000-8000-000000000001', 'Ozone', 'ozone', 'KE');
 
 COMMIT;
