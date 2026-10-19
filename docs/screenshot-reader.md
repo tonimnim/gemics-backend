@@ -321,8 +321,8 @@ hold:
   was read;
 - both team names map to the two players through learned names;
 - no screenshot's stat table was used for another match;
-- the match is best of one, there was no shoot-out, and the agreed score
-  equals the submitted result.
+- there was no shoot-out, and the agreed score equals the submitted result;
+  for a series, every game does (see below).
 
 In that case the player who rejected the result is contradicted by their own
 screenshot. When both screenshots agree on a different score, the reader shows
@@ -330,6 +330,40 @@ it but staff enter it (`corrected_score`): an automated decision never sets a
 score. Otherwise staff decide as today, with each reading, its flags and
 the fields that differ shown beside the screenshots. Auto-decisions are off
 until `VISION_AUTO_DECIDE=true`.
+
+## Series (best of 3 and 5)
+
+Each game ends on its own Full Time screen, so the Python reader reads a series
+exactly as it reads a best of 1: one image, one reading. What changes is the Go
+comparison, in `screenshot_reader_series.go`:
+
+- **Game by game.** Every screenshot is numbered by the game it shows. The two
+  players' screenshots of game N must agree with each other on every field, as
+  for a best of 1. The reader works out who won each game (penalties decide a
+  level knockout game; a level round-robin game has no winner) and adds them up.
+  The tally must equal the reported games won, since a series is reported as
+  games won only. `screenshotCheck.games` has each game's sides, score,
+  differences and winner; `score` is the tally.
+- **Numbering slips.** When the numbers make a game disagree but every
+  screenshot has exactly one same-game partner from the other player (same
+  teams, score, penalties and at least six equal statistics), the players only
+  numbered differently. The screenshots are paired by content and staff decide.
+- **Reuse inside the series.** Cross-match reuse checks skip the match itself,
+  because both players legitimately send the same game. Inside a series, one
+  player's screenshot sent for two games (the same game by the rule above) is
+  flagged `duplicate_in_series`, which blocks a decision.
+- **Deciding.** The reader settles a series only when the screenshots show the
+  complete series (games 1 to N without a gap, ending at the majority or after
+  every game), every game has a readable, unflagged screenshot from both
+  players, the tally equals the reported games won, no game went to penalties,
+  and the numbers were not repaired. Anything else stays with staff.
+- **Learning.** A series is decided in games won, which says nothing about any
+  one game's score, so team names are learned from best-of-1 matches only, and
+  the training feed takes best-of-1 matches only.
+
+Penalty finishes stay with staff until the shoot-out display is confirmed on
+real screenshots. Knockout series settle level games on penalties, so collecting
+3 to 5 real samples of a penalty finish is the next step for the reader.
 
 ## Scale and failure
 
