@@ -5,7 +5,7 @@ import { api, ApiError, type AuthSession } from '@/lib/api'
 export async function signIn(konamiId: string, password: string) {
   const session = await api<AuthSession>('/v1/auth/login', {
     method: 'POST',
-    body: { konamiId, password, deviceName: 'Tonits Admin' },
+    body: { konamiId, password, deviceName: 'Ozone Admin' },
     anonymous: true,
   })
   useAuthStore.getState().setSession(session)
@@ -31,7 +31,7 @@ export async function loadStaff(): Promise<StaffSelf> {
       throw new ApiError(
         403,
         error.code,
-        'This account is not Tonits staff. Ask an admin to grant you a role.',
+        'This account is not Ozone staff. Ask an admin to grant you a role.',
         error.body
       )
     }

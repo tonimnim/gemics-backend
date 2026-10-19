@@ -1,7 +1,7 @@
 import { useAuthStore } from '@/stores/auth-store'
 
 /**
- * The Tonits API client. Every request carries the staff member's access
+ * The Ozone API client. Every request carries the staff member's access
  * token; an expired token is refreshed once (refreshes are serialized, as
  * the API requires) and the request retried.
  */
@@ -69,7 +69,7 @@ async function send(path: string, options: RequestOptions) {
         options.body === undefined ? undefined : JSON.stringify(options.body),
     })
   } catch {
-    throw new ApiError(0, 'network_error', 'Cannot reach the Tonits API.', null)
+    throw new ApiError(0, 'network_error', 'Cannot reach the Ozone API.', null)
   }
 }
 

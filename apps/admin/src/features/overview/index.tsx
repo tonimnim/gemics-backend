@@ -91,7 +91,7 @@ function Highlights({ data }: { data: Overview }) {
       <div className='pointer-events-none absolute -end-16 -top-24 size-80 rounded-full bg-[radial-gradient(circle,rgba(91,91,214,0.22)_1.5px,transparent_1.5px)] [background-size:9px_9px] opacity-70' />
       <div className='pointer-events-none absolute end-40 -bottom-28 size-64 rounded-full bg-[radial-gradient(circle,rgba(91,140,255,0.25)_1.5px,transparent_1.5px)] [background-size:9px_9px] opacity-60' />
       <div className='relative'>
-        <h2 className='text-lg font-semibold'>Tonits at a glance</h2>
+        <h2 className='text-lg font-semibold'>Ozone at a glance</h2>
         <div className='mt-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5'>
           {tiles.map((tile) => (
             <div

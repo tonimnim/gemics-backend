@@ -1,7 +1,7 @@
 import { Logo } from '@/assets/logo'
 import { cn } from '@/lib/utils'
 
-/** The Tonits mark beside its wordmark, set in Alexandria ExtraBold. */
+/** The Ozone mark beside its wordmark, set in Alexandria ExtraBold. */
 export function Brand({
   className,
   subtitle,
@@ -14,7 +14,7 @@ export function Brand({
       <Logo className='size-8 shrink-0 text-primary' />
       <div className='grid leading-none'>
         <span className='font-brand text-lg font-extrabold tracking-tight text-foreground'>
-          Tonits
+          Ozone
         </span>
         {subtitle && (
           <span className='mt-1 text-[0.7rem] text-muted-foreground'>

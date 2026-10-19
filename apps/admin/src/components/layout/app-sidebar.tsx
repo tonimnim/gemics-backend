@@ -24,7 +24,7 @@ export function AppSidebar() {
         <Link
           to='/'
           onClick={() => setOpenMobile(false)}
-          aria-label='Tonits home'
+          aria-label='Ozone home'
         >
           {state === 'collapsed' ? (
             <Logo className='size-8 text-primary' />

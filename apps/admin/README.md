@@ -1,6 +1,6 @@
-# Tonits Admin
+# Ozone Admin
 
-The staff dashboard: one operator tool for Tonits V1, gated by staff roles.
+The staff dashboard: one operator tool for Ozone V1, gated by staff roles.
 Built on [satnaing/shadcn-admin](https://github.com/satnaing/shadcn-admin)
 (MIT, see `LICENSE`) with Vite, React 19, TanStack Router/Query and shadcn/ui.
 
@@ -17,7 +17,7 @@ The API must allow the dashboard origin in `CORS_ALLOWED_ORIGINS`
 
 ## Signing in
 
-Staff sign in with the Konami ID and password of an ordinary Tonits account.
+Staff sign in with the Konami ID and password of an ordinary Ozone account.
 An account becomes staff when it holds a platform role. Create the first admin
 once from the command line, after registering the account in the app:
 

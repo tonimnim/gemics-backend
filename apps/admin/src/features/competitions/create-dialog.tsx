@@ -40,7 +40,7 @@ const empty = {
   maxEntries: '16',
   entryFee: '0',
   prize: '0',
-  // Only sent with a prize; the select shows Tonits until staff pick.
+  // Only sent with a prize; the select shows Ozone until staff pick.
   prizeFunding: 'organizer' as 'organizer' | 'sponsor',
   countries: [] as string[],
   registrationOpensAt: '',
@@ -56,7 +56,7 @@ const countriesOf = (form: typeof empty) =>
 // The API prices a competition in its one country's currency, or in USD.
 const pricedIn = (form: typeof empty) => competitionCurrency(countriesOf(form))
 
-/** Creates a draft competition run by Tonits. Publishing is a separate step. */
+/** Creates a draft competition run by Ozone. Publishing is a separate step. */
 export function CreateCompetitionDialog({
   orgId,
   open,
@@ -283,7 +283,7 @@ export function CreateCompetitionDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='organizer'>Tonits</SelectItem>
+                    <SelectItem value='organizer'>Ozone</SelectItem>
                     <SelectItem value='sponsor'>A sponsor</SelectItem>
                   </SelectContent>
                 </Select>

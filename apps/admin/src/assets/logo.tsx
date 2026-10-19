@@ -1,7 +1,7 @@
 import { type SVGProps } from 'react'
 import { cn } from '@/lib/utils'
 
-// The Tonits mark (brand/logo/gamics-mark.svg), inlined so it takes
+// The Ozone mark (brand/logo/gamics-mark.svg), inlined so it takes
 // currentColor. Below 48px the face buttons stop resolving; that is fine for a
 // sidebar badge, where it reads as a silhouette.
 export function Logo({ className, ...props }: SVGProps<SVGSVGElement>) {
@@ -13,7 +13,7 @@ export function Logo({ className, ...props }: SVGProps<SVGSVGElement>) {
       className={cn('size-6', className)}
       {...props}
     >
-      <title>Tonits</title>
+      <title>Ozone</title>
       <path
         fillRule='evenodd'
         clipRule='evenodd'
