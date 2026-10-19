@@ -126,15 +126,17 @@ paths:
     post:
       operationId: createResultScreenshot
       tags: [Match results]
-      summary: Send your entry's one screenshot after a rejection.
+      summary: Send your entry's screenshots after a rejection.
       description: >-
         Allowed while resultVerification.phase is awaiting_screenshots and before screenshotDeadline.
-        Each entry sends exactly one of its own processed (ready=true) JPEG or PNG uploads that is not
-        attached to anything else. Once both entries sent theirs, the match goes to the Ozone review
-        queue, where the screenshot reader reads both. When the window ends, an entry that sent none is
-        removed from the tournament and the other advances; if neither sent one, both are removed. An
-        entry whose screenshot is still stuck in Ozone's own processing is never removed; the match goes
-        to Ozone review instead.
+        Each entry sends, once, its own processed (ready=true) JPEG or PNG uploads that are not attached
+        to anything else: one Full Time screen for a best of 1, or one per game played for a series, each
+        numbered by its game (verificationPolicy.screenshotEvidence). Once both entries sent theirs, the
+        match goes to the Ozone review queue, where the screenshot reader compares them game by game.
+        When the window ends, an entry that sent none is removed from the tournament and the other
+        advances; if neither sent one, both are removed. Sending at least one counts as responding: a
+        game left out counts against its entry in review, never as a removal. An entry whose screenshot
+        is still stuck in Ozone's own processing is never removed; the match goes to Ozone review instead.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: matchId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -144,7 +146,14 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/ResultScreenshotRequest" }
-            example: { evidenceId: "4d3e5536-bf3c-4dba-a643-575e43f56970" }
+            examples:
+              bestOfOne: { value: { evidenceId: "4d3e5536-bf3c-4dba-a643-575e43f56970" } }
+              series:
+                value:
+                  screenshots:
+                    - { game: 1, evidenceId: "4d3e5536-bf3c-4dba-a643-575e43f56970" }
+                    - { game: 2, evidenceId: "5d3e5536-bf3c-4dba-a643-575e43f56970" }
+                    - { game: 3, evidenceId: "6d3e5536-bf3c-4dba-a643-575e43f56970" }
       responses:
         "201":
           description: Screenshot attached. The body is the caller's room.
@@ -195,13 +204,20 @@ components:
         awayScore: { type: integer, minimum: 0, maximum: 99 }
         games:
           type: array
-          maxItems: 99
+          maxItems: 5
           description: >-
-            Optional game-by-game breakdown: 1..bestOf games whose totals equal homeScore and awayScore.
-            When omitted, the server records one aggregate game.
+            Best of 1: optional, one game equal to homeScore and awayScore; when omitted the server records
+            it. Series (bestOf 3 or 5): leave it out. A series is reported as games won in homeScore and
+            awayScore, such as 2-1. A knockout series has exactly one side at gamesToWin (2-0 or 2-1 in a
+            best of 3; 3-0, 3-1 or 3-2 in a best of 5). A round-robin series has each side at most
+            gamesToWin, at most bestOf games won in total, and may end level. Penalties only decide who won
+            a level knockout game and are never reported; the games themselves are shown by the screenshots
+            of a dispute.
           items: { $ref: "#/components/schemas/GameScore" }
         tiebreak:
-          description: Required for a tied elimination match (a penalty shootout with a winner); forbidden otherwise. Round-robin draws have no tiebreak.
+          description: >-
+            Best of 1 only: required for a tied elimination match (a penalty shootout with a winner);
+            forbidden otherwise. Round-robin draws have no tiebreak, and a series never has one.
           oneOf:
             - { $ref: "#/components/schemas/TiebreakScore" }
             - { type: "null" }
@@ -216,13 +232,24 @@ components:
     ResultScreenshotRequest:
       type: object
       additionalProperties: false
-      description: One screenshot of the Full Time screen, sent after a rejection.
-      required: [evidenceId]
+      description: >-
+        Screenshots of the Full Time screen, sent after a rejection: evidenceId for a best of 1 (it is
+        game 1), or screenshots with one entry per game played for a series. Send one form, not both.
+        Each upload is the caller's own processed (ready=true) JPEG or PNG that is not attached to
+        anything else. A game number above the match's bestOf is refused with 400 invalid_evidence.
       properties:
-        evidenceId:
-          type: string
-          format: uuid
-          description: The caller's own processed (ready=true) JPEG or PNG upload that is not attached to anything else.
+        evidenceId: { type: string, format: uuid }
+        screenshots:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            type: object
+            additionalProperties: false
+            required: [game, evidenceId]
+            properties:
+              game: { type: integer, minimum: 1, maximum: 5, description: The game of the series this Full Time screen shows; each game once. }
+              evidenceId: { type: string, format: uuid }
     SubmittedResult:
       type: object
       additionalProperties: false
@@ -245,10 +272,11 @@ components:
     ResultScreenshot:
       type: object
       additionalProperties: false
-      description: The viewer's own screenshot after a rejection.
-      required: [id, evidenceId, submittedAt]
+      description: One of the viewer's own screenshots after a rejection.
+      required: [id, game, evidenceId, submittedAt]
       properties:
         id: { type: string, format: uuid }
+        game: { type: integer, minimum: 1, maximum: 5, description: The game it shows; 1 for a best of 1. }
         evidenceId: { type: string, format: uuid }
         submittedAt: { type: string, format: date-time }
     ScoreReportResponseEnvelope:
@@ -269,7 +297,7 @@ components:
       description: >-
         The viewer's view of the result: the submitted result, the viewer's own screenshot after a
         rejection, whether the other entry sent its screenshot, and the deadline of the current step.
-      required: [phase, submittedResult, myScreenshot, opponentScreenshotSubmitted, confirmationDeadline, screenshotDeadline, resolution, entryRemoved]
+      required: [phase, submittedResult, myScreenshot, myScreenshots, opponentScreenshotSubmitted, confirmationDeadline, screenshotDeadline, resolution, entryRemoved]
       properties:
         phase:
           type: string
@@ -280,9 +308,14 @@ components:
             - { $ref: "#/components/schemas/SubmittedResult" }
             - { type: "null" }
         myScreenshot:
+          description: The first of myScreenshots, the only one in a best of 1.
           oneOf:
             - { $ref: "#/components/schemas/ResultScreenshot" }
             - { type: "null" }
+        myScreenshots:
+          type: array
+          description: The viewer's own screenshots, in game order; empty until sent.
+          items: { $ref: "#/components/schemas/ResultScreenshot" }
         opponentScreenshotSubmitted: { type: boolean }
         confirmationDeadline:
           type: [string, "null"]
@@ -305,7 +338,9 @@ components:
     MatchConfirmedResult:
       type: object
       additionalProperties: false
-      description: The canonical score, present only when the match state is completed.
+      description: >-
+        The canonical score, present only when the match state is completed. For a series homeScore and
+        awayScore are games won.
       required: [homeScore, awayScore, tiebreak, origin, confirmedAt]
       properties:
         homeScore: { type: integer, minimum: 0, maximum: 99 }
