@@ -122,3 +122,122 @@ export async function loadCompetitions(): Promise<{ data: Competition[]; reachab
     return { data: [], reachable: false };
   }
 }
+
+export type MatchFormat = { bestOf: number; rounds?: Record<string, number> };
+
+/** One competition as GET /v1/competitions/{id} returns it. */
+export type CompetitionDetail = Competition & {
+  prizeAmountMinor: number;
+  prizeFunding: string;
+  registrationOpensAt: string;
+  registrationClosesAt: string;
+  checkInOpensAt: string | null;
+  matchFormat: MatchFormat;
+};
+
+export type BracketSide = {
+  side: "home" | "away";
+  participant: { entryId: string; displayName: string; seed: number | null } | null;
+};
+
+export type BracketMatch = {
+  id: string;
+  code: string;
+  matchNumber: number;
+  bestOf: number;
+  state: string;
+  home: BracketSide;
+  away: BracketSide;
+  score: { homeScore: number; awayScore: number; tiebreak: { homeScore: number; awayScore: number } | null } | null;
+  winnerEntryId: string | null;
+  scheduledAt: string | null;
+};
+
+export type BracketRound = { number: number; name: string; bracket: string; matches: BracketMatch[] };
+export type BracketStage = { id: string; name: string; format: string; status: string; rounds: BracketRound[] };
+
+export type StandingRow = {
+  rank: number | null;
+  entryId: string;
+  displayName: string;
+  played: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  gamesWon: number;
+  gamesLost: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+  removed: boolean;
+};
+
+export type Standings = {
+  stages: { id: string; name: string; groups: { key: string; rows: StandingRow[] }[] }[];
+  placements: { placement: number; entryId: string; displayName: string }[];
+};
+
+export type Loaded<T> = { state: "ok"; data: T } | { state: "missing" } | { state: "unavailable" };
+
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Reads one public API document. Only the API's own "…_not_found" answer means
+ * the thing doesn't exist; any other failure, including a 404 from something
+ * that isn't the API, is "unavailable".
+ */
+export async function loadPublic<T>(path: string, { enveloped = true } = {}): Promise<Loaded<T>> {
+  try {
+    const response = await fetch(`${apiURL}${path}`, { cache: "no-store" });
+    if (response.status === 404) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      return /_not_found$/.test(body?.error ?? "") ? { state: "missing" } : { state: "unavailable" };
+    }
+    if (!response.ok) return { state: "unavailable" };
+    const body = (await response.json()) as { data?: T } & T;
+    // Most documents come as {"data": …}; a public player profile comes bare.
+    const data = enveloped ? body.data : (body as T);
+    return data === undefined || data === null ? { state: "unavailable" } : { state: "ok", data };
+  } catch {
+    return { state: "unavailable" };
+  }
+}
+
+export async function loadCompetition(id: string): Promise<Loaded<CompetitionDetail>> {
+  if (!uuid.test(id)) return { state: "missing" };
+  return loadPublic<CompetitionDetail>(`/v1/competitions/${id}`);
+}
+
+export async function loadBracket(id: string): Promise<BracketStage[] | null> {
+  const result = await loadPublic<{ stages: BracketStage[] }>(`/v1/competitions/${id}/bracket`);
+  return result.state === "ok" ? result.data.stages : null;
+}
+
+export async function loadStandings(id: string): Promise<Standings | null> {
+  const result = await loadPublic<Standings>(`/v1/competitions/${id}/standings`);
+  return result.state === "ok" ? result.data : null;
+}
+
+/** A money amount in the competition's currency, in whole units where it has no fraction. */
+export function moneyLabel(amountMinor: number, currency: string) {
+  return entryLabel({ entryType: "paid", entryFeeMinor: amountMinor, currency } as Competition);
+}
+
+const roundNames: Record<string, string> = {
+  final: "Final",
+  semifinal: "Semifinal",
+  quarterfinal: "Quarterfinal",
+  third_place: "Third place",
+  winners_final: "Winners final",
+  losers_final: "Losers final",
+};
+
+/** "Best of 1 · Semifinal best of 3 · Final best of 5" */
+export function matchFormatLabel(format: MatchFormat | undefined) {
+  const bestOf = format?.bestOf ?? 1;
+  const overrides = Object.entries(format?.rounds ?? {}).map(
+    ([round, value]) => `${roundNames[round] ?? round.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())} best of ${value}`,
+  );
+  return [`Best of ${bestOf}`, ...overrides].join(" · ");
+}
