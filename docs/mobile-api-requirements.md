@@ -450,7 +450,8 @@ is decided, and never carries a score. Show the removal banner only when
 `entryRemoved` is true, and use `removals` to tell the winner why the opponent is
 out.
 
-Evidence flow (a screenshot is needed only after a rejection, one per player):
+Evidence flow (a screenshot is needed only after a rejection: one per player, or
+one per game per player in a series):
 
 1. `POST /v1/evidence/uploads` declares a JPEG or PNG screenshot's size, media type
    and SHA-256. Video is not accepted.
@@ -482,6 +483,42 @@ or `{"decision":"reject"}`. After a rejection each player sends one ready
 screenshot with `POST /v1/matches/{matchId}/score-reports/screenshot` and
 `{"evidenceId": "..."}`. Every response contains the updated `match` room, so the
 app does not need an unsafe replica read.
+
+#### Best of 3 and best of 5
+
+A match can be a series. The room's `bestOf` (1, 3 or 5) and `gamesToWin` (1, 2 or
+3) say which; the competition detail's `matchFormat` (`{bestOf, rounds}`) says which
+round is which before anyone enters, for example `{"bestOf":1,"rounds":{"semifinal":3,"final":5}}`.
+One point per game won, and the series stops at the game that gives one side
+`gamesToWin`.
+
+- **Before and during play.** `friendMatchInstructions` adds the series steps.
+  Remind players to screenshot every Full Time screen as they play: eFootball doesn't
+  show game 1's screen again after game 3, and a disputed series needs a screenshot
+  of every game. In a knockout series every game needs a winner, so a level game goes
+  to penalties in that game.
+- **Submitting.** Send only `homeScore` and `awayScore` as games won, for example
+  2 and 1. Leave out `games` and `tiebreak`: penalties only decide who won a level
+  knockout game, and nobody reports them. A knockout series has exactly one side at
+  `gamesToWin` (2-0 or 2-1 in a best of 3; 3-0, 3-1 or 3-2 in a best of 5). A
+  round-robin series has each side at most `gamesToWin`, at most `bestOf` in total,
+  and may end level. Two steppers capped at `gamesToWin` fit this. Anything else is
+  `400 invalid_score` with a message to show.
+- **Confirming.** The opponent confirms or rejects the games won;
+  `submittedResult.games` is empty for a series.
+- **Disputing.** `verificationPolicy.screenshotEvidence` has `perGame: true` and
+  `maxItems` equal to `bestOf`, and `responseWindowSeconds` is 15 minutes. Offer one
+  upload slot per game played (`homeScore + awayScore` of the reported result in a
+  knockout; up to `bestOf` in a round robin, where games can be drawn) and send them
+  together:
+  `{"screenshots":[{"game":1,"evidenceId":"…"},{"game":2,"evidenceId":"…"}]}`. Each
+  game once, numbered 1 to `bestOf`; a higher number is `400 invalid_evidence`. Send
+  at least one: a player who sends any screenshot is never removed for a missing game,
+  but the missing game counts against them in review. `resultVerification.myScreenshots`
+  lists what you sent, in game order (`myScreenshot` is its first entry).
+- **Results.** `result` and the bracket's `score` are games won. Match list summaries
+  carry `bestOf` and `gamesToWin` too, for a "Bo3" badge. Round-robin standings rows
+  carry `gamesWon` and `gamesLost`; in a series stage the points are games won.
 
 Tell players plainly what each step costs: if the opponent doesn't confirm or
 reject in time, the submitted result stands; after a rejection, a player who
