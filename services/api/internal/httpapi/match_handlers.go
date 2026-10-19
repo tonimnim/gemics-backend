@@ -1117,7 +1117,7 @@ func validFriendMatchInstructions(instructions []friendMatchInstruction) bool {
 func defaultFriendMatchInstructions(gameID string) []friendMatchInstruction {
 	if gameID == "efootball-mobile" {
 		return []friendMatchInstruction{
-			{Title: "Wait for both players", Detail: "Start only after both sides show as checked in on Tonits."},
+			{Title: "Wait for both players", Detail: "Start only after both sides show as checked in on Ozone."},
 			{Title: "Create a Friend Match", Detail: "Add your opponent by the eFootball User ID or in-game name on their match card, use the tournament settings and confirm both in-game names before kickoff."},
 			{Title: "Finish the match", Detail: "Play the complete match and do not leave the final result screen."},
 			{Title: "Keep the result screen", Detail: "Keep both in-game names and the final score visible for result evidence."},

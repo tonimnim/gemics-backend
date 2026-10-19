@@ -281,7 +281,7 @@ func assessCompetitionEligibility(facts competitionEligibilityFacts, policy comp
 		blocking("competition_cancelled", "registration", "This competition has been cancelled.")
 	}
 	if facts.conductSuspended() {
-		blocking("conduct_suspended", "conduct", "Your account has too many active conduct strikes to register for new competitions. Contact Tonits support.")
+		blocking("conduct_suspended", "conduct", "Your account has too many active conduct strikes to register for new competitions. Contact Ozone support.")
 	}
 	if !facts.ProfileComplete {
 		blocking("profile_incomplete", "profile", "Finish setting up your account to enter competitions.")
