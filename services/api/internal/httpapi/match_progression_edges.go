@@ -40,6 +40,7 @@ type progressionTarget struct {
 	AwayEntryID             *string
 	ActivationRule          string
 	ActivationSourceMatchID *string
+	BestOf                  int
 }
 
 type progressionSlot struct {
@@ -199,8 +200,8 @@ func applyProgressionEdges(ctx context.Context, tx pgx.Tx, source progressionSou
 			terminalChildren = append(terminalChildren, progressionSource{
 				ID: target.ID, CompetitionID: target.CompetitionID, StageID: target.StageID,
 				StageFormat: target.StageFormat, StageConfig: target.StageConfig, GroupKey: target.GroupKey,
-				RoundNumber: target.RoundNumber,
-				State:       plan.State, Version: updatedVersion,
+				RoundNumber: target.RoundNumber, BestOf: target.BestOf,
+				State: plan.State, Version: updatedVersion,
 				HomeEntryID:      cloneOptionalString(slots[0].ResolvedEntryID),
 				AwayEntryID:      cloneOptionalString(slots[1].ResolvedEntryID),
 				WinnerEntryID:    cloneOptionalString(plan.WinnerEntryID),
@@ -242,12 +243,13 @@ func lockProgressionTarget(ctx context.Context, tx pgx.Tx, targetID, competition
 	err := tx.QueryRow(ctx, `SELECT match.id::text,match.competition_id::text,match.stage_id::text,
 		stage.format,stage.config,COALESCE(match.group_key,'main'),match.round_number,match.state,match.version,match.graph_rank,
 		match.home_entry_id::text,match.away_entry_id::text,match.activation_rule,
-		match.activation_source_match_id::text
+		match.activation_source_match_id::text,match.best_of
 		FROM matches match JOIN competition_stages stage ON stage.id=match.stage_id
 		WHERE match.id=$1 AND match.competition_id=$2 FOR UPDATE OF match`, targetID, competitionID).Scan(
 		&target.ID, &target.CompetitionID, &target.StageID, &target.StageFormat, &configRaw,
 		&target.GroupKey, &target.RoundNumber, &target.State, &target.Version, &target.GraphRank,
-		&target.HomeEntryID, &target.AwayEntryID, &target.ActivationRule, &target.ActivationSourceMatchID)
+		&target.HomeEntryID, &target.AwayEntryID, &target.ActivationRule, &target.ActivationSourceMatchID,
+		&target.BestOf)
 	if err != nil {
 		return progressionTarget{}, err
 	}
@@ -413,7 +415,7 @@ func updateProgressionTarget(ctx context.Context, tx pgx.Tx, target progressionT
 		scheduled := at.Add(time.Duration(target.StageConfig.CheckInLeadMinutes) * time.Minute)
 		opens := at
 		closes := scheduled.Add(time.Duration(target.StageConfig.CheckInGraceMinutes) * time.Minute)
-		due := scheduled.Add(time.Duration(target.StageConfig.ResultWindowMinutes) * time.Minute)
+		due := scheduled.Add(time.Duration(target.StageConfig.ResultWindowMinutes+seriesExtraMinutes(target.BestOf)) * time.Minute)
 		scheduledAt, checkInOpensAt, checkInClosesAt, resultDueAt = &scheduled, &opens, &closes, &due
 	}
 	var completedAt *time.Time

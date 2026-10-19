@@ -140,6 +140,7 @@ type roundFixture struct {
 	Version                  int
 	GroupKey                 string
 	PersistedSchedule        *time.Time
+	BestOf                   int
 	HomeEntryID, AwayEntryID *string
 	HomeStatus, AwayStatus   *string
 	Settlement               roundFixtureSettlement
@@ -167,11 +168,11 @@ func settleRoundFixture(ctx context.Context, tx pgx.Tx, source progressionSource
 func lockRoundFixture(ctx context.Context, tx pgx.Tx, competitionID, matchID string) (roundFixture, error) {
 	fixture := roundFixture{MatchID: matchID}
 	var state, activationRule string
-	if err := tx.QueryRow(ctx, `SELECT state,activation_rule,version,scheduled_at,
+	if err := tx.QueryRow(ctx, `SELECT state,activation_rule,version,scheduled_at,best_of,
 		home_entry_id::text,away_entry_id::text,COALESCE(group_key,'main') FROM matches
 		WHERE id=$1 AND competition_id=$2 FOR UPDATE`, matchID, competitionID).
-		Scan(&state, &activationRule, &fixture.Version, &fixture.PersistedSchedule, &fixture.HomeEntryID,
-			&fixture.AwayEntryID, &fixture.GroupKey); err != nil {
+		Scan(&state, &activationRule, &fixture.Version, &fixture.PersistedSchedule, &fixture.BestOf,
+			&fixture.HomeEntryID, &fixture.AwayEntryID, &fixture.GroupKey); err != nil {
 		return roundFixture{}, err
 	}
 	if state != "pending" || activationRule != "unconditional" {
@@ -210,7 +211,7 @@ func readyRoundFixture(ctx context.Context, tx pgx.Tx, source progressionSource,
 	}
 	opens := scheduled.Add(-time.Duration(source.StageConfig.CheckInLeadMinutes) * time.Minute)
 	closes := scheduled.Add(time.Duration(source.StageConfig.CheckInGraceMinutes) * time.Minute)
-	due := scheduled.Add(time.Duration(source.StageConfig.ResultWindowMinutes) * time.Minute)
+	due := scheduled.Add(time.Duration(source.StageConfig.ResultWindowMinutes+seriesExtraMinutes(fixture.BestOf)) * time.Minute)
 	var nextVersion int
 	err := tx.QueryRow(ctx, `UPDATE matches SET state='ready',scheduled_at=$1,
 		check_in_opens_at=$2,check_in_closes_at=$3,result_due_at=$4,
@@ -280,7 +281,7 @@ func settleNotLiveRoundFixture(ctx context.Context, tx pgx.Tx, source progressio
 	return &progressionSource{
 		ID: matchID, CompetitionID: source.CompetitionID, StageID: source.StageID,
 		StageFormat: source.StageFormat, StageConfig: source.StageConfig, GroupKey: fixture.GroupKey,
-		RoundNumber: round, State: settlement.State, Version: nextVersion,
+		RoundNumber: round, BestOf: fixture.BestOf, State: settlement.State, Version: nextVersion,
 		HomeEntryID: fixture.HomeEntryID, AwayEntryID: fixture.AwayEntryID,
 		WinnerEntryID:    cloneOptionalString(settlement.WinnerEntryID),
 		CompletionReason: &completionReason, CompletedAt: source.CompletedAt,
