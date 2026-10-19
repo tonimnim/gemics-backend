@@ -28,7 +28,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     metadataBase: new URL(origin),
-    title: "Tonits — Your game. Your name.",
+    title: "Ozone — Your game. Your name.",
     description,
     // Browsers cache favicons far more aggressively than page assets, and a
     // stale one survives an ordinary reload. Bump this when the mark changes.
@@ -45,14 +45,14 @@ export async function generateMetadata(): Promise<Metadata> {
       apple: "/apple-touch-icon.png?v=5",
     },
     openGraph: {
-      title: "Tonits — Your game. Your name.",
+      title: "Ozone — Your game. Your name.",
       description,
       type: "website",
-      images: [{ url: `${origin}/og.png`, width: 1200, height: 630, alt: "Tonits — Your game. Your name." }],
+      images: [{ url: `${origin}/og.png`, width: 1200, height: 630, alt: "Ozone — Your game. Your name." }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "Tonits — Your game. Your name.",
+      title: "Ozone — Your game. Your name.",
       description,
       images: [`${origin}/og.png`],
     },

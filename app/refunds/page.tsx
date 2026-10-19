@@ -3,7 +3,7 @@ import { LegalPage } from "../legal-page";
 import { refunds } from "../lib/legal-docs";
 
 export const metadata: Metadata = {
-  title: `${refunds.title} — Tonits`,
+  title: `${refunds.title} — Ozone`,
   description: refunds.description,
 };
 

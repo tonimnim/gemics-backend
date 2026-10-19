@@ -14,13 +14,13 @@ async function render(path = "/") {
   );
 }
 
-test("server-renders the Tonits landing page", async () => {
+test("server-renders the Ozone landing page", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Tonits — Your game\. Your name\.<\/title>/i);
+  assert.match(html, /<title>Ozone — Your game\. Your name\.<\/title>/i);
   assert.match(html, /Your game\./);
   assert.match(html, /Your name\./);
   assert.match(html, /How it works/);
@@ -34,9 +34,9 @@ test("server-renders the Tonits landing page", async () => {
 test("server-renders the public tournament and ranking pages", async () => {
   // No API runs under the test, so both pages must degrade to their notices.
   for (const [path, title, notice] of [
-    ["/tournaments", /<title>Tournaments — Tonits<\/title>/, /Tournaments are unavailable right now/],
-    ["/rankings", /<title>Rankings — Tonits<\/title>/, /Rankings are unavailable right now/],
-    ["/rankings?country=KE", /<title>Rankings — Tonits<\/title>/, /aria-current="page"[^>]*>Kenya</],
+    ["/tournaments", /<title>Tournaments — Ozone<\/title>/, /Tournaments are unavailable right now/],
+    ["/rankings", /<title>Rankings — Ozone<\/title>/, /Rankings are unavailable right now/],
+    ["/rankings?country=KE", /<title>Rankings — Ozone<\/title>/, /aria-current="page"[^>]*>Kenya</],
   ]) {
     const response = await render(path);
     assert.equal(response.status, 200, path);
@@ -57,7 +57,7 @@ test("server-renders the legal pages and links them with the socials from every 
     const response = await render(path);
     assert.equal(response.status, 200, path);
     const html = await response.text();
-    assert.match(html, new RegExp(`<title>${title} — Tonits</title>`), path);
+    assert.match(html, new RegExp(`<title>${title} — Ozone</title>`), path);
     assert.match(html, heading, path);
     assert.match(html, /Last updated/, path);
   }
@@ -67,7 +67,7 @@ test("server-renders the legal pages and links them with the socials from every 
     assert.match(html, new RegExp(`href="${href}"`), href);
   }
   for (const network of ["TikTok", "Instagram", "YouTube", "X"]) {
-    assert.match(html, new RegExp(`aria-label="Tonits on ${network}"`), network);
+    assert.match(html, new RegExp(`aria-label="Ozone on ${network}"`), network);
   }
   assert.match(html, /rel="noopener noreferrer"/);
 });
@@ -80,7 +80,7 @@ test("removes starter-only preview infrastructure", async () => {
   ]);
 
   assert.doesNotMatch(page, /Nairobi Sunday Knockout/);
-  assert.match(layout, /Tonits — Your game\. Your name\./);
+  assert.match(layout, /Ozone — Your game\. Your name\./);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await assert.rejects(access(new URL("../app/_sites-preview/preview.css", import.meta.url)));

@@ -6,7 +6,7 @@ import { SiteFooter, SiteHeader } from "../site-chrome";
 import { FeaturedTournament, TournamentRow } from "../tournament-row";
 
 export const metadata: Metadata = {
-  title: "Tournaments — Tonits",
+  title: "Tournaments — Ozone",
 };
 
 type Group = {

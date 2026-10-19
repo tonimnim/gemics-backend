@@ -15,7 +15,7 @@ import {
 import { SiteFooter, SiteHeader } from "../site-chrome";
 
 export const metadata: Metadata = {
-  title: "Rankings — Tonits",
+  title: "Rankings — Ozone",
 };
 
 function Avatar({ player, size = "md" }: { player: RankedPlayer; size?: "md" | "lg" }) {
