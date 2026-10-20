@@ -216,6 +216,8 @@ current state from the API. Who receives each event:
   to every entry in the draw.
 - Match and result events go to both entries' rosters, except entries that withdrew or
   were removed. `match.participant_checked_in` skips the player who checked in.
+  `match.chat_message` goes only to the opponent of the player who wrote, at most once
+  every two minutes per chat, and not while they have the chat open.
   `result.report_received` and `result.report_reminder` go only to the entry that still
   owes its report, and are dropped once it reported, was removed or its window closed.
 - `competition.entry_removed` goes to the removed entry's roster.
@@ -526,6 +528,49 @@ doesn't send a screenshot in time is removed from the tournament. If nobody subm
 a result before `resultDueAt`, both entries are removed. The full policy is in
 [result verification](result-verification.md). There is no dependency on a public
 Konami results API.
+
+#### Match chat
+
+Each match has one chat between the players of its two entries, so they can agree a
+time and swap the room code: most opponents are not eFootball friends. The full design
+is in [match chat](match-chat.md).
+
+- `GET /v1/matches/{matchId}/chat?after={seq}&limit=50` returns the chat, oldest
+  message first: `open`, the pinned `roomCode` (`{code, setBy, setAt}`),
+  `agreedStartAt`, `playBy` (the match's `resultDueAt`), `lastSeq`, `readSeq`,
+  `opponentReadSeq` and `messages`. While the chat is on screen, poll every few seconds
+  with `after` set to the last `seq` you hold; `seq` is gapless, so nothing is missed.
+  `hasMore` means ask again straight away.
+- `POST /v1/matches/{matchId}/chat/messages` sends one message, with a fresh
+  `clientMessageId` (a UUID) and exactly the fields of its `kind`:
+
+  | `kind` | Fields | Effect |
+  |---|---|---|
+  | `text` | `text`, 1–500 characters | Emails, links and phone numbers become `[hidden]` (`contactHidden: true`) |
+  | `quick_reply` | `quickReply`: `ready_now`, `five_minutes`, `ten_minutes`, `friend_request_sent`, `room_created` or `good_game` | The app words it |
+  | `room_code` | `roomCode`, 1–32 letters, digits, spaces or dashes | Pins the code for both players |
+  | `time_proposal` | `proposedStartAt`, in the future and before `playBy` | Rounded down to the minute |
+  | `time_answer` | `replyToSeq`, `accepted` | Answers the latest unanswered proposal from the other side; accepting sets `agreedStartAt` |
+
+  Retrying with the same `clientMessageId` returns the original message with `200`,
+  even after the chat closed. Errors: `400 invalid_chat_message` or
+  `invalid_proposed_time`; `409 chat_closed`, `chat_full` (500 messages),
+  `proposal_not_current`, `own_proposal`, `proposal_answered` or `proposal_expired`;
+  `429 chat_rate_limited` (20 messages a minute).
+- `POST /v1/matches/{matchId}/chat/read` with `{seq}` when messages are on screen. It
+  also lets the next message push at once.
+- `POST /v1/matches/{matchId}/chat/reports` with `{seq, reason, note?}` reports one of
+  the opponent's messages (`reason`: `abuse`, `harassment`, `cheating`, `spam` or
+  `other`).
+- The match room and `GET /v1/me/matches` carry `chat`: `{open, lastSeq, unread,
+  roomCode, agreedStartAt}`, for the unread badge and for showing the room code on the
+  match card.
+
+`open` is true once both sides are known and false when the match is final; the chat
+is then read-only. `agreedStartAt` is the players' arrangement and moves no deadline:
+check-in and result deadlines still apply. A chat is deleted 7 days after its match is
+final, or 30 days after a result review or report of it is settled. Ozone staff read a
+chat only for a result review or a report.
 
 ## Organizer and staff clients
 
