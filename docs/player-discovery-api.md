@@ -6,8 +6,9 @@ signed, filter-bound keyset cursor. The cursor is not an authorization token.
 
 ## Privacy contract
 
-- Only `users.status = active` plus `player_profiles.discoverable = true` are public.
-- A private, suspended, deleted or missing player returns the same `404` response.
+- Every active player's profile is public: `player_profiles.discoverable` defaults to
+  true and only account deletion clears it.
+- A suspended, deleted or missing player returns the same `404` response.
 - Public responses never read or serialize email, phone, birth date, payment data,
   refresh sessions, publisher player IDs, analytics consent or object-store keys.
 - `avatarUrl` is present but `null` until the separate avatar service can mint a

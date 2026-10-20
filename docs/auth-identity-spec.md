@@ -90,7 +90,7 @@ ALTER TABLE game_accounts
 
 -- Signup collects a Konami ID but neither a platform nor an in-game name.
 -- This schema already spells "not provided yet" as NOT NULL DEFAULT ''
--- (player_profiles.bio 000001:23, refresh_sessions.device_name 000002:26,
+-- (refresh_sessions.device_name 000002:26,
 -- competitions.description 000001:88). SET DEFAULT is catalog-only: no
 -- rewrite, and every Go scanner reading these into a plain string still works.
 -- Making them nullable instead would break scanGameAccount, player_queries.go
@@ -431,7 +431,7 @@ The Konami ID is the primary human-facing identifier, so `/v1/me` must return it
 SELECT u.id,u.email,u.phone_e164,u.display_name,u.country_code,
        to_char(u.birth_date,'YYYY-MM-DD'),u.status,u.terms_accepted_at,u.privacy_accepted_at,
        u.created_at,u.updated_at,
-       p.handle,p.bio,p.avatar_object_key,p.discoverable,p.analytics_consent_at,p.scouting_consent_at,
+       p.handle,p.avatar_object_key,p.discoverable,p.analytics_consent_at,p.scouting_consent_at,
        ga.publisher_player_id, ga.verification_status,
        EXISTS(SELECT 1 FROM game_accounts x WHERE x.user_id=u.id)
 FROM users u

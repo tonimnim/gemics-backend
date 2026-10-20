@@ -118,8 +118,9 @@ The Google or Apple email is already verified and stored at sign-up when it is f
 - When the terms or privacy notice change, `GET /v1/competitions/{id}/eligibility`
   reports `profile_incomplete`; record the new versions with
   `POST /v1/me/legal-acceptances` (`GET` lists accepted versions).
-- `PUT /v1/me/profile` updates the handle (username), bio, discoverability and profile
-  preferences.
+- `PUT /v1/me/profile` takes `{handle, analyticsConsent, scoutingConsent}`: the handle
+  (username) and the two consents. There is no bio and no visibility setting; every
+  profile is public. Any other field is `400`.
 - Editing the eFootball game account's `publisherPlayerId` changes the Konami ID the
   player signs in with. It cannot be removed (`409 konami_id_required`).
 - `POST /v1/me/avatar/uploads`, direct object upload, then
@@ -238,7 +239,7 @@ Konami verification.
   With `around=me` (signed in) it returns the `span` places either side of the caller
   (default 2, at most 10) instead of a page from the top: one call for a "your place on
   the ladder" slice. No cursor; an empty `data` means the caller isn't ranked in that
-  snapshot. Only players with a public profile and a rated match are ranked.
+  snapshot. Only players with a rated match are ranked.
 - `GET /v1/players` with search text, game, country, and opaque cursor.
 - `GET /v1/players/{playerId}`
 - `GET /v1/players/{playerId}/avatar`
@@ -250,13 +251,11 @@ Konami verification.
   carried into it opens the list at the window's start, so a quiet month draws as a flat
   line. A player with no rated match gets an empty list.
 
-All collections use bounded keyset cursors. A hidden, suspended, or deleted player is
-returned as `404`; the app must not try to distinguish those states.
+All collections use bounded keyset cursors. A suspended or deleted player is returned
+as `404`; the app must not try to distinguish those states.
 
-Profiles start private, so **send the bearer token when reading the signed-in player's
-own** profile, matches, competitions or rating history: the owner always gets their own,
-public or not. Anyone else reading a private profile gets `404`. A token that is sent but
-invalid answers `401`, so refresh it as for any other call.
+Every profile is public, so these reads need no token. One that is sent but invalid
+answers `401`, so refresh it as for any other call.
 
 ### 6. Competition entry
 
@@ -386,9 +385,9 @@ same key. OpenAPI lists the codes of every entry operation per status.
 
 `home` and `away` (null until a side is known) carry `playerId`, `handle`,
 `displayName`, `initials`, `avatarUrl` and `gameAccount`. `avatarUrl` is the same
-API-relative reference player profiles use, or null when the player has no avatar or
-a private profile. `gameAccount` is `{inGameName, platform, publisherPlayerId}` for
-the game account that side plays this match with, or null when it has none. Use it
+API-relative reference player profiles use, or null when the player has no avatar.
+`gameAccount` is `{inGameName, platform, publisherPlayerId}` for the game account that
+side plays this match with, or null when it has none. Use it
 to set up the Friend Match: add the opponent by `publisherPlayerId` (the eFootball
 User ID) when it is set, otherwise search for `inGameName`, and check both names
 before kickoff as `friendMatchInstructions` say. Only the players of the match's two
