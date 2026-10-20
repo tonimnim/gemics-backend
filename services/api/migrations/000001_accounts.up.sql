@@ -43,14 +43,14 @@ CREATE UNIQUE INDEX users_email_unique ON users USING btree (lower(email)) WHERE
 CREATE UNIQUE INDEX users_phone_unique ON users USING btree (phone_e164) WHERE (phone_verified_at IS NOT NULL);
 CREATE INDEX users_registration_ip_idx ON users USING btree (registration_ip, created_at DESC) WHERE (registration_ip IS NOT NULL);
 
--- player_profiles
+-- player_profiles: every profile is public; account deletion clears
+-- discoverable, which hides the player everywhere public.
 
 CREATE TABLE player_profiles (
     user_id uuid NOT NULL,
     handle text NOT NULL,
-    bio text DEFAULT ''::text NOT NULL,
     avatar_object_key text,
-    discoverable boolean DEFAULT false NOT NULL,
+    discoverable boolean DEFAULT true NOT NULL,
     analytics_consent_at timestamp with time zone,
     scouting_consent_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,

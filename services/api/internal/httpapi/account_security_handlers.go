@@ -288,7 +288,7 @@ func (s *Server) executeAccountDeletion(w http.ResponseWriter, r *http.Request) 
 		{`UPDATE game_account_verification_requests SET
 			status='withdrawn',
 			publisher_verified=false,player_note='',decision_reason='',updated_at=now() WHERE user_id=$1`, []any{current.UserID}},
-		{`UPDATE player_profiles SET handle=$2,bio='',avatar_object_key=NULL,discoverable=false,
+		{`UPDATE player_profiles SET handle=$2,avatar_object_key=NULL,discoverable=false,
 			analytics_consent_at=NULL,scouting_consent_at=NULL,updated_at=now() WHERE user_id=$1`, []any{current.UserID, syntheticHandle}},
 		{`UPDATE game_accounts SET in_game_name='Deleted player',publisher_player_id=NULL,
 			verification_status='unverified',verified_at=NULL,verification_method=NULL,publisher_verified=false,

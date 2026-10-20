@@ -25,8 +25,6 @@ type mePatch struct {
 
 type profilePut struct {
 	Handle           string `json:"handle"`
-	Bio              string `json:"bio"`
-	Discoverable     bool   `json:"discoverable"`
 	AnalyticsConsent bool   `json:"analyticsConsent"`
 	ScoutingConsent  bool   `json:"scoutingConsent"`
 }
@@ -135,13 +133,8 @@ func (s *Server) putProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Handle = strings.TrimSpace(input.Handle)
-	input.Bio = strings.TrimSpace(input.Bio)
 	if !handlePattern.MatchString(input.Handle) {
 		writeError(w, http.StatusBadRequest, "invalid_handle", "Handle must be 3-24 letters, numbers, underscores or dots.")
-		return
-	}
-	if len(input.Bio) > 280 {
-		writeError(w, http.StatusBadRequest, "invalid_bio", "Bio cannot exceed 280 characters.")
 		return
 	}
 	userID := identityFromContext(r.Context()).UserID
@@ -165,13 +158,13 @@ func (s *Server) putProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err = tx.Exec(r.Context(), `INSERT INTO player_profiles
-        (user_id,handle,bio,discoverable,analytics_consent_at,scouting_consent_at)
-        VALUES ($1,$2,$3,$4,CASE WHEN $5 THEN now() END,CASE WHEN $6 THEN now() END)
+        (user_id,handle,analytics_consent_at,scouting_consent_at)
+        VALUES ($1,$2,CASE WHEN $3 THEN now() END,CASE WHEN $4 THEN now() END)
         ON CONFLICT (user_id) DO UPDATE SET
-          handle=EXCLUDED.handle,bio=EXCLUDED.bio,discoverable=EXCLUDED.discoverable,
-          analytics_consent_at=CASE WHEN $5 THEN COALESCE(player_profiles.analytics_consent_at,now()) END,
-          scouting_consent_at=CASE WHEN $6 THEN COALESCE(player_profiles.scouting_consent_at,now()) END,
-          updated_at=now()`, userID, input.Handle, input.Bio, input.Discoverable, input.AnalyticsConsent, input.ScoutingConsent)
+          handle=EXCLUDED.handle,
+          analytics_consent_at=CASE WHEN $3 THEN COALESCE(player_profiles.analytics_consent_at,now()) END,
+          scouting_consent_at=CASE WHEN $4 THEN COALESCE(player_profiles.scouting_consent_at,now()) END,
+          updated_at=now()`, userID, input.Handle, input.AnalyticsConsent, input.ScoutingConsent)
 	if err != nil {
 		if strings.Contains(err.Error(), "player_profiles_handle_unique") {
 			writeError(w, http.StatusConflict, "handle_taken", "That player handle is already taken.")
@@ -348,28 +341,26 @@ func (s *Server) loadMe(ctx context.Context, pool *pgxpool.Pool, userID string) 
 	var email, phone, birthDate, konamiID *string
 	var emailVerifiedAt, createdAt, updatedAt, onboardedAt, phoneVerifiedAt *time.Time
 	var signInMethods []string
-	var handle, bio *string
-	var discoverable *bool
+	var handle *string
 	var analyticsAt, scoutingAt *time.Time
 	err := pool.QueryRow(ctx, `SELECT u.id,u.email,u.email_verified_at,u.phone_e164,u.display_name,u.country_code,
         to_char(u.birth_date,'YYYY-MM-DD'),u.status,u.created_at,u.updated_at,u.onboarded_at,u.phone_verified_at,
         ARRAY(SELECT method FROM (
           SELECT identity.provider AS method FROM auth_identities identity WHERE identity.user_id=u.id
           UNION SELECT 'password' WHERE u.password_hash IS NOT NULL) methods ORDER BY method),
-        p.handle,p.bio,p.discoverable,p.analytics_consent_at,p.scouting_consent_at,
+        p.handle,p.analytics_consent_at,p.scouting_consent_at,
         (SELECT ga.publisher_player_id FROM game_accounts ga
          WHERE ga.user_id=u.id AND ga.game_id=$2 AND ga.publisher_player_id IS NOT NULL
          ORDER BY ga.created_at LIMIT 1)
         FROM users u LEFT JOIN player_profiles p ON p.user_id=u.id WHERE u.id=$1`, userID, registrationGameID).
 		Scan(&id, &email, &emailVerifiedAt, &phone, &displayName, &countryCode, &birthDate, &status,
-			&createdAt, &updatedAt, &onboardedAt, &phoneVerifiedAt, &signInMethods, &handle, &bio, &discoverable, &analyticsAt, &scoutingAt, &konamiID)
+			&createdAt, &updatedAt, &onboardedAt, &phoneVerifiedAt, &signInMethods, &handle, &analyticsAt, &scoutingAt, &konamiID)
 	if err != nil {
 		return nil, err
 	}
 	var profile any
 	if handle != nil {
-		profile = map[string]any{"handle": *handle, "bio": valueOrEmpty(bio), "discoverable": boolOrFalse(discoverable),
-			"analyticsConsent": analyticsAt != nil, "scoutingConsent": scoutingAt != nil}
+		profile = map[string]any{"handle": *handle, "analyticsConsent": analyticsAt != nil, "scoutingConsent": scoutingAt != nil}
 	}
 	return map[string]any{
 		"id": id, "username": handle, "konamiId": konamiID, "displayName": displayName,
@@ -434,7 +425,6 @@ func valueOrEmpty(value *string) string {
 	}
 	return *value
 }
-func boolOrFalse(value *bool) bool { return value != nil && *value }
 
 func itoa(value int) string {
 	const digits = "0123456789"

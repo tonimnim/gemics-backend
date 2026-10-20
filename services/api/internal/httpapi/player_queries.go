@@ -51,7 +51,6 @@ type publicPlayerProfile struct {
 	PlayerID     string              `json:"playerId"`
 	Handle       string              `json:"handle"`
 	DisplayName  string              `json:"displayName"`
-	Bio          string              `json:"bio"`
 	AvatarURL    *string             `json:"avatarUrl"`
 	CountryCode  string              `json:"countryCode"`
 	JoinedAt     time.Time           `json:"joinedAt"`
@@ -271,17 +270,17 @@ func (s *Server) queryPlayers(ctx context.Context, reader rowsQueryer, options p
 	return result, nil
 }
 
-// queryPublicPlayer returns a discoverable player's profile, or any active
-// player's own profile when viewerID is theirs.
+// queryPublicPlayer returns an active player's profile. A deleted account is
+// not discoverable; viewerID still reads their own profile.
 func (s *Server) queryPublicPlayer(ctx context.Context, reader rowsQueryer, playerID, viewerID string) (publicPlayerProfile, error) {
 	var result publicPlayerProfile
 	var hasAvatar bool
-	err := reader.QueryRow(ctx, `SELECT player.id,profile.handle,player.display_name,profile.bio,
+	err := reader.QueryRow(ctx, `SELECT player.id,profile.handle,player.display_name,
 		(profile.avatar_object_key IS NOT NULL),player.country_code,player.created_at
       FROM users player
       JOIN player_profiles profile ON profile.user_id=player.id
       WHERE player.id=$1 AND player.status='active' AND (profile.discoverable=true OR player.id::text=$2)`, playerID, viewerID).
-		Scan(&result.PlayerID, &result.Handle, &result.DisplayName, &result.Bio, &hasAvatar, &result.CountryCode, &result.JoinedAt)
+		Scan(&result.PlayerID, &result.Handle, &result.DisplayName, &hasAvatar, &result.CountryCode, &result.JoinedAt)
 	if err != nil {
 		return publicPlayerProfile{}, err
 	}
