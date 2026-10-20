@@ -1526,7 +1526,7 @@ paths:
       description: >-
         A page of the latest leaderboard snapshot from the top, or with around=me the span places either side of
         the signed-in caller. around=me needs a bearer token, takes no cursor, and returns an empty data list when
-        the caller is not ranked in that snapshot (only discoverable players with a rated match are ranked).
+        the caller is not ranked in that snapshot (only players with a rated match are ranked).
       security:
         - {}
         - bearerAuth: []
@@ -1628,7 +1628,7 @@ paths:
             maxLength: 2048
       responses:
         '200':
-          description: Discoverable active players using a signed keyset cursor.
+          description: Active players using a signed keyset cursor.
           content:
             application/json:
               schema:
@@ -1645,8 +1645,7 @@ paths:
       tags:
         - Players
       description: >-
-        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
-        public, so send the bearer token when reading your own.
+        Public for every active player; profiles are always public.
       security:
         - {}
         - bearerAuth: []
@@ -1676,8 +1675,7 @@ paths:
       tags:
         - Players
       description: >-
-        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
-        public, so send the bearer token when reading your own.
+        Public for every active player; profiles are always public.
       security:
         - {}
         - bearerAuth: []
@@ -1769,8 +1767,7 @@ paths:
       tags:
         - Players
       description: >-
-        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
-        public, so send the bearer token when reading your own.
+        Public for every active player; profiles are always public.
       security:
         - {}
         - bearerAuth: []
@@ -4743,7 +4740,7 @@ paths:
       operationId: getPublicAvatarAccess
       tags:
         - Profile media
-      summary: Redirect to a short-lived object URL for a discoverable active player's avatar.
+      summary: Redirect to a short-lived object URL for an active player's avatar.
       parameters:
         - name: playerId
           in: path
@@ -6270,21 +6267,15 @@ components:
           type: integer
     ProfileInput:
       type: object
+      description: Every profile is public, so there is no visibility setting.
       required:
         - handle
-        - bio
-        - discoverable
         - analyticsConsent
         - scoutingConsent
       properties:
         handle:
           type: string
           pattern: ^[A-Za-z0-9][A-Za-z0-9_.]{2,23}$
-        bio:
-          type: string
-          maxLength: 280
-        discoverable:
-          type: boolean
         analyticsConsent:
           type: boolean
         scoutingConsent:
@@ -7522,7 +7513,6 @@ components:
         - playerId
         - handle
         - displayName
-        - bio
         - avatarUrl
         - countryCode
         - joinedAt
@@ -7536,8 +7526,6 @@ components:
         handle:
           type: string
         displayName:
-          type: string
-        bio:
           type: string
         avatarUrl:
           type:

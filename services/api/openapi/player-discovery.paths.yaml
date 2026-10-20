@@ -39,7 +39,7 @@ paths:
         - { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }
       responses:
         "200":
-          description: Discoverable active players using a signed keyset cursor.
+          description: Active players using a signed keyset cursor.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PlayerSearchPage" }
@@ -51,8 +51,7 @@ paths:
       operationId: getPublicPlayer
       tags: [Players]
       description: >-
-        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
-        public, so send the bearer token when reading your own.
+        Public for every active player; profiles are always public.
       security: [{}, { bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -70,8 +69,7 @@ paths:
       operationId: listPublicPlayerMatches
       tags: [Players]
       description: >-
-        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
-        public, so send the bearer token when reading your own.
+        Public for every active player; profiles are always public.
       security: [{}, { bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -116,8 +114,7 @@ paths:
       operationId: listPublicPlayerCompetitions
       tags: [Players]
       description: >-
-        Public for discoverable players. A signed-in player also gets their own, whether or not their profile is
-        public, so send the bearer token when reading your own.
+        Public for every active player; profiles are always public.
       security: [{}, { bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -207,12 +204,11 @@ components:
           description: True only when verification came from an integrated publisher API; an Ozone evidence review remains false.
     PublicPlayerProfile:
       type: object
-      required: [playerId, handle, displayName, bio, avatarUrl, countryCode, joinedAt, record, ratings, gameAccounts]
+      required: [playerId, handle, displayName, avatarUrl, countryCode, joinedAt, record, ratings, gameAccounts]
       properties:
         playerId: { type: string, format: uuid }
         handle: { type: string }
         displayName: { type: string }
-        bio: { type: string }
         avatarUrl:
           type: [string, "null"]
           format: uri-reference

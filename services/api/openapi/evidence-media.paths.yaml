@@ -235,7 +235,7 @@ paths:
     get:
       operationId: getPublicAvatarAccess
       tags: [Profile media]
-      summary: Redirect to a short-lived object URL for a discoverable active player's avatar.
+      summary: Redirect to a short-lived object URL for an active player's avatar.
       parameters:
         - { name: playerId, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
