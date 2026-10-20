@@ -4,7 +4,6 @@ export type PublicPlayer = {
   playerId: string;
   handle: string;
   displayName: string;
-  bio: string;
   avatarUrl: string | null;
   countryCode: string;
   joinedAt: string;

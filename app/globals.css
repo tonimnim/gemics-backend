@@ -3182,13 +3182,6 @@ a {
   color: var(--muted);
 }
 
-.player-bio {
-  max-width: 52ch;
-  margin-top: 12px !important;
-  color: var(--text);
-  line-height: 1.5;
-}
-
 .player-stats {
   display: grid;
   grid-template-columns: repeat(4, auto);

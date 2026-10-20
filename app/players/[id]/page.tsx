@@ -52,7 +52,6 @@ function Header({ player }: { player: PublicPlayer }) {
         <p className="player-region">
           {country?.name ?? player.countryCode} · Joined {new Date(player.joinedAt).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
         </p>
-        {player.bio && <p className="player-bio">{player.bio}</p>}
       </div>
       <dl className="player-stats">
         <div>
