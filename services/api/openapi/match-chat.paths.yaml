@@ -1,0 +1,786 @@
+# Merge fragment for the match chat: the player chat routes and the staff
+# transcript and chat report routes. openapi.yaml remains the assembled source of
+# truth.
+paths:
+  /v1/matches/{matchId}/chat:
+    get:
+      operationId: getMatchChat
+      tags:
+        - Matches
+      summary: Read the match chat, oldest message first.
+      description: >-
+        One chat per match between the players of its two entries, for agreeing a time and sharing the room
+        code. Poll with after set to the last seq you hold while the chat is on screen; seq is gapless, so
+        nothing is skipped. open is false once the match is final, and the chat is then read-only. A chat is
+        deleted 7 days after its match is final, or 30 days after a result review or report of it is settled.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: after
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Return messages with a seq above this one.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: The chat. A match nobody has written in yet has lastSeq 0 and no messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: '#/components/schemas/MatchChat'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_after or invalid_limit.
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+          description: match_not_found (missing, or the caller is not a starter or substitute of either entry).
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/matches/{matchId}/chat/messages:
+    post:
+      operationId: postMatchChatMessage
+      tags:
+        - Matches
+      summary: Send a chat message.
+      description: >-
+        Send exactly the fields of the message's kind. Text has emails, links and phone numbers replaced by
+        [hidden] (contactHidden is then true); share room codes with kind room_code, which pins the code. A
+        time_answer answers the chat's latest unanswered time_proposal from the other side, and accepting it
+        sets agreedStartAt. Retrying with the same clientMessageId returns the original message with 200, even
+        after the chat closes. At most 20 messages a minute per player and 500 per chat.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchChatMessageInput'
+      responses:
+        '200':
+          description: A retry of a message already sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchChatMessageResponse'
+        '201':
+          description: The message was sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchChatMessageResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_chat_message, or invalid_proposed_time (not in the future, or after playBy).
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+          description: match_not_found.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: >-
+            chat_closed (the match is final), chat_full (500 messages), proposal_not_current, own_proposal,
+            proposal_answered or proposal_expired.
+        '429':
+          $ref: '#/components/responses/Error'
+          description: chat_rate_limited; retry after the Retry-After seconds.
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/matches/{matchId}/chat/read:
+    post:
+      operationId: readMatchChat
+      tags:
+        - Matches
+      summary: Mark the chat read up to a seq.
+      description: >-
+        Moves the caller's read position forward, never back, and lets the next message push at once. Sending a
+        message also reads everything before it, so unread counts only the opponent's messages.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - seq
+              properties:
+                seq:
+                  type: integer
+                  minimum: 0
+      responses:
+        '204':
+          description: Read.
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_seq.
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+          description: match_not_found.
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/matches/{matchId}/chat/reports:
+    post:
+      operationId: reportMatchChatMessage
+      tags:
+        - Matches
+      summary: Report an opponent's message to Ozone staff.
+      description: >-
+        A reported chat is kept until staff resolve the report and for 30 days after. Works on a read-only chat
+        too.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - seq
+                - reason
+              properties:
+                seq:
+                  type: integer
+                  minimum: 1
+                reason:
+                  type: string
+                  enum:
+                    - abuse
+                    - harassment
+                    - cheating
+                    - spam
+                    - other
+                note:
+                  type: string
+                  maxLength: 500
+      responses:
+        '201':
+          description: The report was filed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    type: object
+                    required:
+                      - id
+                      - seq
+                      - reason
+                      - status
+                      - createdAt
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      seq:
+                        type: integer
+                      reason:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - open
+                      createdAt:
+                        type: string
+                        format: date-time
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_chat_report.
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+          description: match_not_found or chat_message_not_found.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: own_chat_message or chat_message_already_reported.
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/admin/match-chats/{matchId}:
+    get:
+      operationId: getAdminMatchChat
+      tags:
+        - Platform result review
+      summary: Read a match chat in full, for a result review or a chat report.
+      description: Needs result_review.manage. Every read is recorded in the audit log.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: matchId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The whole transcript with its reports. Messages is empty once the chat was deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StaffMatchChat'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+          description: platform_access_denied.
+        '404':
+          $ref: '#/components/responses/Error'
+          description: match_not_found.
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/admin/chat-reports:
+    get:
+      operationId: listMatchChatReports
+      tags:
+        - Platform result review
+      summary: List chat reports, open ones oldest first or resolved ones newest first.
+      description: Needs result_review.manage.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum:
+              - open
+              - resolved
+            default: open
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A page of reports.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - page
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MatchChatReport'
+                  page:
+                    $ref: '#/components/schemas/CursorPage'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_status, invalid_limit or invalid_cursor.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+          description: platform_access_denied.
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/admin/chat-reports/{id}/resolution:
+    post:
+      operationId: resolveMatchChatReport
+      tags:
+        - Platform result review
+      summary: Dismiss a chat report or record that it was acted on.
+      description: >-
+        Needs result_review.manage, and is audited. Acting on a report, such as suspending the player, is done
+        through the player admin routes.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - outcome
+              properties:
+                outcome:
+                  type: string
+                  enum:
+                    - dismissed
+                    - actioned
+                note:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: The resolved report.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    $ref: '#/components/schemas/MatchChatReport'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: invalid_resolution.
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+          description: platform_access_denied.
+        '404':
+          $ref: '#/components/responses/Error'
+          description: chat_report_not_found.
+        '409':
+          $ref: '#/components/responses/Error'
+          description: chat_report_resolved.
+        '503':
+          $ref: '#/components/responses/Error'
+components:
+  schemas:
+    MatchChatSummary:
+      type: object
+      required:
+        - open
+        - lastSeq
+        - unread
+        - roomCode
+        - agreedStartAt
+      description: >-
+        The chat as the match room and the match list show it. GET /v1/matches/{matchId}/chat has the
+        messages.
+      properties:
+        open:
+          type: boolean
+          description: Players can post while both sides are known and the match is not final.
+        lastSeq:
+          type: integer
+          minimum: 0
+        unread:
+          type: integer
+          minimum: 0
+          description: The opponent's messages the viewer has not read.
+        roomCode:
+          type:
+            - string
+            - 'null'
+          description: The pinned room code, if a player shared one.
+        agreedStartAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: The start time both players agreed on. It does not move any deadline.
+    MatchChat:
+      type: object
+      required:
+        - matchId
+        - open
+        - roomCode
+        - agreedStartAt
+        - playBy
+        - lastSeq
+        - readSeq
+        - opponentReadSeq
+        - messages
+        - hasMore
+      properties:
+        matchId:
+          type: string
+          format: uuid
+        open:
+          type: boolean
+          description: False once the match is final; the chat is then read-only.
+        roomCode:
+          oneOf:
+            - $ref: '#/components/schemas/MatchChatRoomCode'
+            - type: 'null'
+        agreedStartAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        playBy:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: The match's resultDueAt. A proposed time must be before it.
+        lastSeq:
+          type: integer
+          minimum: 0
+        readSeq:
+          type: integer
+          minimum: 0
+          description: The caller's read position.
+        opponentReadSeq:
+          type: integer
+          minimum: 0
+          description: How far the opponent has read, for seen ticks.
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchChatMessage'
+        hasMore:
+          type: boolean
+          description: More messages follow the last one; ask again with after set to its seq.
+    MatchChatRoomCode:
+      type: object
+      required:
+        - code
+        - setBy
+        - setAt
+      properties:
+        code:
+          type: string
+          maxLength: 32
+        setBy:
+          type: string
+          enum:
+            - home
+            - away
+        setAt:
+          type: string
+          format: date-time
+    MatchChatMessage:
+      type: object
+      required:
+        - seq
+        - senderId
+        - sender
+        - mine
+        - kind
+        - text
+        - quickReply
+        - roomCode
+        - proposedStartAt
+        - replyToSeq
+        - accepted
+        - contactHidden
+        - sentAt
+      description: >-
+        One message. The field of its kind is set and the others are null. The app words quick replies itself.
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+        senderId:
+          type: string
+          format: uuid
+        sender:
+          type: string
+          enum:
+            - home
+            - away
+        mine:
+          type: boolean
+        kind:
+          type: string
+          enum:
+            - text
+            - quick_reply
+            - room_code
+            - time_proposal
+            - time_answer
+        text:
+          type:
+            - string
+            - 'null'
+          maxLength: 500
+        quickReply:
+          type:
+            - string
+            - 'null'
+          enum:
+            - ready_now
+            - five_minutes
+            - ten_minutes
+            - friend_request_sent
+            - room_created
+            - good_game
+            - null
+        roomCode:
+          type:
+            - string
+            - 'null'
+        proposedStartAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        replyToSeq:
+          type:
+            - integer
+            - 'null'
+          description: The time_proposal a time_answer answers.
+        accepted:
+          type:
+            - boolean
+            - 'null'
+        contactHidden:
+          type: boolean
+          description: True when emails, links or phone numbers in the text were replaced by [hidden].
+        sentAt:
+          type: string
+          format: date-time
+    MatchChatMessageResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: '#/components/schemas/MatchChatMessage'
+    MatchChatMessageInput:
+      type: object
+      additionalProperties: false
+      required:
+        - clientMessageId
+        - kind
+      description: >-
+        text needs text; quick_reply needs quickReply; room_code needs roomCode; time_proposal needs
+        proposedStartAt; time_answer needs replyToSeq and accepted. Send no other field.
+      properties:
+        clientMessageId:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{1,64}$
+          description: A fresh id per message, such as a UUID, reused only to retry that message.
+        kind:
+          type: string
+          enum:
+            - text
+            - quick_reply
+            - room_code
+            - time_proposal
+            - time_answer
+        text:
+          type: string
+          maxLength: 500
+        quickReply:
+          type: string
+          enum:
+            - ready_now
+            - five_minutes
+            - ten_minutes
+            - friend_request_sent
+            - room_created
+            - good_game
+        roomCode:
+          type: string
+          pattern: ^[A-Za-z0-9](?:[A-Za-z0-9 -]{0,30}[A-Za-z0-9])?$
+        proposedStartAt:
+          type: string
+          format: date-time
+          description: Rounded down to the minute.
+        replyToSeq:
+          type: integer
+          minimum: 1
+        accepted:
+          type: boolean
+    MatchChatReport:
+      type: object
+      required:
+        - id
+        - matchId
+        - competitionId
+        - competitionName
+        - messageSeq
+        - messageKind
+        - messageText
+        - messageSentAt
+        - reporter
+        - reported
+        - reason
+        - note
+        - status
+        - resolutionNote
+        - resolvedBy
+        - resolvedAt
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        matchId:
+          type: string
+          format: uuid
+        competitionId:
+          type: string
+          format: uuid
+        competitionName:
+          type: string
+        messageSeq:
+          type: integer
+        messageKind:
+          type: string
+        messageText:
+          type: string
+          description: The text, room code or quick reply of the reported message.
+        messageSentAt:
+          type: string
+          format: date-time
+        reporter:
+          $ref: '#/components/schemas/StaffChatPlayer'
+        reported:
+          $ref: '#/components/schemas/StaffChatPlayer'
+        reason:
+          type: string
+          enum:
+            - abuse
+            - harassment
+            - cheating
+            - spam
+            - other
+        note:
+          type: string
+        status:
+          type: string
+          enum:
+            - open
+            - dismissed
+            - actioned
+        resolutionNote:
+          type: string
+        resolvedBy:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        resolvedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    StaffChatPlayer:
+      type: object
+      required:
+        - userId
+        - handle
+      properties:
+        userId:
+          type: string
+          format: uuid
+        handle:
+          type: string
+    StaffMatchChat:
+      type: object
+      required:
+        - matchId
+        - competitionId
+        - competitionName
+        - state
+        - home
+        - away
+        - roomCode
+        - agreedStartAt
+        - messages
+        - reports
+      properties:
+        matchId:
+          type: string
+          format: uuid
+        competitionId:
+          type: string
+          format: uuid
+        competitionName:
+          type: string
+        state:
+          $ref: '#/components/schemas/MatchState'
+        home:
+          oneOf:
+            - $ref: '#/components/schemas/StaffChatPlayer'
+            - type: 'null'
+        away:
+          oneOf:
+            - $ref: '#/components/schemas/StaffChatPlayer'
+            - type: 'null'
+        roomCode:
+          type:
+            - string
+            - 'null'
+        agreedStartAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchChatMessage'
+        reports:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchChatReport'
