@@ -15,6 +15,11 @@ and the live database:
 
 Status: **decided, not implemented.** No chat code or migration exists yet.
 
+> **Superseded for V1 (2026-10-19).** V1 ships a smaller match chat instead: one
+> thread per match, read by HTTP polling, deleted after a retention period
+> ([match chat](match-chat.md)). The persistent conversations, WebSocket gateway and
+> partitioned message store below remain the plan if chat outgrows matches.
+
 > **Staff access retargeted (2026-09-28).** Result verification v2 retired the
 > organizer-run adjudication this design assumed: organizers never decide results,
 > and contested matches go to the Gamics result review queue, decided by platform
