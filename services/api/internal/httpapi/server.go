@@ -128,6 +128,7 @@ func New(cfg config.Config, logger *slog.Logger, version string, dependencies ..
 	mux.Handle("GET /v1/evidence/{id}", s.requireAuth(http.HandlerFunc(s.getEvidenceAccess)))
 	s.registerPlayerDiscoveryRoutes(mux)
 	s.registerMatchResultRoutes(mux)
+	s.registerMatchChatRoutes(mux)
 	s.registerOrganizerRoutes(mux)
 	s.registerOrganizerDrawRoutes(mux)
 	s.registerIdentityNotificationRoutes(mux)
@@ -169,6 +170,7 @@ func (s *Server) Run(ctx context.Context) error {
 		go s.runNotificationPipeline(workerCtx)
 		go s.runFXRateRefresher(workerCtx)
 		go s.runScreenshotReader(workerCtx)
+		go s.runMatchChatRetention(workerCtx)
 	}
 	errCh := make(chan error, 1)
 	go func() {
