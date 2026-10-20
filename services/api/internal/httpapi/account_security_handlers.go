@@ -342,7 +342,7 @@ func (s *Server) executeAccountDeletion(w http.ResponseWriter, r *http.Request) 
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `INSERT INTO audit_events
 			(actor_user_id,action,subject_type,subject_id,request_id,after_state)
-			VALUES ($1,'account.deleted','user',$1::text,$2,'{"status":"deleted","pii":"anonymized"}'::jsonb)`,
+			VALUES ($1::uuid,'account.deleted','user',$1::text,$2,'{"status":"deleted","pii":"anonymized"}'::jsonb)`,
 			current.UserID, r.Header.Get("X-Request-ID"))
 	}
 	if err == nil {
