@@ -16,6 +16,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { EvidenceImage } from '@/components/evidence-image'
 import { Page } from '@/components/page'
 import { StatusBadge } from '@/components/status-badge'
+import { MatchChatTranscript } from '@/features/match-chat/transcript'
 import {
   scoreText,
   type ReviewDecision,
@@ -244,6 +245,8 @@ export function ResultReviewDetailPage({ id }: { id: string }) {
               }
             />
           </div>
+
+          <MatchChatTranscript matchId={review.match.id} />
 
           {review.decision ? (
             <Card>
