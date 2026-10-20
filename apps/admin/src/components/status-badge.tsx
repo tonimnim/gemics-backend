@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 const tones: Record<string, string> = {
   // Waiting on staff.
   queued: 'warn',
+  open: 'warn',
   requested: 'warn',
   under_review: 'warn',
   review: 'warn',
@@ -30,6 +31,8 @@ const tones: Record<string, string> = {
   cancelled: 'bad',
   suspended: 'bad',
   revoked: 'muted',
+  dismissed: 'muted',
+  actioned: 'good',
   withdrawn: 'muted',
   closed: 'muted',
   draft: 'muted',

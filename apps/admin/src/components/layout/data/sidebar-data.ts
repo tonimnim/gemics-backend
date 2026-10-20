@@ -4,6 +4,7 @@ import {
   ChartNoAxesCombined,
   Gavel,
   LayoutDashboard,
+  MessageSquareWarning,
   ReceiptText,
   ShieldAlert,
   Trophy,
@@ -22,6 +23,7 @@ type GatedLink = NavLink & {
 type QueueCounts = {
   resultReviews: number
   accountVerifications: number
+  chatReports: number
   paymentReviews: number
   refunds: number
 }
@@ -60,6 +62,13 @@ const navigation: { title: string; items: GatedLink[] }[] = [
         icon: Gavel,
         permission: 'result_review.manage',
         count: (queues) => queues.resultReviews,
+      },
+      {
+        title: 'Chat reports',
+        url: '/chat-reports',
+        icon: MessageSquareWarning,
+        permission: 'result_review.manage',
+        count: (queues) => queues.chatReports,
       },
       {
         title: 'Account verifications',

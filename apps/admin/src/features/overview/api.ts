@@ -9,6 +9,7 @@ export type Overview = {
   queues: {
     resultReviews: number
     accountVerifications: number
+    chatReports: number
   }
   /** Daily counts for the last 14 days, oldest first. */
   playersByDay: { date: string; count: number }[]
