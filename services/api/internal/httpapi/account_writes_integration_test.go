@@ -88,3 +88,32 @@ func TestIntegrationPlayerDeletesTheirAccount(t *testing.T) {
 	}
 }
 
+func TestIntegrationSavedProfilesArePublic(t *testing.T) {
+	pool := openMigratedIntegrationDatabase(t)
+	server := competitionVisibilityServer(pool)
+	var player string
+	if err := pool.QueryRow(t.Context(), `INSERT INTO users(email,display_name,status) VALUES ('open@gamics.test','Open','active')
+		RETURNING id`).Scan(&player); err != nil {
+		t.Fatal(err)
+	}
+	// There is no bio and no visibility setting, so a client still sending them is told.
+	competitionVisibilityRefused(t, competitionVisibilityCall(t, server.putProfile, http.MethodPut, "/v1/me/profile", player, "",
+		`{"handle":"open_player","bio":"","discoverable":false,"analyticsConsent":false,"scoutingConsent":false}`),
+		http.StatusBadRequest, "invalid_request")
+	saved := competitionVisibilityDecode[struct {
+		Profile map[string]any `json:"profile"`
+	}](t, competitionVisibilityCall(t, server.putProfile, http.MethodPut, "/v1/me/profile", player, "",
+		`{"handle":"open_player","analyticsConsent":false,"scoutingConsent":true}`), http.StatusOK)
+	if len(saved.Profile) != 3 || saved.Profile["handle"] != "open_player" || saved.Profile["scoutingConsent"] != true {
+		t.Fatalf("saved profile = %v", saved.Profile)
+	}
+	// Anyone can read it.
+	public := competitionVisibilityDecode[map[string]any](t, competitionVisibilityCall(t, server.publicPlayer,
+		http.MethodGet, "/v1/players/"+player, "", player, ""), http.StatusOK)
+	if public["handle"] != "open_player" {
+		t.Fatalf("public profile = %v", public)
+	}
+	if _, ok := public["bio"]; ok {
+		t.Fatal("the public profile still has a bio")
+	}
+}
