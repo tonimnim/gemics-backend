@@ -264,6 +264,10 @@ export const privacy: LegalDoc = {
             sign-in sessions and security logs.
           </li>
           <li>
+            <strong>Match chat:</strong> the messages you send your opponent in a match chat. Phone numbers, emails
+            and links are hidden before they are stored.
+          </li>
+          <li>
             <strong>Messages:</strong> what you send our support team.
           </li>
         </ul>
@@ -352,6 +356,17 @@ export const privacy: LegalDoc = {
           your personal data, except what we must keep: payment records for as long as tax and financial law requires,
           and match results, screenshots and review records for as long as needed to settle disputes and protect the
           integrity of past tournaments. Anonymised results may stay in tournament history.
+        </p>
+      ),
+    },
+    {
+      id: "chat",
+      title: "Match chat",
+      body: (
+        <p>
+          Only you and your opponent can read a match chat. A chat is deleted 7 days after the match ends. If the
+          result goes to review, or someone reports a message, we keep the chat until that is settled and for 30 days
+          after. Our staff read a chat only to decide a result review or a report.
         </p>
       ),
     },
