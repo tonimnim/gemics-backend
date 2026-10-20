@@ -182,6 +182,18 @@ type matchRoomResponse struct {
 	Removals                []matchRemovalView              `json:"removals"`
 	AllowedActions          []string                        `json:"allowedActions"`
 	FriendMatchInstructions []friendMatchInstruction        `json:"friendMatchInstructions"`
+	Chat                    matchChatSummary                `json:"chat"`
+}
+
+// matchChatSummary is what the room and the match list show of the chat:
+// whether players can post, the unread count, the pinned room code and the
+// agreed start time. GET /v1/matches/{id}/chat has the messages.
+type matchChatSummary struct {
+	Open          bool       `json:"open"`
+	LastSeq       int64      `json:"lastSeq"`
+	Unread        int64      `json:"unread"`
+	RoomCode      *string    `json:"roomCode"`
+	AgreedStartAt *time.Time `json:"agreedStartAt"`
 }
 
 type matchSummaryResponse struct {
@@ -205,6 +217,7 @@ type matchSummaryResponse struct {
 	Home              *matchParticipantResponse `json:"home"`
 	Away              *matchParticipantResponse `json:"away"`
 	AllowedActions    []string                  `json:"allowedActions"`
+	Chat              matchChatSummary          `json:"chat"`
 }
 
 type matchRecord struct {
@@ -259,6 +272,10 @@ type matchRecord struct {
 	OpponentScreenshot     bool
 	ConfirmedResult        *matchConfirmedResultResponse
 	Removals               []matchRemovalView
+	ChatLastSeq            *int64
+	ChatReadSeq            *int64
+	ChatRoomCode           *string
+	ChatAgreedStartAt      *time.Time
 }
 
 type matchCursor struct {
@@ -304,7 +321,7 @@ const matchSelectColumns = `
 		verification.phase,verification.report_window_seconds,verification.reminder_lead_seconds,
 		verification.response_window_seconds,verification.report_deadline_at,verification.response_deadline_at,
 		verification.resolution,submitted.result,my_screenshot.screenshot,opponent.screenshot,confirmed.result,
-		removed.removals
+		removed.removals,chat.last_seq,chat_read.read_seq,chat.room_code,chat.agreed_start_at
 	FROM matches m
 	JOIN competitions c ON c.id=m.competition_id
 	JOIN games g ON g.id=c.game_id
@@ -391,6 +408,8 @@ const matchSelectColumns = `
 		FROM competition_entry_removals removal
 		WHERE removal.entry_id IN (m.home_entry_id,m.away_entry_id) AND removal.match_id=m.id
 	) removed ON true
+	LEFT JOIN match_chats chat ON chat.match_id=m.id
+	LEFT JOIN match_chat_reads chat_read ON chat_read.match_id=m.id AND chat_read.user_id=mine.user_id
 `
 
 func (s *Server) listMyMatches(w http.ResponseWriter, r *http.Request) {
@@ -711,7 +730,7 @@ func scanMatchRecords(ctx context.Context, queryer matchQueryer, query string, a
 			&record.VerificationPhase, &record.ReportWindowSeconds, &record.ReminderLeadSeconds,
 			&record.ResponseWindowSeconds, &record.ReportDeadlineAt, &record.ResponseDeadlineAt,
 			&record.VerificationResolution, &submitted, &screenshot, &record.OpponentScreenshot, &confirmed,
-			&removals,
+			&removals, &record.ChatLastSeq, &record.ChatReadSeq, &record.ChatRoomCode, &record.ChatAgreedStartAt,
 		); err != nil {
 			return nil, err
 		}
@@ -810,6 +829,7 @@ func (record matchRecord) response(userID string, now time.Time) matchRoomRespon
 		VerificationPolicy: resolveMatchVerificationPolicy(record.verificationSettings(settings.Verification), int(record.BestOf)),
 		ResultVerification: record.resultVerification(),
 		Removals:           record.Removals,
+		Chat:               record.chatSummary(),
 	}
 	if room.Removals == nil {
 		room.Removals = []matchRemovalView{}
@@ -890,8 +910,27 @@ func summarizeMatch(room matchRoomResponse) matchSummaryResponse {
 		BestOf: room.BestOf, GamesToWin: room.GamesToWin, ScheduledAt: room.ScheduledAt, CheckInClosesAt: room.CheckInClosesAt,
 		State: room.State, Lifecycle: room.Lifecycle, WinnerSide: room.WinnerSide, Outcome: room.Outcome, Version: room.Version,
 		CurrentPlayerSide: room.CurrentPlayerSide, Home: room.Home, Away: room.Away,
-		AllowedActions: room.AllowedActions,
+		AllowedActions: room.AllowedActions, Chat: room.Chat,
 	}
+}
+
+func (record matchRecord) chatSummary() matchChatSummary {
+	summary := matchChatSummary{Open: matchChatOpen(record.State, record.HomeEntryID, record.AwayEntryID),
+		RoomCode: record.ChatRoomCode, AgreedStartAt: utcTime(record.ChatAgreedStartAt)}
+	if record.ChatLastSeq != nil {
+		summary.LastSeq = *record.ChatLastSeq
+		// Sending reads everything before it, so every message past the read
+		// position is the opponent's.
+		summary.Unread = max(0, summary.LastSeq-valueOrZero(record.ChatReadSeq))
+	}
+	return summary
+}
+
+func valueOrZero(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 // participantResponse builds one side of the room. avatarUrl is the same
