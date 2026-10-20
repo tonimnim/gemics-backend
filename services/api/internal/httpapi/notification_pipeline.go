@@ -418,6 +418,21 @@ func mapNotificationEvent(event notificationOutboxEvent) notificationDefinition 
 		base = matchNotification(base, event.AggregateID, "match", "match_push", "Opponent checked in", "Another participant has checked in to your match.")
 		base.ExcludeUserID = actor
 		return base
+	case "match.chat_message":
+		// One recipient per event: the sender spaces pushes out per opponent.
+		recipient, ok := payloadUUID(payload, "userId")
+		if !ok {
+			base.Disposition = notificationDispositionMalformed
+			return base
+		}
+		var handle string
+		if json.Unmarshal(payload["handle"], &handle) != nil || strings.TrimSpace(handle) == "" {
+			handle = "Your opponent"
+		}
+		base = matchNotification(base, event.AggregateID, "match", "match_push", "New match message", handle+" sent you a message.")
+		base.ActionURL = "/matches/" + event.AggregateID + "/chat"
+		base.RecipientKind, base.RecipientID = notificationRecipientPayloadUser, recipient
+		return base
 	case "match.result_confirmed":
 		return matchNotification(base, event.AggregateID, "result", "result_push", "Result confirmed", "The match result is final and the bracket has been updated.")
 	case "result.report_received", "result.report_reminder":

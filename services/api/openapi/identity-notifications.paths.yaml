@@ -416,7 +416,8 @@ components:
                 competition.check_in, competition.running, competition.cancelled,
                 competition.completed, competition.draw_generated,
                 competition.entry_removed, match.ready, match.forfeited,
-                match.cancelled, match.participant_checked_in, match.result_confirmed,
+                match.cancelled, match.participant_checked_in, match.chat_message,
+                match.result_confirmed,
                 result.report_received, result.report_reminder, result.mismatch,
                 result.under_review, result.review_decided, player.strike_recorded,
                 player.strike_revoked, payment.succeeded,
@@ -435,7 +436,7 @@ components:
           nullable: true
           description: >-
             An in-app route hint, not an API path: /competitions/{competitionId},
-            /competitions/{competitionId}/bracket, /matches/{matchId},
+            /competitions/{competitionId}/bracket, /matches/{matchId}, /matches/{matchId}/chat,
             /payments/{paymentId}, /refunds/{refundId} or
             /game-accounts/{gameAccountId}. It has no /v1 prefix and must never be
             requested from the API. Null when the item has no screen of its own,

@@ -184,6 +184,7 @@ Route and render on `kind` and the ids in `data`; never parse the title or body.
 | `match.forfeited` | `match` | push | `matchPush` | Match decided by forfeit | `/matches/{matchId}` | `kind`, `matchId` | Match room; `outcome` and `winnerSide` say who won |
 | `match.cancelled` | `match` | push | `matchPush` | Match cancelled | `/matches/{matchId}` | `kind`, `matchId` | Match room (`lifecycle: cancelled`, `outcome: no_result`) |
 | `match.participant_checked_in` | `match` | push | `matchPush` | Opponent checked in | `/matches/{matchId}` | `kind`, `matchId` | Match room |
+| `match.chat_message` | `match` | push | `matchPush` | New match message | `/matches/{matchId}/chat` | `kind`, `matchId` | Match chat |
 | `match.result_confirmed` | `result` | push | `resultPush` | Result confirmed | `/matches/{matchId}` | `kind`, `matchId` | Match room |
 | `result.report_received` | `result` | push | `resultPush` | Confirm the match result | `/matches/{matchId}` | `kind`, `matchId` | Match room, confirm or reject |
 | `result.report_reminder` | `result` | push | `resultPush` | Confirm the result now | `/matches/{matchId}` | `kind`, `matchId` | Match room, confirm or reject |
