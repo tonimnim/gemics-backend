@@ -102,6 +102,7 @@ func (s *Server) getAdminOverview(w http.ResponseWriter, r *http.Request) {
 		Queues struct {
 			ResultReviews        int `json:"resultReviews"`
 			AccountVerifications int `json:"accountVerifications"`
+			ChatReports          int `json:"chatReports"`
 		} `json:"queues"`
 		// Daily counts for the last 14 days, oldest first, in Nairobi days.
 		PlayersByDay       []overviewDay    `json:"playersByDay"`
@@ -116,10 +117,11 @@ func (s *Server) getAdminOverview(w http.ResponseWriter, r *http.Request) {
 		(SELECT count(*) FROM competitions WHERE status IN ('check_in','running')),
 		(SELECT count(*) FROM competitions WHERE status='draft'),
 		(SELECT count(*) FROM match_result_reviews WHERE status='queued'),
-		(SELECT count(*) FROM game_account_verification_requests WHERE status IN ('requested','under_review'))`).Scan(
+		(SELECT count(*) FROM game_account_verification_requests WHERE status IN ('requested','under_review')),
+		(SELECT count(*) FROM match_chat_reports WHERE status='open')`).Scan(
 		&overview.Players.Total, &overview.Players.NewLast7d,
 		&overview.Competitions.RegistrationOpen, &overview.Competitions.Running, &overview.Competitions.Draft,
-		&overview.Queues.ResultReviews, &overview.Queues.AccountVerifications)
+		&overview.Queues.ResultReviews, &overview.Queues.AccountVerifications, &overview.Queues.ChatReports)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load the overview.")
 		return

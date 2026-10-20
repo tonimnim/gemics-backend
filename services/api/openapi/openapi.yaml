@@ -3652,10 +3652,11 @@ paths:
                       draft: { type: integer }
                   queues:
                     type: object
-                    required: [resultReviews, accountVerifications]
+                    required: [resultReviews, accountVerifications, chatReports]
                     properties:
                       resultReviews: { type: integer }
                       accountVerifications: { type: integer }
+                      chatReports: { type: integer, description: Open match chat reports. }
                   finance:
                     oneOf:
                       - type: 'null'
