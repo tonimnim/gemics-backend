@@ -1,0 +1,8 @@
+BEGIN;
+
+DROP TABLE IF EXISTS match_chat_reports CASCADE;
+DROP TABLE IF EXISTS match_chat_reads CASCADE;
+DROP TABLE IF EXISTS match_chat_messages CASCADE;
+DROP TABLE IF EXISTS match_chats CASCADE;
+
+COMMIT;
