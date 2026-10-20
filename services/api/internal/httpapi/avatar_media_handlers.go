@@ -246,7 +246,7 @@ func (s *Server) updateProfileAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `INSERT INTO audit_events(actor_user_id,action,subject_type,subject_id,request_id,after_state)
-			VALUES ($1,'profile.avatar_updated','player_profile',$1,$2,jsonb_build_object('uploadId',$3))`,
+			VALUES ($1::uuid,'profile.avatar_updated','player_profile',$1::text,$2,jsonb_build_object('uploadId',$3::text))`,
 			userID, r.Header.Get("X-Request-ID"), input.UploadID)
 	}
 	if err != nil || tx.Commit(r.Context()) != nil {
