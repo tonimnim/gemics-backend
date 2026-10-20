@@ -4,7 +4,7 @@ import { site } from "./site";
 export type LegalSection = { id: string; title: string; body: React.ReactNode };
 export type LegalDoc = { title: string; description: string; updated: string; intro: React.ReactNode; sections: LegalSection[] };
 
-const updated = "10 October 2026";
+const updated = "19 October 2026";
 const email = <a href={`mailto:${site.contactEmail}`}>{site.contactEmail}</a>;
 
 export const terms: LegalDoc = {
@@ -159,9 +159,9 @@ export const terms: LegalDoc = {
       title: "What other people see",
       body: (
         <p>
-          Your username, avatar and results appear to other players in the tournaments you enter. You only appear in
-          public rankings and player search if you choose to make your profile public, and you can change that at any
-          time in the app. Our <Link href="/privacy">Privacy policy</Link> has the details.
+          Your profile is public. Your username, avatar, country, rating and results appear in public rankings, in
+          player search, on your player page and to the players in your tournaments. Our{" "}
+          <Link href="/privacy">Privacy policy</Link> has the details.
         </p>
       ),
     },
@@ -307,9 +307,9 @@ export const privacy: LegalDoc = {
       title: "What is public",
       body: (
         <p>
-          Other players in your tournaments see your username, avatar and results. You only appear in public rankings
-          and player search if you make your profile public, which is off until you turn it on. Your Konami ID, email,
-          phone number and payment details are never shown publicly.
+          Every profile is public: anyone can see your username, avatar, country, rating and results, in public
+          rankings, in player search and on your player page. Your Konami ID, email, phone number and payment details
+          are never shown publicly.
         </p>
       ),
     },
@@ -361,8 +361,8 @@ export const privacy: LegalDoc = {
       body: (
         <p>
           Ozone isn&apos;t for children under 13. Players aged 13 to 17 need a parent or guardian&apos;s permission and
-          can only enter free tournaments. Their profiles are private, and their data is never used for commercial
-          profiling.
+          can only enter free tournaments. Their profiles are public like every player&apos;s, and their data is never
+          used for commercial profiling.
         </p>
       ),
     },
@@ -373,7 +373,7 @@ export const privacy: LegalDoc = {
         <>
           <p>
             You can ask to see, correct, export or delete your data, object to or restrict how we use it, and withdraw
-            consent. You can edit your profile, choose whether it is public and delete your account in the app; for
+            consent. You can edit your profile and delete your account in the app; for
             anything else, email {email}. We answer within the time the law sets.
           </p>
           <p>
