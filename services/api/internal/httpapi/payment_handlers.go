@@ -36,6 +36,7 @@ type mpesaInitiateInput struct {
 type paymentIntent struct {
 	ID                        string     `json:"id"`
 	CompetitionID             string     `json:"competitionId"`
+	CompetitionName           string     `json:"competitionName"`
 	EntryID                   *string    `json:"entryId"`
 	AmountMinor               int64      `json:"amountMinor"`
 	Currency                  string     `json:"currency"`

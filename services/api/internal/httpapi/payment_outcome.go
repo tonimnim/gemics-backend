@@ -20,7 +20,9 @@ const (
 // refund are only ever shown to the payer. A refund's user is always its
 // payment's (composite foreign key); repeating that predicate lets the refund
 // lookup use payment_refunds_user_requested_idx on every status poll.
-const paymentIntentSelect = `SELECT payment.id,payment.competition_id,payment.entry_id,
+const paymentIntentSelect = `SELECT payment.id,payment.competition_id,
+	COALESCE((SELECT competition.name FROM competitions competition WHERE competition.id=payment.competition_id),''),
+	payment.entry_id,
 	payment.amount_minor,payment.currency,payment.phone_e164,payment.status,payment.merchant_request_id,
 	payment.checkout_request_id,payment.provider_receipt,payment.provider_result_code,
 	payment.provider_result_description,payment.created_at,payment.updated_at,payment.completed_at,
@@ -46,7 +48,8 @@ func scanPaymentIntent(row accountScanner) (paymentIntent, error) {
 	var refundReceipt, refundDescription *string
 	var refundAmount *int64
 	var refundRequested, refundReviewed, refundCompleted, refundUpdated *time.Time
-	err := row.Scan(&result.ID, &result.CompetitionID, &result.EntryID, &result.AmountMinor, &result.Currency, &phone,
+	err := row.Scan(&result.ID, &result.CompetitionID, &result.CompetitionName, &result.EntryID, &result.AmountMinor,
+		&result.Currency, &phone,
 		&result.Status, &result.MerchantRequestID, &result.CheckoutRequestID, &result.ProviderReceipt,
 		&result.ProviderResultCode, &result.ProviderResultDescription, &result.CreatedAt, &result.UpdatedAt,
 		&result.CompletedAt, &result.QueryAttempts, &result.NextQueryAt, &entryStatus,

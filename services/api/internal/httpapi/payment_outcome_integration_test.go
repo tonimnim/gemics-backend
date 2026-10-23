@@ -198,6 +198,21 @@ func paymentFlowHistory(t *testing.T, h paymentFlowHarness, userID, paymentID st
 	return paymentIntent{}
 }
 
+// paymentFlowRefunds returns the payer's refund list.
+func paymentFlowRefunds(t *testing.T, h paymentFlowHarness, userID string) []playerRefundView {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	h.Server.listMyRefunds(recorder, paymentFlowRequest(t, http.MethodGet, "/v1/me/refunds", userID, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("refund list: %d %s", recorder.Code, recorder.Body.String())
+	}
+	var page refundPage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	return page.Data
+}
+
 func paymentFlowEligibility(t *testing.T, h paymentFlowHarness, userID, competitionID, gameAccountID string) competitionEligibilityResult {
 	t.Helper()
 	request := paymentFlowRequest(t, http.MethodGet,
@@ -376,8 +391,13 @@ func TestIntegrationPaymentLateCompletionReportsTheRefund(t *testing.T) {
 				t.Fatal("the late payment's entry is not withdrawal_pending")
 			}
 			if history := paymentFlowHistory(t, h, payer, created.ID); history.RegistrationStatus != paymentRegistrationRefundPending ||
-				history.Refund == nil || history.Refund.ID != refund.ID {
+				history.Refund == nil || history.Refund.ID != refund.ID || history.CompetitionName == "" ||
+				history.CompetitionName != owed.CompetitionName {
 				t.Fatalf("the history disagrees with the payment: %+v", history)
+			}
+			if refunds := paymentFlowRefunds(t, h, payer); len(refunds) != 1 || refunds[0].ID != refund.ID ||
+				refunds[0].CompetitionID != competitionID || refunds[0].CompetitionName != owed.CompetitionName {
+				t.Fatalf("the refund list = %+v", refunds)
 			}
 
 			paymentFlowDecideRefund(t, h, refund.ID, `{"decision":"approve"}`)

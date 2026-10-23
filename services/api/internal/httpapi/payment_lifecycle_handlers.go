@@ -49,7 +49,7 @@ type paymentHistoryPage struct {
 }
 
 type refundPage struct {
-	Data []paymentRefundView `json:"data"`
+	Data []playerRefundView `json:"data"`
 	Page struct {
 		NextCursor *string `json:"nextCursor"`
 		HasMore    bool    `json:"hasMore"`
@@ -167,7 +167,7 @@ func (s *Server) listMyRefunds(w http.ResponseWriter, r *http.Request) {
 		value := cursorTime(cursor.SortTime)
 		beforeTime, beforeID = &value, &cursor.ID
 	}
-	rows, err := s.db.Writer.Query(r.Context(), refundSelect+`
+	rows, err := s.db.Writer.Query(r.Context(), playerRefundSelect+`
 		WHERE refund.user_id=$1 AND ($2='' OR refund.status=$2)
 		AND ($3::timestamptz IS NULL OR (refund.requested_at,refund.id)<($3,$4::uuid))
 		ORDER BY refund.requested_at DESC,refund.id DESC LIMIT $5`,
@@ -177,9 +177,10 @@ func (s *Server) listMyRefunds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	page := refundPage{Data: []paymentRefundView{}}
+	page := refundPage{Data: []playerRefundView{}}
 	for rows.Next() {
-		item, scanErr := scanRefund(rows)
+		var item playerRefundView
+		scanErr := rows.Scan(append(refundScanTargets(&item.paymentRefundView), &item.CompetitionID, &item.CompetitionName)...)
 		if scanErr != nil {
 			writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Unable to load refunds.")
 			return
@@ -444,6 +445,22 @@ func refundOrderKey(view paymentRefundView) int64 {
 	open := view.Status != "succeeded" && view.Status != "rejected"
 	return staffQueueKey(open, view.RequestedAt, timeOr(view.CompletedAt, view.UpdatedAt))
 }
+
+// playerRefundView is a refund in the player's own list, with the competition
+// it returns the entry fee of.
+type playerRefundView struct {
+	paymentRefundView
+	CompetitionID   string `json:"competitionId"`
+	CompetitionName string `json:"competitionName"`
+}
+
+const playerRefundSelect = `SELECT refund.id,refund.payment_id,refund.entry_id,refund.amount_minor,refund.currency,
+	refund.reason_code,refund.mandatory,refund.player_note,refund.status,refund.provider_receipt,refund.provider_result_description,
+	refund.requested_at,refund.reviewed_at,refund.completed_at,refund.updated_at,
+	payment.competition_id::text,competition.name
+	FROM payment_refunds refund
+	JOIN payment_intents payment ON payment.id=refund.payment_id
+	JOIN competitions competition ON competition.id=payment.competition_id `
 
 // staffRefundView adds who and what a refund is for, so staff never work from
 // bare payment IDs. Players' own refund views stay as they were.
