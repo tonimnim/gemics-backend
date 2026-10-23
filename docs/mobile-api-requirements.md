@@ -133,8 +133,10 @@ The Google or Apple email is already verified and stored at sign-up when it is f
 
 ### 3. Device notifications and account security
 
-- `POST /v1/me/push-tokens` registers or rotates a device push token and binds it to
-  the session the request is signed in with. Register after every sign-in and on each
+- `POST /v1/me/push-tokens` with `{deviceId, token, platform, appVersion?}` registers or
+  rotates the installation's Firebase Cloud Messaging token (the one the FCM SDK
+  returns, on Android and on iOS) and binds it to the session the request is signed in
+  with. Register again when FCM rotates the token. Register after every sign-in and on each
   app launch: an installation stops receiving pushes when its session ends (logout,
   remote session revoke, account deletion), and installations registered before
   sessions were linked were revoked by the server. Keep the returned `id`; the call is
@@ -156,11 +158,14 @@ Route and render on `kind` and the ids in `data`; never parse the title or body.
 `data` holds identifiers only, never a score.
 
 - Every event below is stored in the inbox. Rows whose delivery is push are also sent
-  to the device (today through Expo's push service, which a Flutter app can't use;
-  delivery moves to Firebase Cloud Messaging before the app ships), but only while the named preference is on
+  to the device through Firebase Cloud Messaging, but only while the named preference is on
   (`PATCH /v1/me/notification-preferences`) and only to installations registered with
   `POST /v1/me/push-tokens` whose session is still signed in. The push has the same
   title and body as the inbox item.
+- Every push has a notification (title and body) and `data`, so the system shows it
+  when the app is in the background; handle it yourself in the foreground. Pushes
+  of one match chat replace each other on the device (Android tag and iOS
+  collapse id `chat:{matchId}`).
 - The push `data` is the item's `data` plus `notificationId`, plus `actionUrl`
   when it is not null (`PushNotificationData` in OpenAPI).
 - When a push is tapped, call `POST /v1/me/notifications/{notificationId}/read`, then
