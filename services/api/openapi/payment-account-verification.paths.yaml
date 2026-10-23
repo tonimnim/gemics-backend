@@ -318,11 +318,19 @@ components:
         reviewedAt: { type: [string, "null"], format: date-time }
         completedAt: { type: [string, "null"], format: date-time }
         updatedAt: { type: string, format: date-time }
+    PlayerRefund:
+      allOf:
+        - $ref: "#/components/schemas/PaymentRefund"
+        - type: object
+          required: [competitionId, competitionName]
+          properties:
+            competitionId: { type: string, format: uuid }
+            competitionName: { type: string }
     RefundPage:
       type: object
       required: [data, page]
       properties:
-        data: { type: array, items: { $ref: "#/components/schemas/PaymentRefund" } }
+        data: { type: array, items: { $ref: "#/components/schemas/PlayerRefund" } }
         page: { $ref: "#/components/schemas/CursorPage" }
     RefundResponse:
       type: object

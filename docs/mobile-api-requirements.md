@@ -329,7 +329,15 @@ draw was made, registration ended, the places filled or the player reached the c
 strike limit) reads `succeeded` with `registrationStatus=refund_pending`; never show it
 as a registration.
 
-`status=review` (`registrationStatus=pending`) means Gamics is checking the outcome with
+A payment's M-Pesa callback normally settles it within a minute or two: the STK
+prompt expires after about a minute and M-Pesa reports the outcome. If the callback
+never comes, the server keeps asking M-Pesa and moves the payment to `review` within
+ten minutes of the prompt, so a checkout screen that polls for ten minutes always sees
+it leave `pending`. A late callback still settles a payment under review.
+`providerReceipt` is the M-Pesa code from the payer's SMS. It is set exactly when
+`status` is `succeeded` and null otherwise.
+
+`status=review` (`registrationStatus=pending`) means Ozone is checking the outcome with
 M-Pesa. Show "Payment under review. You will not be charged twice", stop fast polling,
 and read the payment again when the player reopens the screen or a `payment.*`
 notification arrives. Never start another payment for that competition.
@@ -341,8 +349,10 @@ whatever `requiredAction` says. `requiredAction` is `poll_payment` while that pa
 unfinished, even when registration has since closed or filled: the payment can still
 register the player or be refunded.
 
-- `GET /v1/me/payments` lists durable payment/receipt history.
-- `GET /v1/me/refunds` lists refund state.
+- `GET /v1/me/payments` lists durable payment/receipt history, newest first, as
+  `{data, page}` with a cursor. Each payment has `competitionId` and `competitionName`.
+- `GET /v1/me/refunds` lists refund state the same way. Each refund has
+  `competitionId` and `competitionName`.
 - `POST /v1/competitions/{id}/registrations/me/withdrawal-requests` requests a paid
   withdrawal/refund.
 

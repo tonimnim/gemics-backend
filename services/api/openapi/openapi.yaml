@@ -6759,9 +6759,13 @@ components:
               format: date-time
     PaymentIntent:
       type: object
+      description: >-
+        A payment whose M-Pesa callback never comes goes to review within ten minutes of the prompt; a late callback
+        still settles it.
       required:
         - id
         - competitionId
+        - competitionName
         - amountMinor
         - currency
         - phoneNumber
@@ -6777,6 +6781,8 @@ components:
         competitionId:
           type: string
           format: uuid
+        competitionName:
+          type: string
         entryId:
           type:
             - string
@@ -6838,6 +6844,7 @@ components:
           type:
             - string
             - 'null'
+          description: The M-Pesa receipt code from the payer's SMS, set exactly when status is succeeded.
         providerResultCode:
           type:
             - string
@@ -9327,6 +9334,19 @@ components:
         updatedAt:
           type: string
           format: date-time
+    PlayerRefund:
+      allOf:
+        - $ref: '#/components/schemas/PaymentRefund'
+        - type: object
+          required:
+            - competitionId
+            - competitionName
+          properties:
+            competitionId:
+              type: string
+              format: uuid
+            competitionName:
+              type: string
     RefundPage:
       type: object
       required:
@@ -9336,7 +9356,7 @@ components:
         data:
           type: array
           items:
-            $ref: '#/components/schemas/PaymentRefund'
+            $ref: '#/components/schemas/PlayerRefund'
         page:
           $ref: '#/components/schemas/CursorPage'
     RefundResponse:
