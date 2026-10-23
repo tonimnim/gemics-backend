@@ -3,29 +3,28 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gamics-io/gamics/services/api/internal/config"
 )
 
-func TestExpoPushTokenValidation(t *testing.T) {
-	valid := []string{
-		"ExpoPushToken[abcdefghijklmnopqrstuvwx]",
-		"ExponentPushToken[abcDEF0123456789_-abcdefgh]",
-	}
-	for _, token := range valid {
-		if !expoPushTokenPattern.MatchString(token) {
-			t.Fatalf("expected valid Expo token %q", token)
+func TestFCMTokenValidation(t *testing.T) {
+	for _, token := range []string{
+		"dQw4w9WgXcQ:APA91bHun4MxP5egoKMwt2KZFBaFUH-1RYqx" + strings.Repeat("a", 100),
+		"fMEP0vJqS0uC_x-1.2:" + strings.Repeat("Z9", 40),
+	} {
+		if !validFCMToken(token) {
+			t.Fatalf("expected valid FCM token %q", token)
 		}
 	}
-	invalid := []string{
-		"", "ExponentPushToken[short]", "not-expo[abcdefghijklmnopqrstuvwx]",
-		"ExpoPushToken[abcdefghijklmnopqrstu vwx]",
-	}
-	for _, token := range invalid {
-		if expoPushTokenPattern.MatchString(token) {
-			t.Fatalf("accepted invalid Expo token %q", token)
+	for _, token := range []string{
+		"", "short:token", "ExpoPushToken[abcdefghijklmnopqrstuvwx]",
+		"dQw4w9WgXcQ:APA91b with spaces" + strings.Repeat("a", 40), strings.Repeat("a", 4097),
+	} {
+		if validFCMToken(token) {
+			t.Fatalf("accepted invalid FCM token %q", token)
 		}
 	}
 }

@@ -125,20 +125,18 @@ type Config struct {
 	EvidenceActionLimit     int
 	AvatarUploadLimit       int
 	AvatarDailyBytes        int64
-	ExpoAccessToken         string
-	ExpoPushURL             string
-	ExpoReceiptsURL         string
-	ExpoPushTimeout         time.Duration
-	ExpoReceiptDelay        time.Duration
-	ExpoReceiptRetry        time.Duration
-	ExpoReceiptBatch        int
-	ExpoReceiptTries        int
-	NotificationPoll        time.Duration
-	NotificationProject     int
-	NotificationPushBatch   int
-	NotificationPushTries   int
-	StrikeBanThreshold      int
-	LogLevel                slog.Level
+	// FCM is the Firebase service account push delivery signs in with; nil
+	// leaves push off while the notification inbox keeps working.
+	FCM                   *FCMServiceAccount
+	FCMAPIURL             string
+	FCMTimeout            time.Duration
+	FCMConcurrency        int
+	NotificationPoll      time.Duration
+	NotificationProject   int
+	NotificationPushBatch int
+	NotificationPushTries int
+	StrikeBanThreshold    int
+	LogLevel              slog.Level
 }
 
 func Load() (Config, error) {
@@ -245,15 +243,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	expoPushTimeout, err := duration("EXPO_PUSH_TIMEOUT", 10*time.Second)
+	fcmAccount, err := parseFCMServiceAccount(os.Getenv("FCM_CREDENTIALS_JSON"), os.Getenv("FCM_PROJECT_ID"))
 	if err != nil {
 		return Config{}, err
 	}
-	expoReceiptDelay, err := duration("EXPO_RECEIPT_INITIAL_DELAY", 30*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	expoReceiptRetry, err := duration("EXPO_RECEIPT_RETRY_BASE", 30*time.Second)
+	fcmTimeout, err := duration("FCM_TIMEOUT", 10*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -448,14 +442,10 @@ func Load() (Config, error) {
 		EvidenceActionLimit:     integer("EVIDENCE_ACTION_LIMIT", 120),
 		AvatarUploadLimit:       int(avatarUploadLimit),
 		AvatarDailyBytes:        avatarDailyBytes,
-		ExpoAccessToken:         strings.TrimSpace(os.Getenv("EXPO_ACCESS_TOKEN")),
-		ExpoPushURL:             strings.TrimRight(value("EXPO_PUSH_URL", "https://exp.host/--/api/v2/push/send"), "/"),
-		ExpoReceiptsURL:         strings.TrimRight(value("EXPO_RECEIPTS_URL", "https://exp.host/--/api/v2/push/getReceipts"), "/"),
-		ExpoPushTimeout:         expoPushTimeout,
-		ExpoReceiptDelay:        expoReceiptDelay,
-		ExpoReceiptRetry:        expoReceiptRetry,
-		ExpoReceiptBatch:        integer("EXPO_RECEIPT_BATCH", 300),
-		ExpoReceiptTries:        integer("EXPO_RECEIPT_MAX_ATTEMPTS", 12),
+		FCM:                     fcmAccount,
+		FCMAPIURL:               strings.TrimRight(value("FCM_API_URL", "https://fcm.googleapis.com"), "/"),
+		FCMTimeout:              fcmTimeout,
+		FCMConcurrency:          integer("FCM_CONCURRENCY", 8),
 		NotificationPoll:        notificationPoll,
 		NotificationProject:     integer("NOTIFICATION_PROJECT_BATCH", 50),
 		NotificationPushBatch:   integer("NOTIFICATION_PUSH_BATCH", 100),
@@ -556,21 +546,14 @@ func Load() (Config, error) {
 	if cfg.StoragePresignTTL < time.Minute || cfg.StoragePresignTTL > 15*time.Minute || cfg.StorageHTTPTimeout <= 0 || cfg.EvidenceMaxBytes < 1 || cfg.EvidenceMaxBytes > 25<<20 {
 		return Config{}, fmt.Errorf("storage upload TTL, timeout or evidence size is outside the safe range")
 	}
-	expoURL, expoErr := url.ParseRequestURI(cfg.ExpoPushURL)
-	if expoErr != nil || (expoURL.Scheme != "http" && expoURL.Scheme != "https") || expoURL.Host == "" || expoURL.User != nil || expoURL.RawQuery != "" || expoURL.Fragment != "" {
-		return Config{}, fmt.Errorf("EXPO_PUSH_URL must be an HTTP(S) URL without credentials, query or fragment")
+	fcmURL, fcmErr := url.ParseRequestURI(cfg.FCMAPIURL)
+	if fcmErr != nil || (fcmURL.Scheme != "http" && fcmURL.Scheme != "https") || fcmURL.Host == "" || fcmURL.User != nil || fcmURL.RawQuery != "" || fcmURL.Fragment != "" {
+		return Config{}, fmt.Errorf("FCM_API_URL must be an HTTP(S) URL without credentials, query or fragment")
 	}
-	if cfg.ExpoPushEnabled() && expoURL.Scheme != "https" {
-		return Config{}, fmt.Errorf("enabled Expo push delivery requires an HTTPS endpoint")
+	if cfg.PushEnabled() && fcmURL.Scheme != "https" {
+		return Config{}, fmt.Errorf("enabled FCM push delivery requires an HTTPS endpoint")
 	}
-	expoReceiptsURL, expoReceiptsErr := url.ParseRequestURI(cfg.ExpoReceiptsURL)
-	if expoReceiptsErr != nil || (expoReceiptsURL.Scheme != "http" && expoReceiptsURL.Scheme != "https") || expoReceiptsURL.Host == "" || expoReceiptsURL.User != nil || expoReceiptsURL.RawQuery != "" || expoReceiptsURL.Fragment != "" {
-		return Config{}, fmt.Errorf("EXPO_RECEIPTS_URL must be an HTTP(S) URL without credentials, query or fragment")
-	}
-	if cfg.ExpoPushEnabled() && expoReceiptsURL.Scheme != "https" {
-		return Config{}, fmt.Errorf("enabled Expo receipt delivery requires an HTTPS endpoint")
-	}
-	if cfg.ExpoPushTimeout <= 0 || cfg.ExpoReceiptDelay <= 0 || cfg.ExpoReceiptRetry <= 0 || cfg.ExpoReceiptBatch < 1 || cfg.ExpoReceiptBatch > 1000 || cfg.ExpoReceiptTries < 1 || cfg.ExpoReceiptTries > 30 || cfg.NotificationPoll <= 0 || cfg.NotificationProject < 1 || cfg.NotificationProject > 500 || cfg.NotificationPushBatch < 1 || cfg.NotificationPushBatch > 100 || cfg.NotificationPushTries < 1 || cfg.NotificationPushTries > 20 {
+	if cfg.FCMTimeout <= 0 || cfg.FCMConcurrency < 1 || cfg.FCMConcurrency > 64 || cfg.NotificationPoll <= 0 || cfg.NotificationProject < 1 || cfg.NotificationProject > 500 || cfg.NotificationPushBatch < 1 || cfg.NotificationPushBatch > 100 || cfg.NotificationPushTries < 1 || cfg.NotificationPushTries > 20 {
 		return Config{}, fmt.Errorf("notification worker timeout, interval or batch limits are outside the safe range")
 	}
 	for _, cidr := range cfg.TrustedProxyCIDRs {
@@ -585,9 +568,11 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-func (c Config) MPesaEnabled() bool    { return c.MPesaEnvironment != "disabled" }
-func (c Config) StorageEnabled() bool  { return c.StorageMode == "s3" || c.StorageMode == "r2" }
-func (c Config) ExpoPushEnabled() bool { return c.ExpoAccessToken != "" }
+func (c Config) MPesaEnabled() bool   { return c.MPesaEnvironment != "disabled" }
+func (c Config) StorageEnabled() bool { return c.StorageMode == "s3" || c.StorageMode == "r2" }
+
+// PushEnabled reports whether a Firebase service account is configured.
+func (c Config) PushEnabled() bool { return c.FCM != nil }
 
 func value(key, fallback string) string {
 	if result := strings.TrimSpace(os.Getenv(key)); result != "" {

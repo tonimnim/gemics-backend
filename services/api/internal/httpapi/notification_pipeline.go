@@ -1,15 +1,11 @@
 package httpapi
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -100,73 +96,17 @@ type notificationPushClaim struct {
 	ActionURL      *string
 }
 
-type notificationReceiptClaim struct {
-	DeliveryID    string
-	PushTokenID   string
-	PushToken     string
-	SentTokenHash []byte
-	TicketID      string
-	Attempts      int
-	PushAttempts  int
-}
-
-type expoPushMessage struct {
-	To       string         `json:"to"`
-	Title    string         `json:"title"`
-	Body     string         `json:"body"`
-	Data     map[string]any `json:"data"`
-	Sound    string         `json:"sound,omitempty"`
-	Priority string         `json:"priority,omitempty"`
-}
-
-type expoPushTicket struct {
-	Status  string `json:"status"`
-	ID      string `json:"id"`
-	Details struct {
-		Error string `json:"error"`
-	} `json:"details"`
-}
-
-type expoPushResponse struct {
-	Data []expoPushTicket `json:"data"`
-}
-
-type expoReceiptResponse struct {
-	Data map[string]expoPushTicket `json:"data"`
-}
-
-type expoPushBatchError struct {
-	Code      string
-	Permanent bool
-}
-
 type notificationPushResolution struct {
 	State                 string
 	Code                  string
-	TicketID              string
+	MessageID             string
 	RetryAfter            time.Duration
 	RevokeRegisteredToken bool
-}
-
-type notificationReceiptResolution struct {
-	State                 string
-	Code                  string
-	RetryAfter            time.Duration
-	RevokeRegisteredToken bool
-}
-
-func (e *expoPushBatchError) Error() string { return e.Code }
-
-type expoPushClient struct {
-	endpoint         string
-	receiptsEndpoint string
-	accessToken      string
-	httpClient       *http.Client
 }
 
 // runNotificationPipeline is the single lifecycle hook for both workers. Inbox
-// projection never depends on Expo configuration; disabling outbound delivery
-// therefore cannot lose player-visible notifications.
+// projection never depends on Firebase configuration; disabling outbound
+// delivery therefore cannot lose player-visible notifications.
 func (s *Server) runNotificationPipeline(ctx context.Context) {
 	if s.db == nil || s.db.Writer == nil {
 		return
@@ -177,37 +117,18 @@ func (s *Server) runNotificationPipeline(ctx context.Context) {
 		defer workers.Done()
 		s.runNotificationProjector(ctx)
 	}()
-	if s.config.ExpoPushEnabled() {
-		client := &expoPushClient{
-			endpoint: s.config.ExpoPushURL, receiptsEndpoint: s.config.ExpoReceiptsURL,
-			accessToken: s.config.ExpoAccessToken,
-			httpClient:  &http.Client{Timeout: s.config.ExpoPushTimeout},
-		}
-		workers.Add(2)
+	if s.config.PushEnabled() {
+		client := newFCMClient(s.config.FCM, s.config.FCMAPIURL, s.config.FCMTimeout)
+		s.logger.Info("FCM push delivery enabled", "project", s.config.FCM.ProjectID)
+		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			s.runNotificationPushDelivery(ctx, client)
 		}()
-		go func() {
-			defer workers.Done()
-			s.runNotificationPushReceipts(ctx, client)
-		}()
 	} else {
-		s.logger.Info("Expo push delivery disabled; notification inbox projection remains enabled")
+		s.logger.Info("FCM push delivery disabled; notification inbox projection remains enabled")
 	}
 	workers.Wait()
-}
-
-func (s *Server) runNotificationPushReceipts(ctx context.Context, client *expoPushClient) {
-	for {
-		count, err := s.reconcileNotificationReceiptBatch(ctx, client)
-		if err != nil && ctx.Err() == nil {
-			s.logger.Warn("reconcile notification push receipt batch", "error", err)
-		}
-		if !waitForNotificationWork(ctx, s.config.NotificationPoll, count == s.config.ExpoReceiptBatch) {
-			return
-		}
-	}
 }
 
 func (s *Server) runNotificationProjector(ctx context.Context) {
@@ -222,7 +143,7 @@ func (s *Server) runNotificationProjector(ctx context.Context) {
 	}
 }
 
-func (s *Server) runNotificationPushDelivery(ctx context.Context, client *expoPushClient) {
+func (s *Server) runNotificationPushDelivery(ctx context.Context, client *fcmClient) {
 	for {
 		count, err := s.deliverNotificationPushBatch(ctx, client)
 		if err != nil && ctx.Err() == nil {
@@ -696,100 +617,61 @@ func resolveNotificationRecipients(ctx context.Context, tx pgx.Tx, event notific
 	return slices.Compact(result), nil
 }
 
-func (s *Server) deliverNotificationPushBatch(ctx context.Context, client *expoPushClient) (int, error) {
+func (s *Server) deliverNotificationPushBatch(ctx context.Context, client *fcmClient) (int, error) {
 	claims, err := s.claimNotificationPushBatch(ctx)
 	if err != nil || len(claims) == 0 {
 		return len(claims), err
 	}
-	messages := make([]expoPushMessage, 0, len(claims))
-	for _, claim := range claims {
-		data := map[string]any{}
-		if json.Unmarshal(claim.Data, &data) != nil {
-			data = map[string]any{}
-		}
-		data["notificationId"] = claim.NotificationID
-		if claim.ActionURL != nil {
-			data["actionUrl"] = *claim.ActionURL
-		}
-		messages = append(messages, expoPushMessage{To: claim.PushToken, Title: claim.Title,
-			Body: claim.Body, Data: data, Sound: "default", Priority: "high"})
+	results := make([]fcmSendResult, len(claims))
+	slots := make(chan struct{}, max(1, s.config.FCMConcurrency))
+	var sends sync.WaitGroup
+	for index, claim := range claims {
+		sends.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer func() {
+				<-slots
+				sends.Done()
+			}()
+			sendCtx, cancel := context.WithTimeout(ctx, s.config.FCMTimeout)
+			defer cancel()
+			results[index] = client.Send(sendCtx, claim.fcmMessage())
+		}()
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, s.config.ExpoPushTimeout)
-	tickets, sendErr := client.Send(sendCtx, messages)
-	cancel()
-	if err = s.persistNotificationPushResults(ctx, claims, tickets, sendErr); err != nil {
-		return len(claims), err
-	}
-	return len(claims), nil
+	sends.Wait()
+	return len(claims), s.persistNotificationPushResults(ctx, claims, results)
 }
 
-func (s *Server) reconcileNotificationReceiptBatch(ctx context.Context, client *expoPushClient) (int, error) {
-	claims, err := s.claimNotificationReceiptBatch(ctx)
-	if err != nil || len(claims) == 0 {
-		return len(claims), err
+// fcmMessage is the push for a claim: the inbox item's title, body and data,
+// plus notificationId and actionUrl. A chat's pushes replace each other on the
+// device.
+func (claim notificationPushClaim) fcmMessage() fcmMessage {
+	decoded := map[string]any{}
+	_ = json.Unmarshal(claim.Data, &decoded)
+	data := make(map[string]string, len(decoded)+2)
+	for key, value := range decoded {
+		if text, ok := value.(string); ok {
+			data[key] = text
+		} else {
+			data[key] = fmt.Sprint(value)
+		}
 	}
-	ticketIDs := make([]string, 0, len(claims))
-	for _, claim := range claims {
-		ticketIDs = append(ticketIDs, claim.TicketID)
+	data["notificationId"] = claim.NotificationID
+	if claim.ActionURL != nil {
+		data["actionUrl"] = *claim.ActionURL
 	}
-	receiptCtx, cancel := context.WithTimeout(ctx, s.config.ExpoPushTimeout)
-	receipts, receiptErr := client.Receipts(receiptCtx, ticketIDs)
-	cancel()
-	if err = s.persistNotificationReceiptResults(ctx, claims, receipts, receiptErr); err != nil {
-		return len(claims), err
+	message := fcmMessage{Token: claim.PushToken, Title: claim.Title, Body: claim.Body, Data: data}
+	if data["kind"] == "match.chat_message" && data["matchId"] != "" {
+		message.CollapseKey = "chat:" + data["matchId"]
 	}
-	return len(claims), nil
+	return message
 }
 
-func (s *Server) claimNotificationReceiptBatch(ctx context.Context) ([]notificationReceiptClaim, error) {
-	tx, err := s.db.Writer.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-	lease := max(notificationPushLeaseFloor, s.config.ExpoPushTimeout+15*time.Second)
-	rows, err := tx.Query(ctx, `WITH due AS (
-		SELECT delivery.id FROM notification_push_deliveries delivery
-		JOIN push_tokens token ON token.id=delivery.push_token_id
-		WHERE delivery.provider_ticket_id IS NOT NULL AND (
-			(delivery.state='accepted' AND delivery.receipt_next_attempt_at<=now()) OR
-			(delivery.state='checking_receipt' AND delivery.receipt_lease_until<=now()))
-		ORDER BY delivery.receipt_next_attempt_at,delivery.id
-		LIMIT $1 FOR UPDATE OF delivery,token SKIP LOCKED
-	), claimed AS (
-		UPDATE notification_push_deliveries delivery SET state='checking_receipt',
-			receipt_attempts=delivery.receipt_attempts+1,
-			receipt_lease_until=now()+($2::double precision * interval '1 second'),updated_at=now()
-		FROM due WHERE delivery.id=due.id
-		RETURNING delivery.id,delivery.push_token_id,delivery.provider_ticket_id,delivery.sent_token_hash,
-			delivery.receipt_attempts,delivery.attempts
-	)
-	SELECT claimed.id::text,claimed.push_token_id::text,token.expo_push_token,
-		claimed.sent_token_hash,claimed.provider_ticket_id,claimed.receipt_attempts,claimed.attempts
-	FROM claimed JOIN push_tokens token ON token.id=claimed.push_token_id
-	ORDER BY claimed.id`, s.config.ExpoReceiptBatch, lease.Seconds())
-	if err != nil {
-		return nil, err
-	}
-	claims := make([]notificationReceiptClaim, 0, s.config.ExpoReceiptBatch)
-	for rows.Next() {
-		var claim notificationReceiptClaim
-		if err = rows.Scan(&claim.DeliveryID, &claim.PushTokenID, &claim.PushToken,
-			&claim.SentTokenHash, &claim.TicketID, &claim.Attempts, &claim.PushAttempts); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		claims = append(claims, claim)
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
-	if err = tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return claims, nil
+// notificationPushLease covers a whole batch: its sends run FCM_CONCURRENCY at
+// a time, each within FCM_TIMEOUT.
+func (s *Server) notificationPushLease() time.Duration {
+	rounds := (s.config.NotificationPushBatch + max(1, s.config.FCMConcurrency) - 1) / max(1, s.config.FCMConcurrency)
+	return max(notificationPushLeaseFloor, s.config.FCMTimeout*time.Duration(max(1, rounds))+15*time.Second)
 }
 
 func (s *Server) claimNotificationPushBatch(ctx context.Context) ([]notificationPushClaim, error) {
@@ -818,7 +700,7 @@ func (s *Server) claimNotificationPushBatch(ctx context.Context) ([]notification
 			WHERE notification.id=delivery.notification_id),true))`); err != nil {
 		return nil, err
 	}
-	lease := max(notificationPushLeaseFloor, s.config.ExpoPushTimeout+15*time.Second)
+	lease := s.notificationPushLease()
 	rows, err := tx.Query(ctx, `WITH due AS (
 		SELECT delivery.id FROM notification_push_deliveries delivery
 		JOIN notifications notification ON notification.id=delivery.notification_id
@@ -841,7 +723,7 @@ func (s *Server) claimNotificationPushBatch(ctx context.Context) ([]notification
 		RETURNING delivery.id,delivery.notification_id,delivery.push_token_id,delivery.attempts
 	)
 	SELECT claimed.id::text,claimed.notification_id::text,claimed.push_token_id::text,
-		claimed.attempts,token.expo_push_token,notification.title,notification.body,
+		claimed.attempts,token.token,notification.title,notification.body,
 		notification.data,notification.action_url
 	FROM claimed
 	JOIN push_tokens token ON token.id=claimed.push_token_id
@@ -872,100 +754,29 @@ func (s *Server) claimNotificationPushBatch(ctx context.Context) ([]notification
 	return claims, nil
 }
 
-func (client *expoPushClient) Send(ctx context.Context, messages []expoPushMessage) ([]expoPushTicket, error) {
-	if len(messages) == 0 {
-		return nil, nil
-	}
-	if len(messages) > 100 {
-		return nil, &expoPushBatchError{Code: "batch_too_large", Permanent: true}
-	}
-	body, err := json.Marshal(messages)
-	if err != nil {
-		return nil, &expoPushBatchError{Code: "encode_request", Permanent: true}
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, &expoPushBatchError{Code: "invalid_endpoint", Permanent: true}
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+client.accessToken)
-	response, err := client.httpClient.Do(request)
-	if err != nil {
-		return nil, &expoPushBatchError{Code: "transport_error"}
-	}
-	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, notificationPushResponseLimit))
-		permanent := response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusTooManyRequests && response.StatusCode != http.StatusRequestTimeout
-		return nil, &expoPushBatchError{Code: fmt.Sprintf("expo_http_%d", response.StatusCode), Permanent: permanent}
-	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, notificationPushResponseLimit))
-	var result expoPushResponse
-	if err = decoder.Decode(&result); err != nil {
-		return nil, &expoPushBatchError{Code: "invalid_response"}
-	}
-	return result.Data, nil
-}
-
-func (client *expoPushClient) Receipts(ctx context.Context, ticketIDs []string) (map[string]expoPushTicket, error) {
-	if len(ticketIDs) == 0 {
-		return map[string]expoPushTicket{}, nil
-	}
-	if len(ticketIDs) > 1000 {
-		return nil, &expoPushBatchError{Code: "receipt_batch_too_large", Permanent: true}
-	}
-	body, err := json.Marshal(map[string]any{"ids": ticketIDs})
-	if err != nil {
-		return nil, &expoPushBatchError{Code: "encode_receipt_request", Permanent: true}
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.receiptsEndpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, &expoPushBatchError{Code: "invalid_receipts_endpoint", Permanent: true}
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+client.accessToken)
-	response, err := client.httpClient.Do(request)
-	if err != nil {
-		return nil, &expoPushBatchError{Code: "receipt_transport_error"}
-	}
-	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, notificationPushResponseLimit))
-		permanent := response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusTooManyRequests && response.StatusCode != http.StatusRequestTimeout
-		return nil, &expoPushBatchError{Code: fmt.Sprintf("expo_receipts_http_%d", response.StatusCode), Permanent: permanent}
-	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, notificationPushResponseLimit))
-	var result expoReceiptResponse
-	if err = decoder.Decode(&result); err != nil || result.Data == nil {
-		return nil, &expoPushBatchError{Code: "invalid_receipts_response"}
-	}
-	return result.Data, nil
-}
-
 func (s *Server) persistNotificationPushResults(ctx context.Context, claims []notificationPushClaim,
-	tickets []expoPushTicket, sendErr error) error {
+	results []fcmSendResult) error {
 	tx, err := s.db.Writer.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 	for index, claim := range claims {
-		resolution := resolveNotificationPush(claim, index, tickets, sendErr, s.config.NotificationPushTries)
-		if resolution.State == "accepted" {
+		resolution := resolveNotificationPush(claim, results[index], s.config.NotificationPushTries)
+		switch resolution.State {
+		case "delivered":
+			// FCM accepted the push; it holds and delivers it from here.
 			sentTokenHash := sha256.Sum256([]byte(claim.PushToken))
-			_, err = tx.Exec(ctx, `UPDATE notification_push_deliveries SET state='accepted',lease_until=NULL,
-				provider_ticket_id=$3,sent_token_hash=$4,last_error_code=NULL,accepted_at=now(),receipt_attempts=0,
-				receipt_next_attempt_at=now()+($5::double precision * interval '1 second'),
-				receipt_lease_until=NULL,delivered_at=NULL,updated_at=now()
+			_, err = tx.Exec(ctx, `UPDATE notification_push_deliveries SET state='delivered',lease_until=NULL,
+				provider_message_id=$3,sent_token_hash=$4,last_error_code=NULL,accepted_at=now(),delivered_at=now(),
+				updated_at=now()
 				WHERE id=$1 AND state='submitting' AND attempts=$2`, claim.DeliveryID, claim.Attempts,
-				resolution.TicketID, sentTokenHash[:], s.config.ExpoReceiptDelay.Seconds())
-		} else if resolution.State == "permanent_failure" {
+				resolution.MessageID, sentTokenHash[:])
+		case "permanent_failure":
 			_, err = tx.Exec(ctx, `UPDATE notification_push_deliveries SET state='permanent_failure',
 				lease_until=NULL,last_error_code=$3,updated_at=now()
 				WHERE id=$1 AND state='submitting' AND attempts=$2`, claim.DeliveryID, claim.Attempts, resolution.Code)
-		} else {
+		default:
 			_, err = tx.Exec(ctx, `UPDATE notification_push_deliveries SET state='retry',lease_until=NULL,
 				last_error_code=$3,next_attempt_at=now()+($4::double precision * interval '1 second'),updated_at=now()
 				WHERE id=$1 AND state='submitting' AND attempts=$2`, claim.DeliveryID, claim.Attempts,
@@ -974,9 +785,11 @@ func (s *Server) persistNotificationPushResults(ctx context.Context, claims []no
 		if err != nil {
 			return err
 		}
+		// Only the token that was sent to is revoked, never one the
+		// installation registered since.
 		if resolution.RevokeRegisteredToken {
 			if _, err = tx.Exec(ctx, `UPDATE push_tokens SET revoked_at=COALESCE(revoked_at,now()),updated_at=now()
-				WHERE id=$1 AND expo_push_token=$2`, claim.PushTokenID, claim.PushToken); err != nil {
+				WHERE id=$1 AND token=$2`, claim.PushTokenID, claim.PushToken); err != nil {
 				return err
 			}
 		}
@@ -984,145 +797,21 @@ func (s *Server) persistNotificationPushResults(ctx context.Context, claims []no
 	return tx.Commit(ctx)
 }
 
-func resolveNotificationPush(claim notificationPushClaim, index int, tickets []expoPushTicket,
-	sendErr error, maxAttempts int) notificationPushResolution {
-	result := notificationPushResolution{State: "retry", Code: "missing_ticket"}
-	permanent := false
-	if sendErr != nil {
-		var batchErr *expoPushBatchError
-		if errors.As(sendErr, &batchErr) {
-			result.Code, permanent = batchErr.Code, batchErr.Permanent
-		} else {
-			result.Code = "provider_error"
+func resolveNotificationPush(claim notificationPushClaim, result fcmSendResult, maxAttempts int) notificationPushResolution {
+	if result.Code == "" {
+		if len(result.MessageID) > 256 {
+			return notificationPushResolution{State: "permanent_failure", Code: "fcm_invalid_message_id"}
 		}
-	} else if index < len(tickets) {
-		ticket := tickets[index]
-		if ticket.Status == "ok" && strings.TrimSpace(ticket.ID) != "" {
-			if len(strings.TrimSpace(ticket.ID)) > 256 {
-				result.State, result.Code = "permanent_failure", "invalid_ticket_id"
-				return result
-			}
-			result.State, result.Code = "accepted", ""
-			result.TicketID = strings.TrimSpace(ticket.ID)
-			return result
-		}
-		result.Code = normalizeExpoTicketError(ticket.Details.Error)
-		result.RevokeRegisteredToken = result.Code == "DeviceNotRegistered"
-		permanent = expoTicketErrorIsPermanent(result.Code)
+		return notificationPushResolution{State: "delivered", MessageID: result.MessageID}
 	}
-	if permanent || claim.Attempts >= maxAttempts {
-		result.State = "permanent_failure"
-		return result
+	resolution := notificationPushResolution{State: "retry", Code: result.Code, RevokeRegisteredToken: result.Unregistered}
+	if result.Permanent || claim.Attempts >= maxAttempts {
+		resolution.State = "permanent_failure"
+		return resolution
 	}
-	result.RetryAfter = notificationPushRetryDelay(claim.Attempts, claim.DeliveryID)
-	return result
-}
-
-func (s *Server) persistNotificationReceiptResults(ctx context.Context, claims []notificationReceiptClaim,
-	receipts map[string]expoPushTicket, receiptErr error) error {
-	tx, err := s.db.Writer.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-	for _, claim := range claims {
-		resolution := resolveNotificationReceipt(claim, receipts, receiptErr,
-			s.config.ExpoReceiptTries, s.config.NotificationPushTries, s.config.ExpoReceiptRetry)
-		switch resolution.State {
-		case "delivered":
-			_, err = tx.Exec(ctx, `UPDATE notification_push_deliveries SET state='delivered',
-				receipt_lease_until=NULL,receipt_next_attempt_at=NULL,last_error_code=NULL,
-				delivered_at=now(),updated_at=now()
-				WHERE id=$1 AND state='checking_receipt' AND receipt_attempts=$2`,
-				claim.DeliveryID, claim.Attempts)
-		case "retry":
-			// The receipt explicitly states that Expo did not deliver this push.
-			// Only rate limiting is safe to resend; the old ticket is cleared so
-			// the send worker creates a fresh provider request.
-			_, err = tx.Exec(ctx, `UPDATE notification_push_deliveries SET state='retry',
-				lease_until=NULL,next_attempt_at=now()+($3::double precision * interval '1 second'),
-				provider_ticket_id=NULL,sent_token_hash=NULL,accepted_at=NULL,receipt_attempts=0,
-				receipt_next_attempt_at=NULL,receipt_lease_until=NULL,delivered_at=NULL,
-				last_error_code=$4,updated_at=now()
-				WHERE id=$1 AND state='checking_receipt' AND receipt_attempts=$2`,
-				claim.DeliveryID, claim.Attempts, resolution.RetryAfter.Seconds(), resolution.Code)
-		case "accepted":
-			_, err = tx.Exec(ctx, `UPDATE notification_push_deliveries SET state='accepted',
-				receipt_lease_until=NULL,
-				receipt_next_attempt_at=now()+($3::double precision * interval '1 second'),
-				last_error_code=$4,updated_at=now()
-				WHERE id=$1 AND state='checking_receipt' AND receipt_attempts=$2`,
-				claim.DeliveryID, claim.Attempts, resolution.RetryAfter.Seconds(), resolution.Code)
-		default:
-			_, err = tx.Exec(ctx, `UPDATE notification_push_deliveries SET state='permanent_failure',
-				receipt_lease_until=NULL,receipt_next_attempt_at=NULL,last_error_code=$3,updated_at=now()
-				WHERE id=$1 AND state='checking_receipt' AND receipt_attempts=$2`,
-				claim.DeliveryID, claim.Attempts, resolution.Code)
-		}
-		if err != nil {
-			return err
-		}
-		if resolution.RevokeRegisteredToken {
-			if _, err = tx.Exec(ctx, `UPDATE push_tokens SET revoked_at=COALESCE(revoked_at,now()),updated_at=now()
-				WHERE id=$1 AND expo_push_token=$2`, claim.PushTokenID, claim.PushToken); err != nil {
-				return err
-			}
-		}
-	}
-	return tx.Commit(ctx)
-}
-
-func resolveNotificationReceipt(claim notificationReceiptClaim, receipts map[string]expoPushTicket,
-	receiptErr error, maxReceiptAttempts, maxPushAttempts int, retryBase time.Duration) notificationReceiptResolution {
-	result := notificationReceiptResolution{State: "accepted", Code: "receipt_not_ready"}
-	permanent := false
-	if receiptErr != nil {
-		var batchErr *expoPushBatchError
-		if errors.As(receiptErr, &batchErr) {
-			result.Code, permanent = batchErr.Code, batchErr.Permanent
-		} else {
-			result.Code = "receipt_provider_error"
-		}
-	} else if receipt, exists := receipts[claim.TicketID]; exists {
-		if receipt.Status == "ok" {
-			result.State, result.Code = "delivered", ""
-			return result
-		}
-		if receipt.Status != "error" {
-			result.Code = "unknown_receipt_status"
-		} else {
-			result.Code = normalizeExpoTicketError(receipt.Details.Error)
-			currentTokenHash := sha256.Sum256([]byte(claim.PushToken))
-			result.RevokeRegisteredToken = result.Code == "DeviceNotRegistered" &&
-				bytes.Equal(currentTokenHash[:], claim.SentTokenHash)
-			if result.Code == "MessageRateExceeded" && claim.PushAttempts < maxPushAttempts {
-				result.State = "retry"
-				result.RetryAfter = notificationPushRetryDelay(claim.PushAttempts, claim.DeliveryID)
-				return result
-			}
-			permanent = true
-		}
-	}
-	if permanent || claim.Attempts >= maxReceiptAttempts {
-		result.State = "permanent_failure"
-		return result
-	}
-	result.RetryAfter = notificationReceiptRetryDelay(claim.Attempts, claim.DeliveryID, retryBase)
-	return result
-}
-
-func normalizeExpoTicketError(value string) string {
-	switch strings.TrimSpace(value) {
-	case "DeviceNotRegistered", "MessageTooBig", "MessageRateExceeded", "MismatchSenderId", "InvalidCredentials":
-		return strings.TrimSpace(value)
-	default:
-		return "unknown_ticket_error"
-	}
-}
-
-func expoTicketErrorIsPermanent(code string) bool {
-	return code == "DeviceNotRegistered" || code == "MessageTooBig" ||
-		code == "MismatchSenderId" || code == "InvalidCredentials"
+	resolution.RetryAfter = min(max(result.RetryAfter, notificationPushRetryDelay(claim.Attempts, claim.DeliveryID)),
+		notificationPushRetryMaximum)
+	return resolution
 }
 
 func notificationPushRetryDelay(attempt int, deliveryID string) time.Duration {
@@ -1139,27 +828,5 @@ func notificationPushRetryDelay(attempt int, deliveryID string) time.Duration {
 	// scheduling deterministic and straightforward to test.
 	fraction := float64(binary.BigEndian.Uint16(digest[:2])) / 65535
 	delay := time.Duration(float64(base) * (0.75 + fraction*0.5))
-	return min(delay, notificationPushRetryMaximum)
-}
-
-func notificationReceiptRetryDelay(attempt int, deliveryID string, base time.Duration) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-	if base <= 0 {
-		base = 30 * time.Second
-	}
-	exponent := min(attempt-1, 10)
-	multiplier := time.Duration(1 << exponent)
-	delayBase := notificationPushRetryMaximum
-	if base < notificationPushRetryMaximum && base <= notificationPushRetryMaximum/multiplier {
-		delayBase = base * multiplier
-	}
-	if delayBase > notificationPushRetryMaximum {
-		delayBase = notificationPushRetryMaximum
-	}
-	digest := sha256.Sum256([]byte("receipt:" + deliveryID))
-	fraction := float64(binary.BigEndian.Uint16(digest[:2])) / 65535
-	delay := time.Duration(float64(delayBase) * (0.75 + fraction*0.5))
 	return min(delay, notificationPushRetryMaximum)
 }

@@ -102,8 +102,8 @@ func TestPushTokenRegistrationBindsTheCallersLiveSession(t *testing.T) {
 		"WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL FOR SHARE`, current.SessionID, current.UserID)",
 		`writeError(w, http.StatusUnauthorized, "invalid_session"`,
 		"pg_advisory_xact_lock(hashtextextended($1, 910310))",
-		"WHERE expo_push_token=$1 AND (user_id<>$2 OR device_id<>$3) AND revoked_at IS NULL",
-		"(user_id,device_id,expo_push_token,platform,app_version,user_agent,session_id)",
+		"WHERE token=$1 AND (user_id<>$2 OR device_id<>$3) AND revoked_at IS NULL",
+		"(user_id,device_id,token,platform,app_version,user_agent,session_id)",
 		"session_id=EXCLUDED.session_id,last_seen_at=now(),revoked_at=NULL",
 		"func (s *Server) revokePushToken")
 	assertFileOrder(t, "account_security_handlers.go", "func (s *Server) executeAccountDeletion",
@@ -142,7 +142,7 @@ func TestIntegrationPushTokensStopWithTheirSession(t *testing.T) {
 	pool := openMigratedIntegrationDatabase(t)
 	server := &Server{db: &database.Cluster{Writer: pool, Reader: pool},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		config: config.Config{NotificationProject: 100, NotificationPushBatch: 100, ExpoPushTimeout: time.Second}}
+		config: config.Config{NotificationProject: 100, NotificationPushBatch: 100, FCMTimeout: time.Second, FCMConcurrency: 8}}
 	userID := pushSessionIntegrationUser(t, pool)
 	phone, laptop, tablet := pushSessionIntegrationSession(t, pool, userID),
 		pushSessionIntegrationSession(t, pool, userID), pushSessionIntegrationSession(t, pool, userID)
@@ -237,7 +237,7 @@ func pushSessionIntegrationRequest(t *testing.T, method, target, body, userID, s
 func pushSessionIntegrationRegister(t *testing.T, server *Server, userID, sessionID, device string, wantStatus int) string {
 	t.Helper()
 	body, err := json.Marshal(map[string]string{"deviceId": device, "platform": "android",
-		"token": "ExpoPushToken[" + device + "-installation-000000000]"})
+		"token": device + "-installation:APA91b" + strings.Repeat("x", 140)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,12 @@
 package config
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"strings"
 	"testing"
 	"time"
@@ -156,47 +162,103 @@ func TestProductionStorageRequiresHTTPS(t *testing.T) {
 	}
 }
 
-func TestExpoPushIsDisabledWithoutAccessToken(t *testing.T) {
-	t.Setenv("EXPO_ACCESS_TOKEN", "")
+func TestPushIsDisabledWithoutFCMCredentials(t *testing.T) {
+	t.Setenv("FCM_CREDENTIALS_JSON", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ExpoPushEnabled() {
-		t.Fatal("Expo push delivery must stay disabled until credentials are configured")
+	if cfg.PushEnabled() {
+		t.Fatal("push delivery must stay disabled until a Firebase service account is configured")
 	}
-	if cfg.NotificationPushBatch != 100 {
-		t.Fatalf("notification batch = %d, want Expo's maximum of 100", cfg.NotificationPushBatch)
+	if cfg.NotificationPushBatch != 100 || cfg.FCMConcurrency != 8 || cfg.FCMTimeout != 10*time.Second ||
+		cfg.FCMAPIURL != "https://fcm.googleapis.com" {
+		t.Fatalf("push defaults = batch %d concurrency %d timeout %s url %s", cfg.NotificationPushBatch,
+			cfg.FCMConcurrency, cfg.FCMTimeout, cfg.FCMAPIURL)
 	}
-	if cfg.ExpoReceiptBatch != 300 || cfg.ExpoReceiptDelay != 30*time.Second {
-		t.Fatalf("receipt defaults = batch %d delay %s", cfg.ExpoReceiptBatch, cfg.ExpoReceiptDelay)
+}
+
+// testFCMServiceAccount returns a service account JSON file with a fresh key.
+func testFCMServiceAccount(t *testing.T, mutate func(map[string]any)) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := map[string]any{
+		"type": "service_account", "project_id": "ozone-test", "private_key_id": "key-1",
+		"private_key":  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
+		"client_email": "firebase-adminsdk@ozone-test.iam.gserviceaccount.com",
+		"token_uri":    "https://oauth2.googleapis.com/token",
+	}
+	if mutate != nil {
+		mutate(file)
+	}
+	encoded, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
+}
+
+func TestFCMCredentialsAreReadAsJSONOrBase64(t *testing.T) {
+	account := testFCMServiceAccount(t, nil)
+	for name, raw := range map[string]string{"json": account, "base64": base64.StdEncoding.EncodeToString([]byte(account))} {
+		t.Setenv("FCM_CREDENTIALS_JSON", raw)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("%s credentials refused: %v", name, err)
+		}
+		if !cfg.PushEnabled() || cfg.FCM.ProjectID != "ozone-test" || cfg.FCM.PrivateKey == nil ||
+			cfg.FCM.ClientEmail != "firebase-adminsdk@ozone-test.iam.gserviceaccount.com" {
+			t.Fatalf("%s credentials = %+v", name, cfg.FCM)
+		}
+	}
+	t.Setenv("FCM_PROJECT_ID", "ozone-other")
+	if cfg, err := Load(); err != nil || cfg.FCM.ProjectID != "ozone-other" {
+		t.Fatalf("FCM_PROJECT_ID override = %v, %v", cfg.FCM, err)
+	}
+	t.Setenv("FCM_PROJECT_ID", "")
+	for name, raw := range map[string]string{
+		"not json":     "{not json",
+		"not base64":   "%%%",
+		"user account": testFCMServiceAccount(t, func(file map[string]any) { file["type"] = "authorized_user" }),
+		"no key":       testFCMServiceAccount(t, func(file map[string]any) { file["private_key"] = "" }),
+		"http token":   testFCMServiceAccount(t, func(file map[string]any) { file["token_uri"] = "http://oauth.example.com/token" }),
+		"no project":   testFCMServiceAccount(t, func(file map[string]any) { file["project_id"] = "" }),
+	} {
+		t.Setenv("FCM_CREDENTIALS_JSON", raw)
+		_, err := Load()
+		if err == nil {
+			t.Fatalf("%s credentials accepted", name)
+		}
+		if strings.Contains(err.Error(), "PRIVATE KEY") {
+			t.Fatalf("%s error quotes the key: %v", name, err)
+		}
 	}
 }
 
 func TestNotificationWorkerRejectsUnsafeConfiguration(t *testing.T) {
 	t.Setenv("NOTIFICATION_PUSH_BATCH", "101")
 	if _, err := Load(); err == nil {
-		t.Fatal("Expo batches above 100 must be rejected")
+		t.Fatal("push batches above 100 must be rejected")
 	}
 	t.Setenv("NOTIFICATION_PUSH_BATCH", "100")
-	t.Setenv("APP_ENV", "production")
-	t.Setenv("GOOGLE_CLIENT_IDS", "android-client.apps.googleusercontent.com")
-	t.Setenv("DATABASE_WRITE_URL", "postgres://writer.example/gamics")
-	t.Setenv("DATABASE_READ_URL", "postgres://reader.example/gamics")
-	t.Setenv("AUTH_TOKEN_SECRET", "12345678901234567890123456789012")
-	t.Setenv("OTP_HASH_SECRET", "abcdefghijklmnopqrstuvwxyz123456")
-	t.Setenv("EMAIL_MODE", "smtp")
-	t.Setenv("SMTP_HOST", "smtp.example.com")
-	t.Setenv("SMTP_FROM", "login@example.com")
-	t.Setenv("EXPO_ACCESS_TOKEN", "production-token")
-	t.Setenv("EXPO_PUSH_URL", "http://push.example.com/send")
-	if _, err := Load(); err == nil {
-		t.Fatal("enabled Expo delivery must reject plaintext HTTP")
+	for _, concurrency := range []string{"0", "65"} {
+		t.Setenv("FCM_CONCURRENCY", concurrency)
+		if _, err := Load(); err == nil {
+			t.Fatalf("FCM_CONCURRENCY=%s accepted", concurrency)
+		}
 	}
-	t.Setenv("EXPO_PUSH_URL", "https://push.example.com/send")
-	t.Setenv("EXPO_RECEIPTS_URL", "http://push.example.com/receipts")
+	t.Setenv("FCM_CONCURRENCY", "8")
+	t.Setenv("FCM_CREDENTIALS_JSON", testFCMServiceAccount(t, nil))
+	t.Setenv("FCM_API_URL", "http://fcm.example.com")
 	if _, err := Load(); err == nil {
-		t.Fatal("enabled Expo receipt checks must reject plaintext HTTP")
+		t.Fatal("enabled FCM delivery must reject plaintext HTTP")
 	}
 }
 

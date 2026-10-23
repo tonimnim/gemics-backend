@@ -15,7 +15,13 @@ import (
 
 const notificationCursorLifetime = 24 * time.Hour
 
-var expoPushTokenPattern = regexp.MustCompile(`^(?:ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{20,480}\]$`)
+var fcmTokenCharacters = regexp.MustCompile(`^[A-Za-z0-9_:.-]+$`)
+
+// validFCMToken accepts a Firebase Cloud Messaging registration token, as the
+// Android and iOS FCM SDKs return it.
+func validFCMToken(token string) bool {
+	return len(token) >= 32 && len(token) <= 4096 && fcmTokenCharacters.MatchString(token)
+}
 
 type pushTokenInput struct {
 	DeviceID   string `json:"deviceId"`
@@ -68,8 +74,8 @@ func (s *Server) upsertPushToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_device_id", "Device ID must be between 1 and 160 characters.")
 		return
 	}
-	if !expoPushTokenPattern.MatchString(input.Token) {
-		writeError(w, http.StatusBadRequest, "invalid_push_token", "Provide a valid Expo push token.")
+	if !validFCMToken(input.Token) {
+		writeError(w, http.StatusBadRequest, "invalid_push_token", "Provide the installation's Firebase Cloud Messaging token.")
 		return
 	}
 	if input.Platform != "android" && input.Platform != "ios" {
@@ -114,15 +120,15 @@ func (s *Server) upsertPushToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `UPDATE push_tokens SET revoked_at=COALESCE(revoked_at,now()),updated_at=now()
-			WHERE expo_push_token=$1 AND (user_id<>$2 OR device_id<>$3) AND revoked_at IS NULL`, input.Token, current.UserID, input.DeviceID)
+			WHERE token=$1 AND (user_id<>$2 OR device_id<>$3) AND revoked_at IS NULL`, input.Token, current.UserID, input.DeviceID)
 	}
 	var result pushTokenView
 	if err == nil {
 		err = tx.QueryRow(r.Context(), `INSERT INTO push_tokens
-			(user_id,device_id,expo_push_token,platform,app_version,user_agent,session_id)
+			(user_id,device_id,token,platform,app_version,user_agent,session_id)
 			VALUES ($1,$2,$3,$4,$5,$6,$7)
 			ON CONFLICT (user_id,device_id) DO UPDATE SET
-				expo_push_token=EXCLUDED.expo_push_token,platform=EXCLUDED.platform,
+				token=EXCLUDED.token,platform=EXCLUDED.platform,
 				app_version=EXCLUDED.app_version,user_agent=EXCLUDED.user_agent,
 				session_id=EXCLUDED.session_id,last_seen_at=now(),revoked_at=NULL,updated_at=now()
 			RETURNING id,device_id,platform,app_version,last_seen_at,created_at,updated_at`,

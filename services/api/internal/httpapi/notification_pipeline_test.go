@@ -3,12 +3,9 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"maps"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -646,133 +643,6 @@ func notificationIntegrationExpect(t *testing.T, pool *pgxpool.Pool, eventID, di
 	slices.Sort(want)
 	if gotDisposition != disposition || recipientCount != len(want) || !slices.Equal(got, want) {
 		t.Fatalf("event %s: %s to %d %v, want %s to %v", eventID, gotDisposition, recipientCount, got, disposition, want)
-	}
-}
-
-func TestExpoPushClientParsesTicketsAndAuthenticates(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer private-expo-access" {
-			t.Errorf("authorization header was not set")
-		}
-		var messages []expoPushMessage
-		if err := json.NewDecoder(r.Body).Decode(&messages); err != nil {
-			t.Fatal(err)
-		}
-		if len(messages) != 2 || messages[0].To != "ExpoPushToken[aaaaaaaaaaaaaaaaaaaa]" {
-			t.Fatalf("messages = %#v", messages)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"status":"ok","id":"ticket-1"},{"status":"error","details":{"error":"DeviceNotRegistered"}}]}`))
-	}))
-	defer server.Close()
-	client := &expoPushClient{endpoint: server.URL, accessToken: "private-expo-access", httpClient: server.Client()}
-	tickets, err := client.Send(context.Background(), []expoPushMessage{
-		{To: "ExpoPushToken[aaaaaaaaaaaaaaaaaaaa]", Title: "one", Body: "body", Data: map[string]any{}},
-		{To: "ExpoPushToken[bbbbbbbbbbbbbbbbbbbb]", Title: "two", Body: "body", Data: map[string]any{}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tickets) != 2 || tickets[0].ID != "ticket-1" || normalizeExpoTicketError(tickets[1].Details.Error) != "DeviceNotRegistered" {
-		t.Fatalf("tickets = %#v", tickets)
-	}
-}
-
-func TestExpoReceiptClientMapsReceiptsByTicketID(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer private-expo-access" {
-			t.Errorf("authorization header was not set")
-		}
-		var request struct {
-			IDs []string `json:"ids"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Error(err)
-			return
-		}
-		if len(request.IDs) != 2 || request.IDs[0] != "ticket-1" {
-			t.Errorf("receipt IDs = %#v", request.IDs)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"ticket-2":{"status":"error","details":{"error":"DeviceNotRegistered"}},"ticket-1":{"status":"ok"}}}`))
-	}))
-	defer server.Close()
-	client := &expoPushClient{receiptsEndpoint: server.URL, accessToken: "private-expo-access", httpClient: server.Client()}
-	receipts, err := client.Receipts(context.Background(), []string{"ticket-1", "ticket-2"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if receipts["ticket-1"].Status != "ok" || receipts["ticket-2"].Details.Error != "DeviceNotRegistered" {
-		t.Fatalf("receipts = %#v", receipts)
-	}
-}
-
-func TestExpoPushClientClassifiesProviderResponses(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "credentials are invalid and must not be logged", http.StatusUnauthorized)
-	}))
-	defer server.Close()
-	client := &expoPushClient{endpoint: server.URL, accessToken: "secret", httpClient: server.Client()}
-	_, err := client.Send(context.Background(), []expoPushMessage{{To: "token", Data: map[string]any{}}})
-	var batchErr *expoPushBatchError
-	if err == nil || !strings.Contains(err.Error(), "401") || !errorsAs(err, &batchErr) || !batchErr.Permanent {
-		t.Fatalf("401 classification = %#v", err)
-	}
-	if strings.Contains(err.Error(), "credentials") || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("provider response or token leaked into error: %v", err)
-	}
-}
-
-func TestPushResolutionRevokesOnlyDeviceNotRegistered(t *testing.T) {
-	claim := notificationPushClaim{DeliveryID: testNotificationEventID, Attempts: 1}
-	ticket := expoPushTicket{Status: "error"}
-	ticket.Details.Error = "DeviceNotRegistered"
-	resolution := resolveNotificationPush(claim, 0, []expoPushTicket{ticket}, nil, 8)
-	if resolution.State != "permanent_failure" || !resolution.RevokeRegisteredToken {
-		t.Fatalf("DeviceNotRegistered resolution = %+v", resolution)
-	}
-	ticket.Details.Error = "MessageRateExceeded"
-	resolution = resolveNotificationPush(claim, 0, []expoPushTicket{ticket}, nil, 8)
-	if resolution.State != "retry" || resolution.RevokeRegisteredToken || resolution.RetryAfter <= 0 {
-		t.Fatalf("rate-limit resolution = %+v", resolution)
-	}
-}
-
-func TestReceiptResolutionRequiresFinalProviderReceipt(t *testing.T) {
-	registeredToken := "ExpoPushToken[current-installation]"
-	registeredHash := sha256.Sum256([]byte(registeredToken))
-	claim := notificationReceiptClaim{
-		DeliveryID: testNotificationEventID, TicketID: "ticket-1",
-		PushToken: registeredToken, SentTokenHash: registeredHash[:],
-		Attempts: 1, PushAttempts: 1,
-	}
-	ok := expoPushTicket{Status: "ok"}
-	resolution := resolveNotificationReceipt(claim, map[string]expoPushTicket{"ticket-1": ok}, nil, 12, 8, 30*time.Second)
-	if resolution.State != "delivered" {
-		t.Fatalf("successful receipt = %+v", resolution)
-	}
-	resolution = resolveNotificationReceipt(claim, map[string]expoPushTicket{}, nil, 12, 8, 30*time.Second)
-	if resolution.State != "accepted" || resolution.RetryAfter <= 0 {
-		t.Fatalf("missing receipt must remain pending: %+v", resolution)
-	}
-	disabled := expoPushTicket{Status: "error"}
-	disabled.Details.Error = "DeviceNotRegistered"
-	resolution = resolveNotificationReceipt(claim, map[string]expoPushTicket{"ticket-1": disabled}, nil, 12, 8, 30*time.Second)
-	if resolution.State != "permanent_failure" || !resolution.RevokeRegisteredToken {
-		t.Fatalf("unregistered receipt = %+v", resolution)
-	}
-	rotatedHash := sha256.Sum256([]byte("ExpoPushToken[previous-installation]"))
-	claim.SentTokenHash = rotatedHash[:]
-	resolution = resolveNotificationReceipt(claim, map[string]expoPushTicket{"ticket-1": disabled}, nil, 12, 8, 30*time.Second)
-	if resolution.RevokeRegisteredToken {
-		t.Fatal("a receipt for a rotated token must not revoke the replacement token")
-	}
-	claim.SentTokenHash = registeredHash[:]
-	rateLimited := expoPushTicket{Status: "error"}
-	rateLimited.Details.Error = "MessageRateExceeded"
-	resolution = resolveNotificationReceipt(claim, map[string]expoPushTicket{"ticket-1": rateLimited}, nil, 12, 8, 30*time.Second)
-	if resolution.State != "retry" || resolution.RetryAfter <= 0 {
-		t.Fatalf("rate-limited receipt = %+v", resolution)
 	}
 }
 
