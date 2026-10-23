@@ -3,6 +3,7 @@ package httpapi
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeKenyanPhone(t *testing.T) {
@@ -35,9 +36,24 @@ func TestNumericMPesaCallbackMetadataPreservesDigits(t *testing.T) {
 	}
 }
 
-func TestPaymentQueryBackoffIsBounded(t *testing.T) {
-	if paymentQueryBackoff(0).Seconds() != 10 || paymentQueryBackoff(100).Minutes() != 5 {
-		t.Fatal("unexpected query backoff bounds")
+// A payment whose callback never comes reaches review within the ten minutes
+// the app polls for: twelve queries, the first 10 seconds after the prompt,
+// each up to one reconciler tick late.
+func TestPaymentQueriesReachReviewWithinTenMinutes(t *testing.T) {
+	worst := 10*time.Second + paymentReconcileMaxTries*paymentReconcileInterval
+	for attempt := range paymentReconcileMaxTries - 1 {
+		worst += paymentQueryBackoff(attempt)
+	}
+	if worst >= 10*time.Minute {
+		t.Fatalf("a stuck payment can take %s to reach review", worst)
+	}
+	if paymentQueryBackoff(0) < 30*time.Second || paymentQueryBackoff(0) != paymentQueryDelay(0) ||
+		paymentQueryBackoff(100) != paymentQueryDelay(100) {
+		t.Fatal("polling and the reconciler must share one schedule, floored above the provider timeout")
+	}
+	source := readSourceFile(t, "payment_reconciler.go")
+	if !strings.Contains(source, "THEN interval '30 seconds'") || !strings.Contains(source, "ELSE interval '40 seconds' END") {
+		t.Fatal("the reconciler's SQL schedule no longer matches paymentQueryDelay")
 	}
 }
 

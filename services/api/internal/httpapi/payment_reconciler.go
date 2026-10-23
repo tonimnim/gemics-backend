@@ -5,11 +5,29 @@ import (
 	"time"
 )
 
+// A payment whose M-Pesa callback never comes is queried about 10 seconds
+// after the prompt, then 30 seconds later, then every 40 seconds. After the
+// twelfth query it goes to staff review, about seven and a half minutes in and
+// always within ten, so a checkout screen that polls for ten minutes sees it
+// settle. A late callback still settles a payment under review.
 const (
-	paymentReconcileInterval = 15 * time.Second
+	paymentReconcileInterval = 10 * time.Second
 	paymentReconcileBatch    = 25
 	paymentReconcileMaxTries = 12
+	// paymentInitiationGrace is how long a payment may stay initiating, before
+	// its STK request was saved, until it goes to review.
+	paymentInitiationGrace = 2 * time.Minute
 )
+
+// paymentQueryDelay is the wait after the attempt-th query. The reconciler's
+// SQL computes the same schedule. Its 30-second floor exceeds the 15-second
+// provider timeout, so no other replica claims a query in flight.
+func paymentQueryDelay(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 30 * time.Second
+	}
+	return 40 * time.Second
+}
 
 type reconciliationClaim struct {
 	ID                string
@@ -42,6 +60,7 @@ func (s *Server) reconcileDuePayments(ctx context.Context) {
 	// attempt. Without this sweep they would never make another provider call
 	// and could remain pending indefinitely.
 	s.escalateExhaustedPaymentReconciliations(ctx)
+	s.escalateInterruptedPaymentInitiations(ctx)
 	rows, err := s.db.Writer.Query(ctx, `WITH due AS (
 		SELECT id FROM payment_intents
 		WHERE status IN ('pending','callback_received')
@@ -52,10 +71,9 @@ func (s *Server) reconcileDuePayments(ctx context.Context) {
 		LIMIT $1 FOR UPDATE SKIP LOCKED
 	), claimed AS (
 		UPDATE payment_intents payment SET query_attempts=payment.query_attempts+1,last_query_at=now(),
-			-- The minimum lease exceeds the default 15-second provider timeout,
-			-- preventing another replica from claiming the same query in flight.
-			next_query_at=now()+LEAST(interval '5 minutes',interval '30 seconds' *
-				power(2::double precision,LEAST(payment.query_attempts,5)::double precision)),updated_at=now()
+			-- paymentQueryDelay: 30 seconds after the first query, then 40.
+			next_query_at=now()+CASE WHEN payment.query_attempts=0 THEN interval '30 seconds'
+				ELSE interval '40 seconds' END,updated_at=now()
 		FROM due WHERE payment.id=due.id
 		RETURNING payment.id,payment.checkout_request_id,payment.query_attempts
 	) SELECT id,checkout_request_id,query_attempts FROM claimed`, paymentReconcileBatch, paymentReconcileMaxTries)
@@ -92,6 +110,18 @@ func (s *Server) reconcileDuePayments(ctx context.Context) {
 			continue
 		}
 		s.applyQueryResult(ctx, claim.ID, response)
+	}
+}
+
+// escalateInterruptedPaymentInitiations sends to review a payment that never
+// got its STK request saved, as polling it does after 30 seconds, so one whose
+// payer stopped polling is not left initiating.
+func (s *Server) escalateInterruptedPaymentInitiations(ctx context.Context) {
+	_, err := s.db.Writer.Exec(ctx, `UPDATE payment_intents SET status='review',updated_at=now(),
+		provider_result_description='STK initiation interrupted before checkout ID was stored'
+		WHERE status='initiating' AND updated_at<now()-$1::interval`, paymentInitiationGrace.String())
+	if err != nil {
+		s.logger.Warn("escalate interrupted M-Pesa initiations", "error", err)
 	}
 }
 

@@ -1032,7 +1032,7 @@ func paymentQueryBackoff(attempt int) time.Duration {
 	if attempt > 5 {
 		attempt = 5
 	}
-	return minDuration(5*time.Minute, 10*time.Second*time.Duration(1<<attempt))
+	return paymentQueryDelay(attempt)
 }
 
 func truncate(value string, maximum int) string {
