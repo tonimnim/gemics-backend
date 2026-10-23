@@ -3142,7 +3142,7 @@ paths:
       operationId: upsertPushToken
       tags:
         - Devices
-      summary: Register or rotate the current installation's Expo push token.
+      summary: Register or rotate the current installation's Firebase Cloud Messaging token.
       description: >-
         deviceId is the stable app-installation identifier. Repeating this call is idempotent for that player/device
         pair. A new token replaces the old one, and a provider token previously assigned to another installation or
@@ -3171,9 +3171,10 @@ paths:
                   maxLength: 160
                 token:
                   type: string
-                  minLength: 20
-                  maxLength: 512
-                  pattern: ^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{20,480}\]$
+                  minLength: 32
+                  maxLength: 4096
+                  pattern: ^[A-Za-z0-9_:.-]+$
+                  description: The registration token the FCM SDK returns, on Android and on iOS.
                 platform:
                   type: string
                   enum:
@@ -8974,8 +8975,8 @@ components:
       type: object
       additionalProperties: false
       description: >-
-        One inbox item, projected from one platform event. Push-enabled kinds are also sent through Expo while the
-        matching preference is on, with the same title and body; the push data object is PushNotificationData.
+        One inbox item, projected from one platform event. Push-enabled kinds are also sent through Firebase Cloud
+        Messaging while the matching preference is on, with the same title and body; the push data object is PushNotificationData.
         docs/mobile-api-requirements.md lists every kind with its delivery, preference, title, actionUrl, data keys
         and app screen.
       required:
@@ -9053,8 +9054,8 @@ components:
       type: object
       additionalProperties: true
       description: >-
-        The data object of an Expo push. No operation returns it: it is the pushed Notification's data plus
-        notificationId, plus actionUrl when that is not null. When the push is tapped, call POST
+        The data object of an FCM push; every value is a string. No operation returns it: it is the pushed
+        Notification's data plus notificationId, plus actionUrl when that is not null. When the push is tapped, call POST
         /v1/me/notifications/{notificationId}/read, then open the screen for kind with the ids in the payload.
       required:
         - notificationId
