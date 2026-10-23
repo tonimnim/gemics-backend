@@ -57,7 +57,7 @@ services:
       SMTP_REQUIRE_TLS: "false"
       FX_RATES_URL: "off"
       MPESA_ENVIRONMENT: disabled
-      EXPO_ACCESS_TOKEN: ""
+      FCM_CREDENTIALS_JSON: ""
       GOMEMLIMIT: 384MiB
     mem_limit: 512m
     cpus: 1
