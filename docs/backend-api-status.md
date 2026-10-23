@@ -22,7 +22,7 @@ The contract currently covers:
   sessions, explicit logout, device/session revocation, and password change/reset.
 - Email verification and phone numbers added after registration, versioned legal acceptance, profile and avatar media,
   preferences, and cooling-off account deletion.
-- Expo push-device registration and notification inbox/read operations.
+- Firebase Cloud Messaging device registration and notification inbox/read operations.
 - eFootball Mobile accounts and evidence-based verification workflow, with separate
   manual and publisher-verification semantics.
 - Supported games, competition discovery/detail, structured eligibility, typed
@@ -59,7 +59,8 @@ These are deployment integrations, not missing player routes:
    never claims a refund succeeded until a provider receipt is stored.
 5. Production private S3-compatible object storage for screenshots and avatars.
    Docker uses local MinIO for development.
-6. Expo push credentials and network access to the Expo push/receipt services.
+6. A Firebase service account (`FCM_CREDENTIALS_JSON`), an APNs key uploaded to Firebase for iOS,
+   and network access to Google's OAuth and FCM endpoints.
 7. A transactional-email notification provider/queue beyond OTP email, including
    bounce and complaint handling.
 8. A secure operational bootstrap for the first platform administrator/reviewer.

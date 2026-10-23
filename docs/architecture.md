@@ -160,8 +160,7 @@ deep links and push notifications. Those are core to trustworthy match
 operations, not optional polish. Flutter provides one iOS and Android codebase
 while the lightweight website stays focused on discovery. The app lives in its
 own repository and talks only to the Go API and its OpenAPI contract. Push
-delivery is still built on Expo's push service and must move to Firebase Cloud
-Messaging for the Flutter app.
+delivery goes through Firebase Cloud Messaging ([push notifications](push-notifications.md)).
 
 ## Extraction triggers
 

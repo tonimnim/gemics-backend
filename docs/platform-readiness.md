@@ -20,7 +20,7 @@ dependencies and `mobile-api-requirements.md` for the player journey.
 | Draw persistence and progression | Implemented | Run concurrency/load tests against live PostgreSQL before public paid events |
 | No-show handling | Implemented for ready matches | In-progress matches with no report by the result deadline remove both entries; no result is ever guessed |
 | Organization authorization and competition operations | Implemented | Build the organizer UI; keep every action permission-scoped server-side |
-| Notifications and Expo push receipts | Implemented | Configure Expo, monitor delivery jobs, and add transactional notification email if enabled |
+| Notifications and FCM push delivery | Implemented | Set `FCM_CREDENTIALS_JSON`, upload the APNs key to Firebase for iOS, monitor delivery jobs, and add transactional notification email if enabled |
 | PostgreSQL writer/reader and Redis cache/security split | Implemented in service configuration | Use managed failover/replicas and separate production Redis policies; Compose is not HA |
 | Local private media storage | Implemented with MinIO | Use HTTPS, scoped credentials and managed S3-compatible storage in production |
 | Mobile player app | API-ready; client integration remains in its own repository | Generate types from OpenAPI 0.9.0 and disable fixtures only when the local stack is reachable |

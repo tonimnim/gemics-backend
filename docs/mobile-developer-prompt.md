@@ -67,8 +67,8 @@ notification catalogue in `docs/mobile-api-requirements.md`. Mark the tapped ite
 with its `notificationId`. `actionUrl` is an in-app route hint, never an API path.
 Register the device push token after every sign-in and on each app launch (it is
 bound to the session), and delete it with `DELETE /v1/me/push-tokens/{id}` before
-logout. The backend still delivers pushes through Expo's push service; it moves to
-Firebase Cloud Messaging before release, so build against FCM tokens.
+logout. The backend delivers pushes through Firebase Cloud Messaging, so register the
+FCM token.
 
 Set a capability to unavailable only when its required deployment service is not
 configured (for example Daraja, push delivery or object storage). A local UI action must never
